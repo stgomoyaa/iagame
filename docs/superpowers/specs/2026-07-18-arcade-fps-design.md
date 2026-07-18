@@ -36,15 +36,27 @@ Esta es la restricción que define la arquitectura, no una fase de optimización
 ### El objetivo honesto
 
 Santiago pidió 400 FPS. `requestAnimationFrame` está limitado por el refresh del monitor:
-el navegador entrega un frame por frame del compositor y no se puede exceder. Ver 400 FPS
-requiere un panel de 400Hz+ con aceleración por hardware activa.
+el navegador entrega un frame por frame del compositor y no se puede exceder.
 
-Por eso el objetivo se expresa como **tiempo de frame, no como FPS**:
+Hardware objetivo real:
+
+| Máquina | Refresh | Presupuesto de frame | Holgura con 2.5ms |
+|---|---|---|---|
+| Escritorio | 240Hz | 4.16ms | 1.66x |
+| MacBook | 120Hz | 8.33ms | 3.3x |
+
+En ninguna de las dos se pueden dibujar 400 FPS. Por eso el objetivo se expresa como
+**tiempo de frame, no como FPS**:
 
 **Presupuesto: 2.5ms por frame (CPU + GPU), medido con 10 bots activos en combate.**
 
-Equivale a 400 FPS de throughput del motor, es verificable en cualquier monitor, y no depende
-del hardware de display.
+El valor de ese presupuesto no es un número grande de FPS: es **240 FPS clavados sin una sola
+caída**, incluso en el frame más pesado de la partida. Un juego que promedia 240 pero cae a 180
+cuando explota todo se siente peor que uno que nunca se mueve. La holgura de 1.66x es el margen
+que absorbe los picos.
+
+El modo benchmark reporta el throughput crudo del motor (midiendo N pasadas de render seguidas
+dentro de un frame) como diagnóstico, independiente del refresh del panel.
 
 ### Desglose del presupuesto
 
