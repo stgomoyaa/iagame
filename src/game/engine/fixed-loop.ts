@@ -16,7 +16,14 @@ export function createFixedLoop(): FixedLoop {
 
   return {
     advance(frameDt: number): number {
-      accumulator += Math.min(frameDt, MAX_FRAME_DT)
+      // Clampear por ambos lados: rechaza NaN y negativos, pero mantiene Infinity
+      // clampeado a MAX_FRAME_DT para evitar envenenamiento permanente del
+      // acumulador (NaN propaga) y alpha fuera de [0, 1).
+      accumulator += Number.isFinite(frameDt)
+        ? Math.min(Math.max(frameDt, 0), MAX_FRAME_DT)
+        : Math.abs(frameDt) === Infinity
+          ? MAX_FRAME_DT
+          : 0
 
       let ticks = 0
       while (accumulator >= TICK_DT) {

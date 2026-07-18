@@ -54,4 +54,60 @@ describe('loop de timestep fijo', () => {
     expect(ticks).toBeGreaterThanOrEqual(532)
     expect(ticks).toBeLessThanOrEqual(534)
   })
+
+  it('un NaN no envenena el loop permanentemente', () => {
+    const loop = createFixedLoop()
+    // Llamamos con NaN
+    loop.advance(NaN)
+    expect(loop.ticksLastFrame).toBe(0)
+    // Ahora con un valor normal
+    const ticks = loop.advance(TICK_DT * 2)
+    expect(ticks).toBe(2)
+    expect(Number.isFinite(loop.alpha)).toBe(true)
+    expect(loop.alpha).toBeGreaterThanOrEqual(0)
+    expect(loop.alpha).toBeLessThan(1)
+  })
+
+  it('Infinity se recorta igual que MAX_FRAME_DT', () => {
+    const loop = createFixedLoop()
+    loop.advance(Infinity)
+    const ticksInfinity = loop.ticksLastFrame
+    const alphaInfinity = loop.alpha
+
+    const loop2 = createFixedLoop()
+    loop2.advance(MAX_FRAME_DT)
+    const ticksMax = loop2.ticksLastFrame
+    const alphaMax = loop2.alpha
+
+    expect(ticksInfinity).toBe(ticksMax)
+    expect(alphaInfinity).toBeCloseTo(alphaMax, 6)
+  })
+
+  it('un frameDt negativo no saca el alpha fuera de [0, 1)', () => {
+    const loop = createFixedLoop()
+    loop.advance(-0.05)
+    expect(loop.alpha).toBeGreaterThanOrEqual(0)
+    expect(loop.alpha).toBeLessThan(1)
+  })
+
+  it('el alpha se mantiene en [0, 1) incluso con secuencia mixta', () => {
+    const loop = createFixedLoop()
+    const deltas = [
+      -0.05,
+      NaN,
+      0.001,
+      Infinity,
+      TICK_DT * 0.5,
+      -0.1,
+      0.02,
+      TICK_DT * 2,
+      NaN,
+    ]
+    for (const dt of deltas) {
+      loop.advance(dt)
+      expect(Number.isFinite(loop.alpha)).toBe(true)
+      expect(loop.alpha).toBeGreaterThanOrEqual(0)
+      expect(loop.alpha).toBeLessThan(1)
+    }
+  })
 })
