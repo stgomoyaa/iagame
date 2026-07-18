@@ -10,13 +10,36 @@ export interface Capsule {
 export const PLAYER_CAPSULE: Capsule = { radius: 0.4, height: 1.8 }
 
 export interface MoveResult {
+  /**
+   * Edge-triggered, no de nivel: es `true` sólo en el tick en que la
+   * corrección de penetración contra el suelo efectivamente disparó, no
+   * mientras "el jugador está parado en el suelo". No hay ground probe: la
+   * única señal de apoyo es esa corrección. Si el llamador deja de integrar
+   * gravedad en `delta.y` al aterrizar, ya no hay penetración que corregir
+   * tick a tick y `hitGround` vuelve a `false` en silencio aunque el
+   * jugador siga quieto sobre el piso. Hay que seguir sumando gravedad a
+   * `delta.y` todos los ticks, incluso estando apoyado, o el estado de "en
+   * el suelo" queda obsoleto.
+   */
   hitGround: boolean
+  /** Edge-triggered igual que `hitGround`, pero para la corrección contra techo. */
   hitCeiling: boolean
   hitWall: boolean
 }
 
 /** Tolerancia para no re-resolver contactos de apoyo cada tick. */
 const SKIN = 1e-4
+
+/**
+ * Techo de substeps por llamada. Cubre dos casos degenerados que si no,
+ * cuelgan el loop: una cápsula con `radius <= 0` (maxPaso cae a 0 y
+ * `distancia / maxPaso` se va a Infinity) y un delta con una magnitud
+ * absurda. 64 es muy por encima de lo que cualquier movimiento legítimo
+ * necesita a 128Hz (el caso de alta velocidad de los tests, a 40 m/s, sólo
+ * pide 2 substeps con el radio del jugador), así que no toca ninguna
+ * entrada normal.
+ */
+const MAX_SUBSTEPS = 64
 
 /**
  * Aproximamos la cápsula por su AABB envolvente. Para un mundo de cajas
@@ -77,8 +100,15 @@ export function resolveMove(
   out.hitWall = false
 
   const distancia = Math.hypot(delta.x, delta.y, delta.z)
+  // Un delta no finito (NaN o Infinity) corrompería position para siempre:
+  // nada más adelante la resetea. Mismo bug ya resuelto en fixed-loop.ts
+  // (commits 0cfde05, 746fce3); acá se corta antes de tocar la posición,
+  // con las flags ya en false por el reset de arriba.
+  if (!Number.isFinite(distancia)) return
+
   const maxPaso = capsule.radius * 0.5
-  const substeps = distancia > maxPaso ? Math.ceil(distancia / maxPaso) : 1
+  const substepsCrudos = distancia > maxPaso ? Math.ceil(distancia / maxPaso) : 1
+  const substeps = Math.min(Math.max(substepsCrudos, 1), MAX_SUBSTEPS)
   const inv = 1 / substeps
 
   const stepX = delta.x * inv
