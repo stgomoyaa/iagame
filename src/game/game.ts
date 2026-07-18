@@ -4,16 +4,9 @@ import { createRenderer } from '@/game/engine/renderer'
 import { ARENA } from '@/game/map/arena'
 import { createPlayerState, stepPlayer } from '@/game/movement/step'
 
-export interface FrameStats {
-  frameMs: number
-  drawCalls: number
-  triangles: number
-}
-
 export interface Game {
   start(): void
   stop(): void
-  readonly stats: FrameStats
 }
 
 const SENSITIVITY = 0.0022
@@ -23,7 +16,6 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   const input = createInputSystem(() => SENSITIVITY)
   const loop = createFixedLoop()
   const player = createPlayerState(ARENA.spawns[0])
-  const stats: FrameStats = { frameMs: 0, drawCalls: 0, triangles: 0 }
 
   let running = false
   let lastTime = 0
@@ -36,8 +28,6 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   function frame(now: number): void {
     if (!running) return
     rafId = requestAnimationFrame(frame)
-
-    const frameStart = performance.now()
 
     const frameDt = lastTime === 0 ? 0 : (now - lastTime) / 1000
     lastTime = now
@@ -57,10 +47,6 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     gfx.camera.rotation.set(input.pitch, input.player.yaw, 0, 'YXZ')
 
     gfx.render()
-
-    stats.drawCalls = gfx.renderer.info.render.calls
-    stats.triangles = gfx.renderer.info.render.triangles
-    stats.frameMs = performance.now() - frameStart
   }
 
   return {
@@ -80,6 +66,5 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       input.detach()
       gfx.dispose()
     },
-    stats,
   }
 }
