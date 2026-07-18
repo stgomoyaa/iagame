@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { ARENA, box } from '@/game/map/arena'
 
+/** Límite máximo de altura de mantle (metros) */
+const MAX_MANTLE_HEIGHT = 1.2
+/** Altura de los muros perimetrales (metros); marcan las superficies inescalables */
+const PERIMETER_WALL_HEIGHT = 6
+
 describe('arena', () => {
   it('box construye min y max ordenados', () => {
     const b = box(0, 0, 0, 2, 3, 4)
@@ -43,5 +48,81 @@ describe('arena', () => {
 
   it('el conteo de cajas se mantiene bajo el presupuesto de draw calls', () => {
     expect(ARENA.boxes.length).toBeLessThanOrEqual(200)
+  })
+
+  it('toda superficie escalable es alcanzable por una cadena de escalones menores a max mantle height', () => {
+    // El piso siempre es alcanzable en y=0
+    const floorY = 0
+
+    for (const testBox of ARENA.boxes) {
+      // Los muros perimetrales (altura 6m) son intencionalmente inescalables
+      if (testBox.max.y === PERIMETER_WALL_HEIGHT) {
+        continue
+      }
+
+      // Si la caja está al nivel del piso, no hay nada que verificar
+      if (testBox.max.y <= floorY) {
+        continue
+      }
+
+      // La caja es escalable: verificar que existe un camino desde el piso
+      // mediante saltos de max mantle height.
+      const targetHeight = testBox.max.y
+      let reachable = false
+
+      // Método de escalada: comenzar en el piso y buscar si podemos alcanzar
+      // la altura objetivo subiendo en pasos de max mantle height.
+      // Una altura es alcanzable si existe una caja cuya parte superior está
+      // entre la altura anterior y (altura anterior + max mantle height).
+
+      let currentHeight = floorY
+      const maxSteps = 100 // Límite de iteraciones para detectar ciclos infinitos
+
+      for (let step = 0; step < maxSteps; step++) {
+        if (currentHeight >= targetHeight) {
+          reachable = true
+          break
+        }
+
+        // Buscar una caja que podemos pisar desde la altura actual
+        let nextHeight: number | null = null
+
+        for (const climbBox of ARENA.boxes) {
+          const boxTopHeight = climbBox.max.y
+
+          // Ignorar muros perimetrales (son inescalables)
+          if (climbBox.max.y === PERIMETER_WALL_HEIGHT) {
+            continue
+          }
+
+          // La caja debe estar por encima de donde estamos
+          if (boxTopHeight <= currentHeight) {
+            continue
+          }
+
+          // La diferencia de altura debe ser mantleable
+          if (boxTopHeight - currentHeight > MAX_MANTLE_HEIGHT) {
+            continue
+          }
+
+          // Esta caja es un paso válido; registrar la altura si es más alta
+          if (nextHeight === null || boxTopHeight > nextHeight) {
+            nextHeight = boxTopHeight
+          }
+        }
+
+        if (nextHeight === null) {
+          // No hay más pasos disponibles desde esta altura
+          break
+        }
+
+        currentHeight = nextHeight
+      }
+
+      if (!reachable) {
+        throw new Error(`Caja en [${testBox.min.x}, ${testBox.min.y}, ${testBox.min.z}] a [${testBox.max.x}, ${testBox.max.y}, ${testBox.max.z}] (altura ${targetHeight}m) no es alcanzable`)
+      }
+      expect(reachable).toBe(true)
+    }
   })
 })

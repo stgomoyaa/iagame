@@ -36,10 +36,11 @@ const boxes: Box[] = [
   box(9, 0, -22, 10, HIGH, -6),
   box(9, 0, 6, 10, HIGH, 22),
 
-  // Estructura central: plataforma elevada con rampas a ambos lados
-  box(-6, 0, -3, 6, 2.5, 3),
-  box(-9, 0, -3, -6, 1.25, 3),
-  box(6, 0, -3, 9, 1.25, 3),
+  // Estructura central: plataforma elevada con escalones a ambos lados.
+  // Cada salto es de 1.1m, bajo el límite de mantle de 1.2m: floor -> 1.1 -> 2.2.
+  box(-6, 0, -3, 6, HIGH, 3),
+  box(-9, 0, -3, -6, HIGH / 2, 3),
+  box(6, 0, -3, 9, HIGH / 2, 3),
 
   // Cobertura baja del carril izquierdo
   box(-24, 0, -14, -20, LOW, -10),
