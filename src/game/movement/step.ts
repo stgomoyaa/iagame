@@ -21,6 +21,7 @@ export function createPlayerState(spawn: Vec3): PlayerState {
     timeSinceLanded: Infinity,
     timeSinceJumpPressed: Infinity,
     jumpWasPressed: false,
+    crouchWasPressed: false,
     sliding: false,
     slideTime: 0,
     eyeHeight: MOVEMENT.eyeHeight,
@@ -69,11 +70,39 @@ export function stepPlayer(
   computeWishDir(scratchWishDir, input)
   const wishSpeed = targetSpeed(input)
 
-  if (state.grounded) {
-    if (!shouldSkipFriction(state, input)) {
-      applyFriction(state.velocity, MOVEMENT.groundFriction, MOVEMENT.stopSpeed, dt)
+  // Transiciones de slide
+  const velHorizontal = Math.hypot(state.velocity.x, state.velocity.z)
+
+  if (state.sliding) {
+    state.slideTime += dt
+    const expiro = state.slideTime >= MOVEMENT.slideDuration
+    const muyLento = velHorizontal < MOVEMENT.walkSpeed * MOVEMENT.slideEndSpeedScale
+    if (expiro || muyLento || !input.crouch) {
+      state.sliding = false
+      state.slideTime = 0
     }
-    accelerate(state.velocity, scratchWishDir, wishSpeed, MOVEMENT.groundAccel, dt)
+  } else if (
+    input.crouch &&
+    !state.crouchWasPressed &&
+    state.grounded &&
+    velHorizontal >= MOVEMENT.slideMinSpeed
+  ) {
+    state.sliding = true
+    state.slideTime = 0
+    state.velocity.x *= MOVEMENT.slideBoost
+    state.velocity.z *= MOVEMENT.slideBoost
+  }
+
+  if (state.grounded) {
+    if (state.sliding) {
+      // Fricción reducida y sin aceleración: deslizando no se acelera.
+      applyFriction(state.velocity, MOVEMENT.slideFriction, MOVEMENT.stopSpeed, dt)
+    } else {
+      if (!shouldSkipFriction(state, input)) {
+        applyFriction(state.velocity, MOVEMENT.groundFriction, MOVEMENT.stopSpeed, dt)
+      }
+      accelerate(state.velocity, scratchWishDir, wishSpeed, MOVEMENT.groundAccel, dt)
+    }
   } else {
     accelerate(
       state.velocity,
@@ -101,6 +130,9 @@ export function stepPlayer(
     state.grounded = false
     state.timeSinceGrounded = MOVEMENT.coyoteTime + 1
     state.timeSinceJumpPressed = Infinity
+    // El slide-cancel no toca la velocidad horizontal: encadenar es el punto.
+    state.sliding = false
+    state.slideTime = 0
   }
 
   state.velocity.y -= MOVEMENT.gravity * dt
@@ -126,5 +158,8 @@ export function stepPlayer(
 
   if (scratchResult.hitCeiling && state.velocity.y > 0) state.velocity.y = 0
 
-  state.eyeHeight = input.crouch ? MOVEMENT.crouchEyeHeight : MOVEMENT.eyeHeight
+  state.eyeHeight =
+    input.crouch || state.sliding ? MOVEMENT.crouchEyeHeight : MOVEMENT.eyeHeight
+
+  state.crouchWasPressed = input.crouch
 }

@@ -27,6 +27,10 @@ export interface PlayerState {
   /** Segundos desde que se presionó saltar. Habilita el jump buffering. */
   timeSinceJumpPressed: number
   jumpWasPressed: boolean
+  /** Estado de crouch del tick anterior. El slide entra por flanco de subida,
+   *  no por tecla mantenida: mantener agachado tras el slide sólo camina
+   *  agachado, en vez de re-entrar en slide para siempre. */
+  crouchWasPressed: boolean
 
   sliding: boolean
   slideTime: number
