@@ -3,6 +3,7 @@ import type { Box } from '@/game/map/types'
 import { copy, vec3, type Vec3 } from '@/game/math/vec3'
 import { accelerate, applyFriction } from '@/game/movement/accelerate'
 import { applySoftCap, shouldSkipFriction } from '@/game/movement/bhop'
+import { tryMantle } from '@/game/movement/mantle'
 import type { PlayerInput, PlayerState } from '@/game/movement/state'
 import { MOVEMENT } from '@/game/movement/tuning'
 import { PLAYER_CAPSULE, resolveMove, type MoveResult } from '@/game/physics/capsule'
@@ -142,6 +143,13 @@ export function stepPlayer(
   scratchDelta.z = state.velocity.z * dt
 
   resolveMove(state.position, scratchDelta, PLAYER_CAPSULE, boxes, scratchResult)
+
+  // Mantle: sólo si chocamos una pared en el aire yendo hacia ella.
+  if (!scratchResult.hitGround && scratchResult.hitWall) {
+    if (tryMantle(state.position, state.velocity, scratchWishDir, boxes)) {
+      if (state.velocity.y < 0) state.velocity.y = 0
+    }
+  }
 
   const estabaEnSuelo = state.grounded
   state.grounded = scratchResult.hitGround
