@@ -9,7 +9,11 @@ import { createPlayerState, stepPlayer } from '@/game/movement/step'
 export interface Game {
   start(): void
   stop(): void
-  /** Mide ms promedio por pasada de render, sin esperar al vsync. */
+  /**
+   * Costo en CPU de encolar `passes` llamadas a render(), sin esperar a que
+   * la GPU termine de dibujar. Es una cota inferior del costo real de
+   * frame, no una medida de capacidad o margen disponible.
+   */
   benchmark(passes?: number): number
   readonly stats: FrameStats
 }

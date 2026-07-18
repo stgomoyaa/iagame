@@ -28,6 +28,7 @@ export function createStatsTracker(): StatsTracker {
 
   let frameStart = 0
   let lastHudUpdate = 0
+  let hudWindowStarted = false
   let framesSinceHud = 0
   let hud: HTMLDivElement | null = null
 
@@ -44,6 +45,16 @@ export function createStatsTracker(): StatsTracker {
       stats.drawCalls = drawCalls
       stats.triangles = triangles
       stats.overBudget = stats.cpuMs > FRAME_BUDGET_MS
+
+      // Semilla perezosa: el tracker puede crearse mucho antes de que arranque
+      // el loop real (ver game.ts), así que performance.now() en la creación
+      // seguiría arrastrando el tiempo de carga/hidratación de la página. Se
+      // ancla la ventana de fps al primer endFrame observado, no al momento
+      // en que se instanció el tracker.
+      if (!hudWindowStarted) {
+        lastHudUpdate = now
+        hudWindowStarted = true
+      }
 
       framesSinceHud++
       const desdeHud = now - lastHudUpdate
@@ -81,12 +92,23 @@ export function createStatsTracker(): StatsTracker {
 }
 
 /**
- * Mide throughput crudo del motor corriendo N pasadas de render seguidas sin
- * esperar al vsync. Es el número de "FPS del motor" independiente de los Hz
- * del monitor: en un panel de 240Hz nunca se dibujan más de 240 frames, pero
- * esto revela cuánto margen real queda.
+ * Mide el costo en CPU de encolar `passes` llamadas a `render()` seguidas,
+ * con `performance.now()`. `WebGLRenderer.render()` solo envía comandos a la
+ * cola de la GPU y retorna de inmediato: no bloquea hasta que la GPU termina
+ * de dibujar, y este bucle no tiene ningún punto de sincronización (no hay
+ * `gl.finish()` ni equivalente). Por lo tanto este número mide únicamente el
+ * costo de *submission* en CPU, no el costo real de un frame terminado.
  *
- * Devuelve el promedio de milisegundos por pasada.
+ * Es una cota inferior del costo de frame, no una estimación de capacidad ni
+ * de margen disponible: una escena limitada por GPU puede reportar un número
+ * casi nulo acá mientras la cola de comandos absorbe todo el atraso real.
+ * No agregar `gl.finish()` para "arreglar" esto — forzar sync CPU/GPU en
+ * cada pasada destruye el pipelining del que depende el juego real (CPU
+ * armando el frame N+1 mientras la GPU dibuja el frame N), así que el
+ * número resultante subestimaría el throughput alcanzable tan mal como este
+ * lo sobreestima hoy.
+ *
+ * Devuelve el promedio de milisegundos de CPU por pasada de encolado.
  */
 export function runBenchmark(render: () => void, passes: number): number {
   const inicio = performance.now()
