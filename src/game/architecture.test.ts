@@ -1,0 +1,45 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+const GAME_DIR = join(process.cwd(), 'src/game')
+
+/** Únicos archivos de src/game autorizados a importar Three. */
+const PUEDEN_USAR_THREE = ['engine/renderer.ts', 'map/mesh.ts']
+
+function archivosTs(dir: string, base = ''): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry)
+    const rel = base ? `${base}/${entry}` : entry
+    if (statSync(full).isDirectory()) out.push(...archivosTs(full, rel))
+    else if (entry.endsWith('.ts') && !entry.endsWith('.test.ts')) out.push(rel)
+  }
+  return out
+}
+
+describe('límites de arquitectura', () => {
+  const archivos = archivosTs(GAME_DIR)
+
+  it('encuentra archivos para revisar', () => {
+    expect(archivos.length).toBeGreaterThan(5)
+  })
+
+  it('src/game nunca importa React ni Next', () => {
+    for (const f of archivos) {
+      const src = readFileSync(join(GAME_DIR, f), 'utf8')
+      expect(src, `${f} importa react`).not.toMatch(/from\s+['"]react['"]/)
+      expect(src, `${f} importa next`).not.toMatch(/from\s+['"]next[/'"]/)
+    }
+  })
+
+  it('sólo el renderer y el mesh importan Three', () => {
+    for (const f of archivos) {
+      const src = readFileSync(join(GAME_DIR, f), 'utf8')
+      const importaThree = /from\s+['"]three['"]/.test(src)
+      if (importaThree) {
+        expect(PUEDEN_USAR_THREE, `${f} no está autorizado a importar three`).toContain(f)
+      }
+    }
+  })
+})

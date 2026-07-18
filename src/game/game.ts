@@ -3,6 +3,7 @@ import { createInputSystem } from '@/game/engine/input'
 import { createRenderer } from '@/game/engine/renderer'
 import { createStatsTracker, runBenchmark } from '@/game/engine/stats'
 import type { FrameStats } from '@/game/engine/stats'
+import { createTuningPanel } from '@/game/engine/tuning-panel'
 import { ARENA } from '@/game/map/arena'
 import { createPlayerState, stepPlayer } from '@/game/movement/step'
 
@@ -23,6 +24,7 @@ const SENSITIVITY = 0.0022
 export function createGame(canvas: HTMLCanvasElement): Game {
   const gfx = createRenderer(canvas)
   const stats = createStatsTracker()
+  const tuning = createTuningPanel()
   const input = createInputSystem(() => SENSITIVITY)
   const loop = createFixedLoop()
   const player = createPlayerState(ARENA.spawns[0])
@@ -68,7 +70,10 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       running = true
       lastTime = 0
       input.attach(canvas)
-      if (canvas.parentElement) stats.mount(canvas.parentElement)
+      if (canvas.parentElement) {
+        stats.mount(canvas.parentElement)
+        tuning.mount(canvas.parentElement)
+      }
       window.addEventListener('resize', onResize)
       onResize()
       rafId = requestAnimationFrame(frame)
@@ -79,6 +84,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       window.removeEventListener('resize', onResize)
       input.detach()
       stats.unmount()
+      tuning.unmount()
       gfx.dispose()
     },
     benchmark(passes = 500): number {
