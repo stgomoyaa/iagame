@@ -2,6 +2,7 @@ import { TICK_DT } from '@/game/engine/constants'
 import type { Box } from '@/game/map/types'
 import { copy, vec3, type Vec3 } from '@/game/math/vec3'
 import { accelerate, applyFriction } from '@/game/movement/accelerate'
+import { applySoftCap, shouldSkipFriction } from '@/game/movement/bhop'
 import type { PlayerInput, PlayerState } from '@/game/movement/state'
 import { MOVEMENT } from '@/game/movement/tuning'
 import { PLAYER_CAPSULE, resolveMove, type MoveResult } from '@/game/physics/capsule'
@@ -69,7 +70,9 @@ export function stepPlayer(
   const wishSpeed = targetSpeed(input)
 
   if (state.grounded) {
-    applyFriction(state.velocity, MOVEMENT.groundFriction, MOVEMENT.stopSpeed, dt)
+    if (!shouldSkipFriction(state, input)) {
+      applyFriction(state.velocity, MOVEMENT.groundFriction, MOVEMENT.stopSpeed, dt)
+    }
     accelerate(state.velocity, scratchWishDir, wishSpeed, MOVEMENT.groundAccel, dt)
   } else {
     accelerate(
@@ -79,6 +82,7 @@ export function stepPlayer(
       MOVEMENT.airAccel,
       dt,
     )
+    applySoftCap(state.velocity, MOVEMENT.bhopSoftCap, MOVEMENT.bhopSoftCapDecay, dt)
   }
 
   // Salto, con coyote time y auto-hop.
