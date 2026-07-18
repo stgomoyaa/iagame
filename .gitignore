@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# proyecto
+.ruff_cache/
+.superpowers/
+
+# permitir el ejemplo de env aunque .env* esté ignorado arriba
+!.env.example
