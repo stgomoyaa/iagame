@@ -1,18 +1,24 @@
 import { createFixedLoop } from '@/game/engine/fixed-loop'
 import { createInputSystem } from '@/game/engine/input'
 import { createRenderer } from '@/game/engine/renderer'
+import { createStatsTracker, runBenchmark } from '@/game/engine/stats'
+import type { FrameStats } from '@/game/engine/stats'
 import { ARENA } from '@/game/map/arena'
 import { createPlayerState, stepPlayer } from '@/game/movement/step'
 
 export interface Game {
   start(): void
   stop(): void
+  /** Mide ms promedio por pasada de render, sin esperar al vsync. */
+  benchmark(passes?: number): number
+  readonly stats: FrameStats
 }
 
 const SENSITIVITY = 0.0022
 
 export function createGame(canvas: HTMLCanvasElement): Game {
   const gfx = createRenderer(canvas)
+  const stats = createStatsTracker()
   const input = createInputSystem(() => SENSITIVITY)
   const loop = createFixedLoop()
   const player = createPlayerState(ARENA.spawns[0])
@@ -28,6 +34,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   function frame(now: number): void {
     if (!running) return
     rafId = requestAnimationFrame(frame)
+    stats.beginFrame()
 
     const frameDt = lastTime === 0 ? 0 : (now - lastTime) / 1000
     lastTime = now
@@ -46,7 +53,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
 
     gfx.camera.rotation.set(input.pitch, input.player.yaw, 0, 'YXZ')
 
+    gfx.renderer.info.reset()
     gfx.render()
+    stats.endFrame(gfx.renderer.info.render.calls, gfx.renderer.info.render.triangles)
   }
 
   return {
@@ -55,6 +64,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       running = true
       lastTime = 0
       input.attach(canvas)
+      if (canvas.parentElement) stats.mount(canvas.parentElement)
       window.addEventListener('resize', onResize)
       onResize()
       rafId = requestAnimationFrame(frame)
@@ -64,7 +74,14 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       cancelAnimationFrame(rafId)
       window.removeEventListener('resize', onResize)
       input.detach()
+      stats.unmount()
       gfx.dispose()
+    },
+    benchmark(passes = 500): number {
+      return runBenchmark(() => gfx.render(), passes)
+    },
+    get stats() {
+      return stats.stats
     },
   }
 }
