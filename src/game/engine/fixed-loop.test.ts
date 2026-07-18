@@ -83,6 +83,16 @@ describe('loop de timestep fijo', () => {
     expect(alphaInfinity).toBeCloseTo(alphaMax, 6)
   })
 
+  it('-Infinity debe contribuir cero ticks y mantener alpha sin cambios', () => {
+    const loop = createFixedLoop()
+    loop.advance(TICK_DT * 2) // Antes: 2 ticks, alpha = 0
+    const alphaBefore = loop.alpha
+
+    loop.advance(-Infinity)
+    expect(loop.ticksLastFrame).toBe(0)
+    expect(loop.alpha).toBe(alphaBefore)
+  })
+
   it('un frameDt negativo no saca el alpha fuera de [0, 1)', () => {
     const loop = createFixedLoop()
     loop.advance(-0.05)

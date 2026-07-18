@@ -16,14 +16,12 @@ export function createFixedLoop(): FixedLoop {
 
   return {
     advance(frameDt: number): number {
-      // Clampear por ambos lados: rechaza NaN y negativos, pero mantiene Infinity
-      // clampeado a MAX_FRAME_DT para evitar envenenamiento permanente del
-      // acumulador (NaN propaga) y alpha fuera de [0, 1).
-      accumulator += Number.isFinite(frameDt)
-        ? Math.min(Math.max(frameDt, 0), MAX_FRAME_DT)
-        : Math.abs(frameDt) === Infinity
-          ? MAX_FRAME_DT
-          : 0
+      // NaN es el único caso que las clamps no cubren: se propagaría al
+      // acumulador y congelaría la simulación para siempre. Las dos clamps
+      // ya resuelven ambos infinitos y los deltas negativos por sí solas.
+      accumulator += Number.isNaN(frameDt)
+        ? 0
+        : Math.min(Math.max(frameDt, 0), MAX_FRAME_DT)
 
       let ticks = 0
       while (accumulator >= TICK_DT) {
