@@ -52,9 +52,8 @@ function computeWishDir(out: Vec3, input: PlayerInput): void {
 }
 
 function targetSpeed(input: PlayerInput): number {
-  if (input.crouch) return MOVEMENT.crouchSpeed
-  if (input.sprint) return MOVEMENT.sprintSpeed
-  return MOVEMENT.walkSpeed
+  const base = input.crouch ? MOVEMENT.crouchSpeed : input.sprint ? MOVEMENT.sprintSpeed : MOVEMENT.walkSpeed
+  return input.adsSpeedScale === undefined ? base : base * input.adsSpeedScale
 }
 
 export function stepPlayer(

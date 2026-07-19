@@ -26,6 +26,17 @@ export interface InputSystem {
    *  aplicado a yaw/pitch para que el rig pueda usarlo con su propia escala. */
   readonly mouseDeltaX: number
   readonly mouseDeltaY: number
+  /** Click izquierdo sostenido (fase 1, sección 4 del spec: disparo). Estado
+   *  sostenido, no flanco — igual que el resto de este input system (ver el
+   *  comentario de cabecera del archivo): combat/fire-control.ts es quien
+   *  detecta flancos para semi/ráfaga. */
+  readonly fireHeld: boolean
+  /** Click derecho sostenido (ADS). */
+  readonly adsHeld: boolean
+  /** Tecla R sostenida (recarga). Sostenida a propósito: rig.ts ya hace de
+   *  startReload() un no-op mientras hay una recarga en curso, precisamente
+   *  para que llamarlo en cada frame con R sostenida no la deje en deadlock. */
+  readonly reloadHeld: boolean
   attach(canvas: HTMLCanvasElement): void
   detach(): void
   /** Resetea el delta acumulado a 0. Se llama una vez por frame, después de leerlo. */
@@ -42,6 +53,8 @@ export function createInputSystem(getSensitivity: () => number): InputSystem {
   let canvas: HTMLCanvasElement | null = null
   let mouseDeltaX = 0
   let mouseDeltaY = 0
+  let fireHeld = false
+  let adsHeld = false
 
   const keys = new Set<string>()
 
@@ -72,11 +85,33 @@ export function createInputSystem(getSensitivity: () => number): InputSystem {
     mouseDeltaY += e.movementY
   }
 
+  // Disparo (botón izquierdo) y ADS (botón derecho): gateado por `locked`,
+  // igual que onMouseMove — sin puntero bloqueado no hay partida en curso
+  // todavía (el primer click sólo pide el lock, ver onClick). onContextMenu
+  // evita que el click derecho abra el menú contextual del navegador en vez
+  // de apuntar.
+  function onMouseDown(e: MouseEvent): void {
+    if (!locked) return
+    if (e.button === 0) fireHeld = true
+    else if (e.button === 2) adsHeld = true
+  }
+
+  function onMouseUp(e: MouseEvent): void {
+    if (e.button === 0) fireHeld = false
+    else if (e.button === 2) adsHeld = false
+  }
+
+  function onContextMenu(e: MouseEvent): void {
+    if (locked) e.preventDefault()
+  }
+
   function onPointerLockChange(): void {
     locked = document.pointerLockElement === canvas
     if (!locked) {
       keys.clear()
       updateAxes()
+      fireHeld = false
+      adsHeld = false
     }
   }
 
@@ -87,12 +122,17 @@ export function createInputSystem(getSensitivity: () => number): InputSystem {
   function onBlur(): void {
     keys.clear()
     updateAxes()
+    fireHeld = false
+    adsHeld = false
   }
 
   function teardown(): void {
     canvas?.removeEventListener('click', onClick)
     document.removeEventListener('pointerlockchange', onPointerLockChange)
     document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mousedown', onMouseDown)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.removeEventListener('contextmenu', onContextMenu)
     window.removeEventListener('keydown', onKeyDown)
     window.removeEventListener('keyup', onKeyUp)
     window.removeEventListener('blur', onBlur)
@@ -107,6 +147,9 @@ export function createInputSystem(getSensitivity: () => number): InputSystem {
     get locked() { return locked },
     get mouseDeltaX() { return mouseDeltaX },
     get mouseDeltaY() { return mouseDeltaY },
+    get fireHeld() { return fireHeld },
+    get adsHeld() { return adsHeld },
+    get reloadHeld() { return keys.has('KeyR') },
 
     clearMouseDelta(): void {
       mouseDeltaX = 0
@@ -119,6 +162,9 @@ export function createInputSystem(getSensitivity: () => number): InputSystem {
       target.addEventListener('click', onClick)
       document.addEventListener('pointerlockchange', onPointerLockChange)
       document.addEventListener('mousemove', onMouseMove)
+      document.addEventListener('mousedown', onMouseDown)
+      document.addEventListener('mouseup', onMouseUp)
+      document.addEventListener('contextmenu', onContextMenu)
       window.addEventListener('keydown', onKeyDown)
       window.addEventListener('keyup', onKeyUp)
       window.addEventListener('blur', onBlur)

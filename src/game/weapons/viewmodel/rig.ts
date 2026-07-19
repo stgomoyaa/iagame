@@ -134,7 +134,11 @@ function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x
 }
 
-function easeInOutCubic(t: number): number {
+/** Exportada para combat/ads.ts: el FOV/sensibilidad/velocidad de ADS
+ *  (sección 4 del spec de fase 1) interpolan con la MISMA curva que la pose
+ *  visual del arma, para que los tres terminen de moverse exactamente
+ *  cuando el arma termina de moverse. */
+export function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 }
 

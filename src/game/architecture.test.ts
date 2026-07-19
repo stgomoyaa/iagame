@@ -5,7 +5,17 @@ import { describe, expect, it } from 'vitest'
 const GAME_DIR = join(process.cwd(), 'src/game')
 
 /** Únicos archivos de src/game autorizados a importar Three. */
-const PUEDEN_USAR_THREE = ['engine/renderer.ts', 'map/mesh.ts', 'weapons/viewmodel/renderer.ts']
+const PUEDEN_USAR_THREE = [
+  'engine/renderer.ts',
+  'map/mesh.ts',
+  'weapons/viewmodel/renderer.ts',
+  // three-mesh-bvh (fase 1, hitscan) exige un Ray y una BufferGeometry
+  // reales para raycastFirst(): no alcanza con un objeto {x,y,z} duck-typed.
+  // El resto del sistema de combate es matemática pura y no importa three;
+  // este es el único punto de contacto (ver el comentario de cabecera de
+  // combat/hitscan.ts).
+  'combat/hitscan.ts',
+]
 
 function archivosTs(dir: string, base = ''): string[] {
   const out: string[] = []

@@ -2,6 +2,12 @@ import { Mesh, MeshBasicMaterial, PerspectiveCamera, Scene, WebGLRenderer } from
 import { ARENA } from '@/game/map/arena'
 import { buildArenaGeometry } from '@/game/map/mesh'
 
+/** FOV de la cámara del mundo en reposo (hip). combat/ads.ts interpola
+ *  hacia `archetype.ads.fovScale * WORLD_FOV` durante el ADS (sección 4 del
+ *  spec de fase 1) — exportada acá en vez de repetir el número "90" en
+ *  game.ts, que no puede importar three para leerlo directo de la cámara. */
+export const WORLD_FOV = 90
+
 export interface GameRenderer {
   readonly camera: PerspectiveCamera
   readonly renderer: WebGLRenderer
@@ -20,6 +26,15 @@ export interface GameRenderer {
   readonly gl: WebGL2RenderingContext | null
   render(): void
   resize(width: number, height: number): void
+  /**
+   * FOV de la cámara del mundo, en grados (mismo campo que
+   * PerspectiveCamera.fov de Three). game.ts la llama cada frame con el FOV
+   * ya interpolado por ADS (combat/ads.ts): no hay guard de "sólo si
+   * cambió" a propósito — updateProjectionMatrix() es un puñado de
+   * multiplicaciones de matriz, muy por debajo del presupuesto de frame, y
+   * un guard manual sólo suma una comparación y una rama sin necesidad.
+   */
+  setFov(fov: number): void
   dispose(): void
 }
 
@@ -41,7 +56,7 @@ export function createRenderer(canvas: HTMLCanvasElement): GameRenderer {
   renderer.autoClear = false
 
   const scene = new Scene()
-  const camera = new PerspectiveCamera(90, 1, 0.1, 200)
+  const camera = new PerspectiveCamera(WORLD_FOV, 1, 0.1, 200)
 
   const geometry = buildArenaGeometry(ARENA)
   const material = new MeshBasicMaterial({ vertexColors: true })
@@ -66,6 +81,10 @@ export function createRenderer(canvas: HTMLCanvasElement): GameRenderer {
       camera.aspect = width / height
       camera.updateProjectionMatrix()
       renderer.setSize(width, height, false)
+    },
+    setFov(fov: number): void {
+      camera.fov = fov
+      camera.updateProjectionMatrix()
     },
     dispose(): void {
       geometry.dispose()

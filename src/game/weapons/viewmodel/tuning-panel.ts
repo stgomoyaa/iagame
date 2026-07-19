@@ -39,12 +39,21 @@ export function weaponOptionLabel(entry: WeaponIndexEntry): string {
   return entry.needsManualReview ? `${entry.name} · revisar` : entry.name
 }
 
-/** Callbacks hacia game.ts: el panel no toca ViewmodelState directamente,
- *  game.ts es quien llama a stepViewmodel() cada frame (ver game.ts). */
+/**
+ * Callbacks hacia game.ts: el panel no toca ViewmodelState ni el combate
+ * directamente, game.ts es quien llama a stepViewmodel()/stepCombat() cada
+ * frame (ver game.ts).
+ *
+ * setFireHeld (no un onFire() de un solo disparo) para poder probar auto y
+ * ráfaga desde este panel sin necesidad de pointer lock: game.ts combina
+ * este estado sostenido con el de engine/input.ts (fireHeld real) igual que
+ * ya hace con ADS, y combat/fire-control.ts es quien decide cuántos tiros
+ * salen según el fireMode del arma.
+ */
 export interface WeaponTuningControls {
   initialSlug: string
   onSelectWeapon(slug: string): void
-  onFire(): void
+  setFireHeld(held: boolean): void
   onReload(): void
   setAds(held: boolean): void
 }
@@ -168,6 +177,7 @@ export function createWeaponTuningPanel(controls: WeaponTuningControls): WeaponT
   let slidersBox: HTMLDivElement | null = null
   let currentSlug = controls.initialSlug
   let adsHeld = false
+  let fireHeld = false
 
   function buildSliders(): void {
     if (!slidersBox) return
@@ -205,7 +215,8 @@ export function createWeaponTuningPanel(controls: WeaponTuningControls): WeaponT
       adsHeld = true
       controls.setAds(true)
     } else if (e.button === 0) {
-      controls.onFire()
+      fireHeld = true
+      controls.setFireHeld(true)
     }
   }
 
@@ -213,6 +224,9 @@ export function createWeaponTuningPanel(controls: WeaponTuningControls): WeaponT
     if (e.button === 2 && adsHeld) {
       adsHeld = false
       controls.setAds(false)
+    } else if (e.button === 0 && fireHeld) {
+      fireHeld = false
+      controls.setFireHeld(false)
     }
   }
 
