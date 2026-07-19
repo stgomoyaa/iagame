@@ -13,7 +13,7 @@ function archivosTs(dir: string, base = ''): string[] {
     const full = join(dir, entry)
     const rel = base ? `${base}/${entry}` : entry
     if (statSync(full).isDirectory()) out.push(...archivosTs(full, rel))
-    else if (entry.endsWith('.ts') && !entry.endsWith('.test.ts')) out.push(rel)
+    else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) out.push(rel)
   }
   return out
 }
@@ -25,18 +25,30 @@ describe('límites de arquitectura', () => {
     expect(archivos.length).toBeGreaterThan(5)
   })
 
+  // Los import() dinámicos sólo se detectan cuando el specifier es un
+  // string literal ('react', 'next/...', 'three'). import(unaVariable) o
+  // import(`three${sufijo}`) evaden este chequeo: requieren un patrón
+  // deliberado y poco común, no uno accidental, así que queda como hueco
+  // conocido en vez de perseguir un análisis estático completo.
   it('src/game nunca importa React ni Next', () => {
     for (const f of archivos) {
       const src = readFileSync(join(GAME_DIR, f), 'utf8')
       expect(src, `${f} importa react`).not.toMatch(/from\s+['"]react['"]/)
+      expect(src, `${f} importa react (import dinámico)`).not.toMatch(
+        /import\s*\(\s*['"]react['"]\s*\)/,
+      )
       expect(src, `${f} importa next`).not.toMatch(/from\s+['"]next[/'"]/)
+      expect(src, `${f} importa next (import dinámico)`).not.toMatch(
+        /import\s*\(\s*['"]next[/'"]/,
+      )
     }
   })
 
   it('sólo el renderer y el mesh importan Three', () => {
     for (const f of archivos) {
       const src = readFileSync(join(GAME_DIR, f), 'utf8')
-      const importaThree = /from\s+['"]three['"]/.test(src)
+      const importaThree =
+        /from\s+['"]three['"]/.test(src) || /import\s*\(\s*['"]three['"]\s*\)/.test(src)
       if (importaThree) {
         expect(PUEDEN_USAR_THREE, `${f} no está autorizado a importar three`).toContain(f)
       }
