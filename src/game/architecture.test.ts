@@ -20,6 +20,11 @@ const PUEDEN_USAR_THREE = [
   // único punto de contacto con la escena real para dibujarlas (mismo
   // motivo que map/mesh.ts).
   'targets/renderer.ts',
+  // Bots (fase 2, sección 8): cuerpos placeholder (cápsula + esfera) sobre
+  // el cerebro real de bots/bot.ts, que es matemática pura igual que
+  // targets/targets.ts. Único archivo nuevo de esta tarea con permiso de
+  // importar three -- mismo motivo que targets/renderer.ts.
+  'bots/renderer.ts',
 ]
 
 function archivosTs(dir: string, base = ''): string[] {
