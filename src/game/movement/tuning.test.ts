@@ -36,6 +36,24 @@ describe('tuning del movimiento', () => {
     expect(MOVEMENT.slideMaxSpeed).toBe(MOVEMENT.bhopSoftCap)
   })
 
+  it('el techo del slide sigue a bhopSoftCap si se muta en vivo, como hace el panel de tuning', () => {
+    // engine/tuning-panel.ts tiene un slider que escribe MOVEMENT.bhopSoftCap
+    // en caliente y no toca slideMaxSpeed (no existe como campo mutable
+    // propio). Si slideMaxSpeed fuera un valor copiado al iniciar el módulo,
+    // este test lo pescaría: quedaría pegado al 14.4 original mientras
+    // bhopSoftCap ya está en 30.
+    const original = MOVEMENT.bhopSoftCap
+    try {
+      MOVEMENT.bhopSoftCap = 30
+      expect(MOVEMENT.slideMaxSpeed).toBe(30)
+
+      MOVEMENT.bhopSoftCap = 9
+      expect(MOVEMENT.slideMaxSpeed).toBe(9)
+    } finally {
+      MOVEMENT.bhopSoftCap = original
+    }
+  })
+
   it('el cooldown de slide es positivo: sin él, re-presionar agachar reaplica el boost', () => {
     expect(MOVEMENT.slideCooldown).toBeGreaterThan(0)
   })
