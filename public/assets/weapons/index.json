@@ -1,0 +1,268 @@
+[
+  {
+    "slug": "assaultrifle-1",
+    "name": "AssaultRifle 1",
+    "triangles": 1254,
+    "bounds": {
+      "min": [
+        -0.12174830585718155,
+        -0.018940435722470284,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.12174830585718155,
+        0.018940435722470284,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.118,
+    "needsManualReview": true
+  },
+  {
+    "slug": "assaultrifle-2",
+    "name": "AssaultRifle 2",
+    "triangles": 1304,
+    "bounds": {
+      "min": [
+        -0.08860916644334793,
+        -0.010846554301679134,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.08860916644334793,
+        0.010846554301679134,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.472,
+    "needsManualReview": false
+  },
+  {
+    "slug": "assaultrifle-3",
+    "name": "AssaultRifle 3",
+    "triangles": 1218,
+    "bounds": {
+      "min": [
+        -0.1400136500597,
+        -0.017138922587037086,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.1400136500597,
+        0.017138922587037086,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.492,
+    "needsManualReview": false
+  },
+  {
+    "slug": "assaultrifle-4",
+    "name": "AssaultRifle 4",
+    "triangles": 1388,
+    "bounds": {
+      "min": [
+        -0.087447389960289,
+        -0.010704342275857925,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.087447389960289,
+        0.010704342275857925,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.36,
+    "needsManualReview": false
+  },
+  {
+    "slug": "assaultrifle-5",
+    "name": "AssaultRifle 5",
+    "triangles": 1304,
+    "bounds": {
+      "min": [
+        -0.08860915899276733,
+        -0.010846555233001709,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.08860915899276733,
+        0.010846555233001709,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.472,
+    "needsManualReview": false
+  },
+  {
+    "slug": "assaultrifle2-1",
+    "name": "AssaultRifle2 1",
+    "triangles": 1930,
+    "bounds": {
+      "min": [
+        -0.10392026603221893,
+        -0.020105479285120964,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.10392026603221893,
+        0.020105479285120964,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.251,
+    "needsManualReview": false
+  },
+  {
+    "slug": "assaultrifle2-2",
+    "name": "AssaultRifle2 2",
+    "triangles": 1795,
+    "bounds": {
+      "min": [
+        -0.11129246652126312,
+        -0.01674051396548748,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.11129246652126312,
+        0.01674051396548748,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.202,
+    "needsManualReview": false
+  },
+  {
+    "slug": "assaultrifle2-3",
+    "name": "AssaultRifle2 3",
+    "triangles": 1614,
+    "bounds": {
+      "min": [
+        -0.11652716994285583,
+        -0.02769284136593342,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.11652716994285583,
+        0.02769284136593342,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.019,
+    "needsManualReview": true
+  },
+  {
+    "slug": "assaultrifle2-4",
+    "name": "AssaultRifle2 4",
+    "triangles": 1372,
+    "bounds": {
+      "min": [
+        -0.15771012008190155,
+        -0.024823134765028954,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.15771012008190155,
+        0.024823134765028954,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.287,
+    "needsManualReview": false
+  },
+  {
+    "slug": "bullpup-1",
+    "name": "Bullpup 1",
+    "triangles": 2778,
+    "bounds": {
+      "min": [
+        -0.08808336406946182,
+        -0.017737088724970818,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.08808336406946182,
+        0.017737088724970818,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.2,
+    "needsManualReview": false
+  },
+  {
+    "slug": "bullpup-2",
+    "name": "Bullpup 2",
+    "triangles": 2532,
+    "bounds": {
+      "min": [
+        -0.12120597064495087,
+        -0.024778757244348526,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.12120597064495087,
+        0.024778757244348526,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.164,
+    "needsManualReview": false
+  },
+  {
+    "slug": "bullpup-3",
+    "name": "Bullpup 3",
+    "triangles": 2386,
+    "bounds": {
+      "min": [
+        -0.1111825481057167,
+        -0.021620605140924454,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.1111825481057167,
+        0.021620605140924454,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.316,
+    "needsManualReview": false
+  },
+  {
+    "slug": "pistol-1",
+    "name": "Pistol 1",
+    "triangles": 1040,
+    "bounds": {
+      "min": [
+        -0.19152826070785522,
+        -0.053293876349925995,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.19152826070785522,
+        0.053293876349925995,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.075,
+    "needsManualReview": true
+  },
+  {
+    "slug": "pistol-2",
+    "name": "Pistol 2",
+    "triangles": 1200,
+    "bounds": {
+      "min": [
+        -0.19152826070785522,
+        -0.053293876349925995,
+        -0.30000001192092896
+      ],
+      "max": [
+        0.19152826070785522,
+        0.053293876349925995,
+        0.30000001192092896
+      ]
+    },
+    "muzzleConfidence": 0.092,
+    "needsManualReview": true
+  }
+]

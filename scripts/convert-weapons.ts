@@ -10,12 +10,15 @@
  * Qué hace por archivo:
  *   1. Convierte FBX a glTF con FBX2glTF.
  *   2. Aplana la jerarquía y fusiona las mallas en una sola.
- *   3. Detecta el eje del cañón y hacia dónde apunta la boca.
- *   4. Rota para dejar la boca hacia -Z y el arma con +Y arriba.
- *   5. Escala uniformemente al largo objetivo en metros.
- *   6. Centra en el origen.
- *   7. Reduce los materiales a unlit: el spec prohíbe el costo de PBR.
- *   8. Limpia con dedup y prune.
+ *   3. Hornea el color de cada material en vértices (COLOR_0) y colapsa
+ *      todos los materiales a uno solo, para volver a fusionar en 1 sólo
+ *      primitivo por arma.
+ *   4. Detecta el eje del cañón y hacia dónde apunta la boca.
+ *   5. Rota para dejar la boca hacia -Z y el arma con +Y arriba.
+ *   6. Escala uniformemente al largo objetivo en metros.
+ *   7. Centra en el origen.
+ *   8. Marca el material único como unlit: el spec prohíbe el costo de PBR.
+ *   9. Limpia con dedup y prune.
  *
  * Falla por archivo sin cortar el lote, e imprime una tabla al final.
  * Es idempotente: salta lo ya convertido salvo que se pase --force.
@@ -28,11 +31,14 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, extname, join, resolve } from 'node:path'
 import { Document, NodeIO } from '@gltf-transform/core'
+import { KHRMaterialsUnlit } from '@gltf-transform/extensions'
 import { dedup, flatten, join as joinMeshes, prune, transformMesh, unlit, weld } from '@gltf-transform/functions'
-import { boundsOf, buildNormalizeMatrix, detectMuzzle, displayName, slugify } from './lib/geometry'
+// Extensión explícita: Node resuelve ESM nativo y la exige. Vitest resuelve
+// sin ella, así que omitirla deja los tests en verde y el script roto.
+import { boundsOf, buildNormalizeMatrix, detectMuzzle, displayName, slugify } from './lib/geometry.ts'
 
 /** Bajo esta confianza, la orientación se marca para revisión manual. */
 const MUZZLE_CONFIDENCE_THRESHOLD = 0.15
@@ -84,6 +90,43 @@ function collectPositions(doc: Document): Float32Array {
   return out
 }
 
+/**
+ * Hornea el baseColorFactor de cada material en un atributo COLOR_0 por
+ * vértice y reemplaza todos los materiales por uno solo, blanco y unlit.
+ *
+ * Las armas no tienen textura: cada material sólo aporta un color plano.
+ * join() únicamente fusiona primitivos que comparten material, así que sin
+ * esto cada arma queda en N draw calls (uno por material original) en vez
+ * de 1. COLOR_0 y baseColorFactor están ambos en espacio lineal, por eso
+ * se copian los valores tal cual, sin conversión sRGB.
+ */
+function bakeVertexColors(doc: Document): void {
+  const root = doc.getRoot()
+  const buffer = root.listBuffers()[0]
+  const baked = doc.createMaterial('baked').setBaseColorFactor([1, 1, 1, 1])
+
+  for (const mesh of root.listMeshes()) {
+    for (const prim of mesh.listPrimitives()) {
+      const material = prim.getMaterial()
+      const factor = material ? material.getBaseColorFactor() : [1, 1, 1, 1]
+      const position = prim.getAttribute('POSITION')
+      if (!position) continue
+
+      const count = position.getCount()
+      const colors = new Float32Array(count * 3)
+      for (let i = 0; i < count; i++) {
+        colors[i * 3] = factor[0]
+        colors[i * 3 + 1] = factor[1]
+        colors[i * 3 + 2] = factor[2]
+      }
+
+      const colorAccessor = doc.createAccessor(undefined, buffer).setType('VEC3').setArray(colors)
+      prim.setAttribute('COLOR_0', colorAccessor)
+      prim.setMaterial(baked)
+    }
+  }
+}
+
 function countTriangles(doc: Document): number {
   let tris = 0
   for (const mesh of doc.getRoot().listMeshes()) {
@@ -113,6 +156,12 @@ async function convertOne(
   // Aplanar y fusionar: el viewmodel quiere una malla, no una jerarquía.
   await doc.transform(flatten(), dedup(), joinMeshes(), weld())
 
+  // Hornear el color de cada material en vértices y colapsar a un único
+  // material antes de volver a fusionar: recién ahí join() puede juntar
+  // primitivos que antes tenían materiales distintos.
+  bakeVertexColors(doc)
+  await doc.transform(joinMeshes())
+
   const positions = collectPositions(doc)
   if (positions.length === 0) throw new Error('el modelo no tiene vértices')
 
@@ -131,6 +180,7 @@ async function convertOne(
   const b = boundsOf(finalPositions)
 
   await io.write(outPath, doc)
+  unlinkSync(tmpGlb)
 
   const name = basename(fbxPath, extname(fbxPath))
   return {
@@ -177,7 +227,9 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  const io = new NodeIO()
+  // Sin registrar la extensión, NodeIO la descarta en silencio al escribir
+  // y el KHR_materials_unlit de unlit() nunca llega al archivo final.
+  const io = new NodeIO().registerExtensions([KHRMaterialsUnlit])
   const entries: IndexEntry[] = []
   const failures: Failure[] = []
   let skipped = 0
