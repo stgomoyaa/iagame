@@ -278,5 +278,525 @@
     "muzzleConfidence": 0.092,
     "upAxisConfidence": 0.722,
     "needsManualReview": true
+  },
+  {
+    "slug": "pistol-3",
+    "name": "Pistol 3",
+    "triangles": 1442,
+    "bounds": {
+      "min": [
+        -0.019599054008722305,
+        -0.07709908485412598,
+        -0.10999999940395355
+      ],
+      "max": [
+        0.019599054008722305,
+        0.07709908485412598,
+        0.10999999940395355
+      ]
+    },
+    "muzzleConfidence": 0.028,
+    "upAxisConfidence": 0.746,
+    "needsManualReview": true
+  },
+  {
+    "slug": "pistol-4",
+    "name": "Pistol 4",
+    "triangles": 1320,
+    "bounds": {
+      "min": [
+        -0.016756456345319748,
+        -0.09065943211317062,
+        -0.10999999940395355
+      ],
+      "max": [
+        0.016756456345319748,
+        0.09065943211317062,
+        0.10999999940395355
+      ]
+    },
+    "muzzleConfidence": 0.096,
+    "upAxisConfidence": 0.815,
+    "needsManualReview": true
+  },
+  {
+    "slug": "pistol-5",
+    "name": "Pistol 5",
+    "triangles": 968,
+    "bounds": {
+      "min": [
+        -0.01658831350505352,
+        -0.07247314602136612,
+        -0.10999999940395355
+      ],
+      "max": [
+        0.01658831350505352,
+        0.07247314602136612,
+        0.10999999940395355
+      ]
+    },
+    "muzzleConfidence": 0.071,
+    "upAxisConfidence": 0.771,
+    "needsManualReview": true
+  },
+  {
+    "slug": "pistol-6",
+    "name": "Pistol 6",
+    "triangles": 1878,
+    "bounds": {
+      "min": [
+        -0.013879239559173584,
+        -0.052211686968803406,
+        -0.10999999940395355
+      ],
+      "max": [
+        0.013879239559173584,
+        0.052211686968803406,
+        0.10999999940395355
+      ]
+    },
+    "muzzleConfidence": 0.017,
+    "upAxisConfidence": 0.734,
+    "needsManualReview": true
+  },
+  {
+    "slug": "revolver-1",
+    "name": "Revolver 1",
+    "triangles": 1046,
+    "bounds": {
+      "min": [
+        -0.016337497159838676,
+        -0.04938654229044914,
+        -0.10999999940395355
+      ],
+      "max": [
+        0.016337497159838676,
+        0.04938654229044914,
+        0.10999999940395355
+      ]
+    },
+    "muzzleConfidence": 0.358,
+    "upAxisConfidence": 0.669,
+    "needsManualReview": false
+  },
+  {
+    "slug": "revolver-2",
+    "name": "Revolver 2",
+    "triangles": 1252,
+    "bounds": {
+      "min": [
+        -0.01633748970925808,
+        -0.05237824469804764,
+        -0.10999999940395355
+      ],
+      "max": [
+        0.01633748970925808,
+        0.05237824469804764,
+        0.10999999940395355
+      ]
+    },
+    "muzzleConfidence": 0.363,
+    "upAxisConfidence": 0.688,
+    "needsManualReview": false
+  },
+  {
+    "slug": "revolver-3",
+    "name": "Revolver 3",
+    "triangles": 1434,
+    "bounds": {
+      "min": [
+        -0.016312049701809883,
+        -0.054445669054985046,
+        -0.10999999940395355
+      ],
+      "max": [
+        0.016312049701809883,
+        0.054445669054985046,
+        0.10999999940395355
+      ]
+    },
+    "muzzleConfidence": 0.351,
+    "upAxisConfidence": 0.7,
+    "needsManualReview": false
+  },
+  {
+    "slug": "revolver-4",
+    "name": "Revolver 4",
+    "triangles": 966,
+    "bounds": {
+      "min": [
+        -0.02198684960603714,
+        -0.06835442036390305,
+        -0.10999999940395355
+      ],
+      "max": [
+        0.02198684960603714,
+        0.06835442036390305,
+        0.10999999940395355
+      ]
+    },
+    "muzzleConfidence": 0.164,
+    "upAxisConfidence": 0.678,
+    "needsManualReview": false
+  },
+  {
+    "slug": "revolver-5",
+    "name": "Revolver 5",
+    "triangles": 1334,
+    "bounds": {
+      "min": [
+        -0.017031775787472725,
+        -0.05570442974567413,
+        -0.10999999940395355
+      ],
+      "max": [
+        0.017031775787472725,
+        0.05570442974567413,
+        0.10999999940395355
+      ]
+    },
+    "muzzleConfidence": 0.385,
+    "upAxisConfidence": 0.694,
+    "needsManualReview": false
+  },
+  {
+    "slug": "shotgun-1",
+    "name": "Shotgun 1",
+    "triangles": 1270,
+    "bounds": {
+      "min": [
+        -0.02245521731674671,
+        -0.08586292713880539,
+        -0.4749999940395355
+      ],
+      "max": [
+        0.02245521731674671,
+        0.08586292713880539,
+        0.4749999940395355
+      ]
+    },
+    "muzzleConfidence": 0.011,
+    "upAxisConfidence": 0.738,
+    "needsManualReview": true
+  },
+  {
+    "slug": "shotgun-2",
+    "name": "Shotgun 2",
+    "triangles": 746,
+    "bounds": {
+      "min": [
+        -0.020242953673005104,
+        -0.07796008884906769,
+        -0.4749999940395355
+      ],
+      "max": [
+        0.020242953673005104,
+        0.07796008884906769,
+        0.4749999940395355
+      ]
+    },
+    "muzzleConfidence": 0.206,
+    "upAxisConfidence": 0.74,
+    "needsManualReview": false
+  },
+  {
+    "slug": "shotgun-3",
+    "name": "Shotgun 3",
+    "triangles": 978,
+    "bounds": {
+      "min": [
+        -0.020242953673005104,
+        -0.07740379869937897,
+        -0.4749999940395355
+      ],
+      "max": [
+        0.020242953673005104,
+        0.07740379869937897,
+        0.4749999940395355
+      ]
+    },
+    "muzzleConfidence": 0.033,
+    "upAxisConfidence": 0.738,
+    "needsManualReview": true
+  },
+  {
+    "slug": "shotgun-4",
+    "name": "Shotgun 4",
+    "triangles": 668,
+    "bounds": {
+      "min": [
+        -0.01737193576991558,
+        -0.08078978955745697,
+        -0.4749999940395355
+      ],
+      "max": [
+        0.01737193576991558,
+        0.08078978955745697,
+        0.4749999940395355
+      ]
+    },
+    "muzzleConfidence": 0.124,
+    "upAxisConfidence": 0.785,
+    "needsManualReview": true
+  },
+  {
+    "slug": "shotgun-sawedoff",
+    "name": "Shotgun SawedOff",
+    "triangles": 956,
+    "bounds": {
+      "min": [
+        -0.054407164454460144,
+        -0.13138160109519958,
+        -0.4749999940395355
+      ],
+      "max": [
+        0.054407164454460144,
+        0.13138160109519958,
+        0.4749999940395355
+      ]
+    },
+    "muzzleConfidence": 0.164,
+    "upAxisConfidence": 0.586,
+    "needsManualReview": false
+  },
+  {
+    "slug": "shotgun-shortstock",
+    "name": "Shotgun ShortStock",
+    "triangles": 1612,
+    "bounds": {
+      "min": [
+        -0.026190223172307014,
+        -0.10271752625703812,
+        -0.4749999940395355
+      ],
+      "max": [
+        0.026190223172307014,
+        0.10271752625703812,
+        0.4749999940395355
+      ]
+    },
+    "muzzleConfidence": 0.008,
+    "upAxisConfidence": 0.745,
+    "needsManualReview": true
+  },
+  {
+    "slug": "sniperrifle-1",
+    "name": "SniperRifle 1",
+    "triangles": 1382,
+    "bounds": {
+      "min": [
+        -0.03620517998933792,
+        -0.11697424948215485,
+        -0.574999988079071
+      ],
+      "max": [
+        0.03620517998933792,
+        0.11697424948215485,
+        0.574999988079071
+      ]
+    },
+    "muzzleConfidence": 0.05,
+    "upAxisConfidence": 0.69,
+    "needsManualReview": true
+  },
+  {
+    "slug": "sniperrifle-2",
+    "name": "SniperRifle 2",
+    "triangles": 1732,
+    "bounds": {
+      "min": [
+        -0.03758801519870758,
+        -0.11691393703222275,
+        -0.574999988079071
+      ],
+      "max": [
+        0.03758801519870758,
+        0.11691393703222275,
+        0.574999988079071
+      ]
+    },
+    "muzzleConfidence": 0.035,
+    "upAxisConfidence": 0.678,
+    "needsManualReview": true
+  },
+  {
+    "slug": "sniperrifle-3",
+    "name": "SniperRifle 3",
+    "triangles": 1722,
+    "bounds": {
+      "min": [
+        -0.03537767007946968,
+        -0.09530503302812576,
+        -0.574999988079071
+      ],
+      "max": [
+        0.03537767007946968,
+        0.09530503302812576,
+        0.574999988079071
+      ]
+    },
+    "muzzleConfidence": 0.089,
+    "upAxisConfidence": 0.629,
+    "needsManualReview": true
+  },
+  {
+    "slug": "sniperrifle-4",
+    "name": "SniperRifle 4",
+    "triangles": 1344,
+    "bounds": {
+      "min": [
+        -0.04168557748198509,
+        -0.12236443161964417,
+        -0.574999988079071
+      ],
+      "max": [
+        0.04168557748198509,
+        0.12236443161964417,
+        0.574999988079071
+      ]
+    },
+    "muzzleConfidence": 0.013,
+    "upAxisConfidence": 0.659,
+    "needsManualReview": true
+  },
+  {
+    "slug": "sniperrifle-5",
+    "name": "SniperRifle 5",
+    "triangles": 1688,
+    "bounds": {
+      "min": [
+        -0.11325102299451828,
+        -0.17237277328968048,
+        -0.574999988079071
+      ],
+      "max": [
+        0.11325102299451828,
+        0.17237277328968048,
+        0.574999988079071
+      ]
+    },
+    "muzzleConfidence": 0.278,
+    "upAxisConfidence": 0.343,
+    "needsManualReview": false
+  },
+  {
+    "slug": "sniperrifle-6",
+    "name": "SniperRifle 6",
+    "triangles": 1370,
+    "bounds": {
+      "min": [
+        -0.039386261254549026,
+        -0.12114886939525604,
+        -0.574999988079071
+      ],
+      "max": [
+        0.039386261254549026,
+        0.12114886939525604,
+        0.574999988079071
+      ]
+    },
+    "muzzleConfidence": 0.005,
+    "upAxisConfidence": 0.675,
+    "needsManualReview": true
+  },
+  {
+    "slug": "submachinegun-1",
+    "name": "SubmachineGun 1",
+    "triangles": 1164,
+    "bounds": {
+      "min": [
+        -0.02586090750992298,
+        -0.13871851563453674,
+        -0.22499999403953552
+      ],
+      "max": [
+        0.02586090750992298,
+        0.13871851563453674,
+        0.22499999403953552
+      ]
+    },
+    "muzzleConfidence": 0.316,
+    "upAxisConfidence": 0.814,
+    "needsManualReview": false
+  },
+  {
+    "slug": "submachinegun-2",
+    "name": "SubmachineGun 2",
+    "triangles": 1374,
+    "bounds": {
+      "min": [
+        -0.01772344298660755,
+        -0.10278267413377762,
+        -0.22499999403953552
+      ],
+      "max": [
+        0.01772344298660755,
+        0.10278267413377762,
+        0.22499999403953552
+      ]
+    },
+    "muzzleConfidence": 0.275,
+    "upAxisConfidence": 0.828,
+    "needsManualReview": false
+  },
+  {
+    "slug": "submachinegun-3",
+    "name": "SubmachineGun 3",
+    "triangles": 1566,
+    "bounds": {
+      "min": [
+        -0.017928997054696083,
+        -0.08570026606321335,
+        -0.22499999403953552
+      ],
+      "max": [
+        0.017928997054696083,
+        0.08570026606321335,
+        0.22499999403953552
+      ]
+    },
+    "muzzleConfidence": 0.088,
+    "upAxisConfidence": 0.791,
+    "needsManualReview": true
+  },
+  {
+    "slug": "submachinegun-4",
+    "name": "SubmachineGun 4",
+    "triangles": 1024,
+    "bounds": {
+      "min": [
+        -0.028113048523664474,
+        -0.14456309378147125,
+        -0.22499999403953552
+      ],
+      "max": [
+        0.028113048523664474,
+        0.14456309378147125,
+        0.22499999403953552
+      ]
+    },
+    "muzzleConfidence": 0.411,
+    "upAxisConfidence": 0.806,
+    "needsManualReview": false
+  },
+  {
+    "slug": "submachinegun-5",
+    "name": "SubmachineGun 5",
+    "triangles": 1440,
+    "bounds": {
+      "min": [
+        -0.01425179559737444,
+        -0.07742498815059662,
+        -0.22499999403953552
+      ],
+      "max": [
+        0.01425179559737444,
+        0.07742498815059662,
+        0.22499999403953552
+      ]
+    },
+    "muzzleConfidence": 0.243,
+    "upAxisConfidence": 0.816,
+    "needsManualReview": false
   }
 ]

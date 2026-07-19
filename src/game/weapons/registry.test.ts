@@ -56,6 +56,22 @@ describe('registry: fallback de arquetipo inferido', () => {
     expect(inferArchetypeFromSlug('tacticalsmg-4')).toBe('smg-1')
   })
 
+  it('"submachinegun" gana sobre "machinegun": una subfusil no es una LMG', () => {
+    // Regresión: /machinegun/ matcheaba dentro de "submachinegun" y mandaba
+    // los cinco modelos SubmachineGun_N del pack CC0 al arquetipo pesado.
+    for (const n of [1, 2, 3, 4, 5]) {
+      expect(inferArchetypeFromSlug(`submachinegun-${n}`)).toBe('smg-1')
+    }
+    expect(inferArchetypeFromSlug('heavymachinegun-1')).toBe('lmg')
+  })
+
+  it('los slugs del pack CC0 completo infieren la clase que corresponde', () => {
+    expect(inferArchetypeFromSlug('revolver-3')).toBe('pistol')
+    expect(inferArchetypeFromSlug('shotgun-sawedoff')).toBe('shotgun')
+    expect(inferArchetypeFromSlug('shotgun-shortstock')).toBe('shotgun')
+    expect(inferArchetypeFromSlug('sniperrifle-6')).toBe('sniper-bolt')
+  })
+
   it('un slug sin número de variante también funciona (no depende del sufijo -N)', () => {
     expect(() => inferArchetypeFromSlug('mysteryweapon')).not.toThrow()
   })

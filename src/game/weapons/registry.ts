@@ -91,7 +91,11 @@ const FALLBACK_ARCHETYPE: ArchetypeId = 'ar-1'
  * en `MODEL_ARCHETYPE_MAP`. Nunca lanza: si ninguna palabra clave
  * matchea, devuelve `FALLBACK_ARCHETYPE`. El orden de los checks importa
  * (de más específico a más genérico): "sniper" tiene que evaluarse antes
- * que "rifle" porque un slug como "sniperrifle-1" contiene ambas palabras.
+ * que "rifle" porque un slug como "sniperrifle-1" contiene ambas palabras,
+ * y por la misma razón "submachinegun" tiene que evaluarse antes que
+ * "machinegun": el pack CC0 trae cinco modelos "SubmachineGun_N" y con el
+ * orden inverso los cinco caían en el arquetipo `lmg` (ametralladora
+ * pesada), que es justo lo contrario de lo que son.
  */
 export function inferArchetypeFromSlug(slug: string): ArchetypeId {
   const base = slug.toLowerCase().replace(/-\d+$/, '')
@@ -99,10 +103,10 @@ export function inferArchetypeFromSlug(slug: string): ArchetypeId {
   if (/sniper|bolt/.test(base)) return 'sniper-bolt'
   if (/marksman|dmr|designated/.test(base)) return 'sniper-marksman'
   if (/shotgun|pump|scatter/.test(base)) return 'shotgun'
+  if (/submachinegun|smg|pdw|subgun/.test(base)) return 'smg-1'
   if (/lmg|machinegun|minigun|belt/.test(base)) return 'lmg'
   if (/pistol|handgun|revolver|sidearm/.test(base)) return 'pistol'
   if (/burst/.test(base)) return 'ar-2'
-  if (/smg|pdw|subgun/.test(base)) return 'smg-1'
   if (/bullpup/.test(base)) return 'smg-1'
   if (/rifle|carbine/.test(base)) return 'ar-1'
 
