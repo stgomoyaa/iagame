@@ -3,14 +3,30 @@
  * pitch/yaw de la cámara, más la recuperación hacia el origen al soltar el
  * gatillo (sección 3 del spec de fase 1). Matemática pura: nada de esto
  * depende de Three ni del motor de render.
+ *
+ * FIX (encontrado jugando): además de recuperar el offset de cámara ya
+ * aplicado (pitchOffset/yawOffset), este módulo ahora también recupera
+ * `shotIndex` -- la posición dentro del PATRÓN que el próximo disparo va a
+ * leer. Antes sólo volvía a 0 al crear el arma o al completar una recarga:
+ * vaciar medio cargador, soltar el gatillo diez segundos y volver a
+ * disparar seguía dando el retroceso de fin de carga, como si el patrón
+ * nunca se hubiera enfriado. Ver el comentario de cabecera de
+ * stepRecoilRecovery más abajo para el razonamiento completo.
  */
 
-import { recoilOffsetForShot, type WeaponArchetype } from '@/game/weapons/archetypes'
+import type { WeaponArchetype } from '@/game/weapons/archetypes'
 import { clampPitch } from '@/game/engine/input'
 
 export interface RecoilState {
-  /** Disparo actual dentro del patrón (ver recoilOffsetForShot en
-   *  archetypes.ts). Se resetea a 0 cuando se completa una recarga. */
+  /**
+   * Posición actual dentro del patrón (ver recoilOffsetForShot en
+   * archetypes.ts). Se resetea a 0 cuando se completa una recarga
+   * (resetRecoilPattern) y además DECAE de forma continua hacia 0 mientras
+   * el gatillo está suelto (ver stepRecoilRecovery) -- por eso puede quedar
+   * en un valor fraccionario, no sólo en los enteros que produce cada
+   * disparo. applyRecoilShot interpola entre las dos entradas de patrón más
+   * cercanas para ese caso (ver interpolatedRecoilOffset).
+   */
   shotIndex: number
   /**
    * Desvío de pitch inyectado por el retroceso, radianes. Se SUMA al pitch
@@ -49,22 +65,74 @@ export function resetRecoilPattern(state: RecoilState): void {
   state.shotIndex = 0
 }
 
+// Scratch preasignado a nivel de módulo para interpolatedRecoilOffset: cero
+// asignaciones por disparo (mismo patrón que scratchSpreadSample en
+// combat/combat.ts).
+const scratchOffset: [number, number] = [0, 0]
+
 /**
- * Aplica el impulso de un disparo: salta (no interpola) al valor
- * ACUMULADO del patrón para este índice — recoilOffsetForShot ya da la
- * posición objetivo de la cámara para ese disparo, no un delta a integrar
- * (ver el comentario de RecoilSpec.pattern en archetypes.ts: "y" es la
- * subida vertical acumulada). Avanza shotIndex para el próximo disparo.
+ * Offset de retroceso para un shotIndex FRACCIONARIO. A diferencia de
+ * recoilOffsetForShot (weapons/archetypes.ts), que sólo tiene sentido para
+ * índices enteros (un disparo real siempre cae en uno), acá el índice puede
+ * caer en cualquier punto entre dos entradas del patrón porque viene de la
+ * recuperación continua (ver stepRecoilRecovery): tras una pausa parcial,
+ * `state.shotIndex` puede ser, por ejemplo, 13.7.
+ *
+ * Decisión: INTERPOLAR linealmente entre las dos entradas adyacentes, no
+ * redondear ni truncar.
+ * - Truncar (floor) infravalora siempre: 13.9 (casi 14) daría el offset del
+ *   disparo 13, un salto perceptible hacia atrás en cuanto se dispara el 14
+ *   real un instante después.
+ * - Redondear (round) da un escalón exacto en el punto medio (13.5) en vez
+ *   de una curva -- sigue siendo un "cantil" en miniatura, la mitad de
+ *   grande que el reset por umbral que este fix busca evitar.
+ * - Interpolar es lo único que hace que la recuperación se sienta continua,
+ *   coherente con la premisa central del fix (decaimiento continuo, nunca
+ *   un salto).
+ *
+ * `clamped` cubre el caso `shotIndex < 0`, que no debería darse (stepRecoilRecovery
+ * clampea al aplicar la recuperación) pero así la función es segura por si
+ * algún llamador futuro pasa un valor crudo. Escribe en `out` en vez de
+ * devolver un array nuevo: cero asignaciones por disparo.
+ */
+function interpolatedRecoilOffset(
+  archetype: WeaponArchetype,
+  shotIndex: number,
+  out: [number, number],
+): void {
+  const { pattern } = archetype.recoil
+  const clamped = Math.max(0, shotIndex)
+  const lowerWhole = Math.floor(clamped)
+  const fraction = clamped - lowerWhole
+  const lower = pattern[lowerWhole % pattern.length]
+  const upper = pattern[(lowerWhole + 1) % pattern.length]
+  out[0] = lower[0] + (upper[0] - lower[0]) * fraction
+  out[1] = lower[1] + (upper[1] - lower[1]) * fraction
+}
+
+/**
+ * Aplica el impulso de un disparo: salta (no interpola respecto del disparo
+ * ANTERIOR) al valor ACUMULADO del patrón para el shotIndex actual --
+ * recoilOffsetForShot/interpolatedRecoilOffset ya dan la posición objetivo
+ * de la cámara para ese índice, no un delta a integrar (ver el comentario
+ * de RecoilSpec.pattern en archetypes.ts: "y" es la subida vertical
+ * acumulada). La interpolación que sí ocurre acá es DENTRO del patrón,
+ * entre dos entradas adyacentes, cuando shotIndex quedó fraccionario por la
+ * recuperación (ver interpolatedRecoilOffset). Avanza shotIndex en +1 para
+ * el próximo disparo, preservando la parte fraccionaria: un disparo que cae
+ * a mitad de recuperación (13.7) no "redondea" antes de avanzar, sigue
+ * siendo 14.7 -- la recuperación parcial de antes del disparo se respeta
+ * también después.
  */
 export function applyRecoilShot(state: RecoilState, archetype: WeaponArchetype): void {
-  const [x, y] = recoilOffsetForShot(archetype, state.shotIndex)
+  interpolatedRecoilOffset(archetype, state.shotIndex, scratchOffset)
   // y = subida del cañón. Un arma real levanta el cañón al disparar, así
   // que la cámara tiene que mirar más ARRIBA con cada disparo. En la
   // convención de pitch de engine/input.ts (mover el mouse hacia abajo
   // resta del pitch), "mirar arriba" es pitch positivo — por eso "y" entra
   // con signo positivo acá, sin invertir.
-  state.pitchOffset = y
-  state.yawOffset = x
+  state.pitchOffset = scratchOffset[1]
+  state.yawOffset = scratchOffset[0]
   state.shotIndex++
 }
 
@@ -79,12 +147,58 @@ function approachZero(value: number, ratePerSecond: number, dt: number): number 
 }
 
 /**
+ * Tasa de recuperación de `shotIndex`, en "disparos" por segundo. Se DERIVA
+ * de `magazine / indexRecoveryTime` en vez de guardarse como un campo
+ * aparte del arquetipo: así, si algún día se rebalancea el tamaño de un
+ * cargador, la tasa sigue siendo coherente con el nuevo valor sin tocar
+ * nada más (ver el comentario de RecoilSpec.indexRecoveryTime en
+ * weapons/archetypes.ts, que también documenta la banda física de
+ * referencia por arquetipo).
+ */
+export function indexRecoveryRate(archetype: WeaponArchetype): number {
+  return archetype.magazine / archetype.recoil.indexRecoveryTime
+}
+
+/**
  * Recuperación: sólo corre mientras el gatillo NO está sostenido. Mientras
  * se sostiene, el patrón determinista (applyRecoilShot) ya es la única
  * fuente de la posición de la cámara — dejar que la recuperación compita
  * contra el patrón en simultáneo distorsionaría la curva ya calibrada de
  * cada arquetipo (sección 3 del spec: "los patrones ya están calibrados a
- * magnitudes físicas").
+ * magnitudes físicas"). Por el mismo motivo, `shotIndex` (la posición
+ * dentro del patrón, no el offset de cámara) usa exactamente el mismo gate
+ * `firing`: si decayera incluso mientras se dispara, con una tasa de
+ * recuperación deliberadamente MÁS RÁPIDA que la cadencia de disparo (ver
+ * indexRecoveryRate más arriba y su test de propiedad en recoil.test.ts),
+ * el índice nunca podría subir durante un spray sostenido -- la
+ * recuperación le ganaría a la acumulación en cada frame y el patrón jamás
+ * llegaría a su plateau.
+ *
+ * BUG que esto corrige (encontrado jugando, no en Vitest): `shotIndex`
+ * nunca decaía con el tiempo, sólo se reseteaba a 0 al crear el arma o al
+ * completar una recarga. Vaciar buena parte de un cargador, soltar el
+ * gatillo diez segundos y volver a disparar seguía dando el retroceso de
+ * FIN de carga en el primer tiro -- el patrón quedaba "caliente" para
+ * siempre hasta la próxima recarga.
+ *
+ * Diseño elegido -- decaimiento CONTINUO, nunca un reset por umbral -- y
+ * por qué:
+ * - Es lo que hacen Source y CS de verdad: el índice de retroceso decae de
+ *   forma continua, gobernado por un `recovery_time` por arma de más o
+ *   menos 0.3-0.4s.
+ * - Un umbral fijo crea un cantil explotable: spray completo a los 0.99s,
+ *   cero a los 1.01s. Se aprende a cronometrar el borde exacto y se siente
+ *   arbitrario, no físico.
+ * - El decaimiento preserva la disciplina de ráfagas cortas como una
+ *   habilidad real: disparar tres, soltar un instante y disparar tres más
+ *   tiene que acumular PARCIALMENTE -- eso es justo lo que un buen jugador
+ *   administra. Un reset binario elimina esa habilidad por completo.
+ * - Toques espaciados nunca acumulan, que es exactamente la razón por la
+ *   que tirar de a uno es preciso.
+ *
+ * `shotIndex` nunca es negativo (Math.max(0, ...), igual que approachZero
+ * para pitch/yaw pero sin necesidad de manejar signo: el índice sólo crece
+ * hacia arriba al disparar).
  */
 export function stepRecoilRecovery(
   state: RecoilState,
@@ -95,6 +209,7 @@ export function stepRecoilRecovery(
   if (firing) return
   state.pitchOffset = approachZero(state.pitchOffset, archetype.recoil.recovery, dt)
   state.yawOffset = approachZero(state.yawOffset, archetype.recoil.recovery, dt)
+  state.shotIndex = Math.max(0, state.shotIndex - indexRecoveryRate(archetype) * dt)
 }
 
 /**
