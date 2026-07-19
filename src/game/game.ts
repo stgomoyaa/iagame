@@ -123,6 +123,55 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     if (weaponErrorBanner) weaponErrorBanner.textContent = message
   }
 
+  // Pérdida de contexto WebGL (reset de GPU, cambio de GPU en una laptop
+  // híbrida, driver que se cae): sin manejarla, requestAnimationFrame sigue
+  // llamando a frame() para siempre, stepPlayer() sigue simulando físicas
+  // que nadie ve, y el canvas queda en negro sin ningún aviso. onLost frena
+  // el loop entero y muestra un mensaje; no se intenta reconstruir la
+  // escena en onRestored (texturas, buffers y programs quedan inválidos
+  // tras la pérdida: recrearlos en caliente es una feature aparte, no un
+  // fix de QA) — hace falta recargar para volver a jugar.
+  let contextLostOverlay: HTMLDivElement | null = null
+
+  function showContextLostOverlay(message: string): void {
+    if (!canvas.parentElement) return
+    if (!contextLostOverlay) {
+      contextLostOverlay = document.createElement('div')
+      contextLostOverlay.style.cssText =
+        'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;' +
+        'text-align:center;padding:32px;z-index:40;' +
+        'font:14px/1.5 ui-monospace,monospace;color:#e6e8ec;background:rgba(5,7,11,.92)'
+      canvas.parentElement.appendChild(contextLostOverlay)
+    }
+    contextLostOverlay.textContent = message
+  }
+
+  function hideContextLostOverlay(): void {
+    contextLostOverlay?.remove()
+    contextLostOverlay = null
+  }
+
+  function onContextLost(e: Event): void {
+    // preventDefault() le dice al navegador que este código quiere
+    // manejar la pérdida (y habilita 'webglcontextrestored' más adelante).
+    // WebGLRenderer ya registra su propio listener que hace lo mismo; esto
+    // es defensivo, no depende de ese detalle interno de Three.
+    e.preventDefault()
+    console.error('game: contexto WebGL perdido, deteniendo el loop')
+    running = false
+    cancelAnimationFrame(rafId)
+    showContextLostOverlay(
+      'Se perdió el contexto gráfico (WebGL). Recargá la página para seguir jugando.',
+    )
+  }
+
+  function onContextRestored(): void {
+    console.error('game: contexto WebGL restaurado, hace falta recargar la página')
+    showContextLostOverlay(
+      'El contexto gráfico volvió, pero esta sesión no se recupera sola. Recargá la página.',
+    )
+  }
+
   function onResize(): void {
     gfx.resize(canvas.clientWidth, canvas.clientHeight)
     viewmodel.resize(canvas.clientWidth, canvas.clientHeight)
@@ -228,6 +277,12 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       }
       loadWeaponTuningOverrides().catch(() => {})
       window.addEventListener('resize', onResize)
+      // 'webglcontextlost'/'webglcontextrestored' no están en el
+      // HTMLElementEventMap de lib.dom.d.ts (son del spec de WebGL, no de
+      // HTML): TS los acepta igual por el overload genérico de
+      // addEventListener(type: string, ...).
+      canvas.addEventListener('webglcontextlost', onContextLost, false)
+      canvas.addEventListener('webglcontextrestored', onContextRestored, false)
       onResize()
       rafId = requestAnimationFrame(frame)
     },
@@ -235,6 +290,8 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       running = false
       cancelAnimationFrame(rafId)
       window.removeEventListener('resize', onResize)
+      canvas.removeEventListener('webglcontextlost', onContextLost, false)
+      canvas.removeEventListener('webglcontextrestored', onContextRestored, false)
       input.detach()
       stats.unmount()
       tuning.unmount()
@@ -242,6 +299,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       weaponErrorBanner?.remove()
       weaponErrorBanner = null
       shownLoadError = null
+      hideContextLostOverlay()
       viewmodel.dispose()
       gfx.dispose()
     },
