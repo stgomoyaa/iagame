@@ -191,8 +191,21 @@ export function stepViewmodel(
   // orden. Dos canales independientes: el delta horizontal cabecea en roll
   // (rz) y retrasa la posición en px; el vertical cabecea en pitch (rx) y
   // retrasa py. Mismo par stiffness/damping para ambos canales.
+  //
+  // El target del resorte tiene que ser VELOCIDAD de mouse (píxeles por
+  // segundo), no delta crudo acumulado en este frame: `input.mouseDeltaX`
+  // es el recorrido de ESTE frame nada más (ver engine/input.ts), así que
+  // a más fps le toca menos píxeles por frame a la misma velocidad física
+  // de mano. Sin dividir por dt acá, el sway quedaba atado al framerate
+  // (240Hz medía exactamente la mitad de sway que 120Hz a igual velocidad
+  // física — hallazgo de QA). dt > 0 en todo frame real (el loop clampea
+  // a [0, MAX_FRAME_DT] en game.ts); el guard cubre sólo el primer frame,
+  // donde frameDt todavía no tiene una muestra previa y se clampea a 0.
+  const mouseVelX = dt > 0 ? input.mouseDeltaX / dt : 0
+  const mouseVelY = dt > 0 ? input.mouseDeltaY / dt : 0
+
   const swayTargetX = Math.min(
-    Math.max(-input.mouseDeltaX * VIEWMODEL.swayScale, -VIEWMODEL.swayMax),
+    Math.max(-mouseVelX * VIEWMODEL.swayScale, -VIEWMODEL.swayMax),
     VIEWMODEL.swayMax,
   )
   state.swayVelX = springVelocity(
@@ -206,7 +219,7 @@ export function stepViewmodel(
   state.swayX += state.swayVelX * dt
 
   const swayTargetY = Math.min(
-    Math.max(-input.mouseDeltaY * VIEWMODEL.swayScale, -VIEWMODEL.swayMax),
+    Math.max(-mouseVelY * VIEWMODEL.swayScale, -VIEWMODEL.swayMax),
     VIEWMODEL.swayMax,
   )
   state.swayVelY = springVelocity(

@@ -9,6 +9,7 @@ import {
 } from '@/game/weapons/viewmodel/rig'
 import type { VmTransform, WeaponVisual } from '@/game/weapons/viewmodel/types'
 import { TICK_DT } from '@/game/engine/constants'
+import { VIEWMODEL } from '@/game/weapons/viewmodel/tuning'
 
 function transform(px = 0, py = 0, pz = 0, rx = 0, ry = 0, rz = 0): VmTransform {
   return { px, py, pz, rx, ry, rz }
@@ -100,12 +101,15 @@ describe('determinismo de composición', () => {
     // base (ads=false, no contribution), bob (speed), sway (mouse), kick (fire),
     // reload (frac 0.16->1.28), draw (off).
     // Si se reordena cualquier capa, estos números cambiarán.
-    const expectedPx = -0.0016379290643248443
-    const expectedPy = -0.006543299012777035
+    // Recapturados tras el fix de sway (dt-normalización + swayScale
+    // reescalado, ver tuning.ts): sólo cambia la contribución del canal de
+    // sway, el orden de composición de las capas sigue siendo el mismo.
+    const expectedPx = -0.000006551716257299379
+    const expectedPy = -0.007358987686810808
     const expectedPz = 0.0029860033280968675
-    const expectedRx = 0.010047480157162421
+    const expectedRx = 0.00923179148312865
     const expectedRy = 0
-    const expectedRz = 0.0006015734317478061
+    const expectedRz = 0.0022329507798153512
 
     expect(out.px).toBe(expectedPx)
     expect(out.py).toBe(expectedPy)
@@ -298,44 +302,149 @@ describe('timing de eventos de recarga', () => {
 })
 
 describe('independencia del framerate', () => {
-  it('la misma duración total en pasos de 1/120 y de 1/240 converge al mismo estado', () => {
+  it('la misma duración total en pasos de 1/120 y de 1/240 converge al mismo estado, a velocidad física de mouse constante', () => {
+    // Hallazgo de QA (Defecto 3): la versión anterior de este test tenía
+    // `mouseDeltaX: 0.02` constante POR TICK en ambas corridas. Como la
+    // corrida a 240Hz da el doble de ticks que la de 120Hz en la misma
+    // duración, recibía el doble de recorrido FÍSICO de mouse total. El
+    // defecto de sway atado al framerate (Defecto 1: el target no se
+    // normaliza por dt) quedaba enmascarado porque el input desbalanceado
+    // compensaba en la dirección contraria.
+    //
+    // Corregido: se fija una VELOCIDAD física de mouse (píxeles/segundo, no
+    // píxeles/tick) y el delta de cada tick se deriva de esa velocidad y el
+    // dt de ESE tick (mouseDelta = velocidad * dt). Así el recorrido físico
+    // total es idéntico en ambas corridas sin importar cuántos ticks tome.
+    // Magnitud realista (cientos de px/s), no las centésimas que usaba el
+    // resto de este archivo.
     const dtA = 1 / 120
     const dtB = 1 / 240
     const duracion = 0.5
 
-    const input: ViewmodelInput = {
-      speed: 5,
-      grounded: true,
-      ads: true,
-      mouseDeltaX: 0.02,
-      mouseDeltaY: -0.015,
+    const mouseVelX = 800 // px/s: tracking típico, ver SENSITIVITY en game.ts
+    const mouseVelY = -500 // px/s
+
+    function correr(dt: number): VmTransform {
+      const state = createViewmodelState()
+      const out = transform()
+      fire(state, WEAPON)
+      const input: ViewmodelInput = {
+        speed: 5,
+        grounded: true,
+        ads: true,
+        mouseDeltaX: mouseVelX * dt,
+        mouseDeltaY: mouseVelY * dt,
+      }
+      for (let t = 0; t < duracion - 1e-9; t += dt) {
+        stepViewmodel(state, input, WEAPON, out, dt)
+      }
+      return { ...out }
     }
 
-    const stateA = createViewmodelState()
-    const outA = transform()
-    fire(stateA, WEAPON)
-    for (let t = 0; t < duracion - 1e-9; t += dtA) {
-      stepViewmodel(stateA, input, WEAPON, outA, dtA)
-    }
+    const outA = correr(dtA)
+    const outB = correr(dtB)
 
-    const stateB = createViewmodelState()
-    const outB = transform()
-    fire(stateB, WEAPON)
-    for (let t = 0; t < duracion - 1e-9; t += dtB) {
-      stepViewmodel(stateB, input, WEAPON, outB, dtB)
-    }
-
-    // Medido empíricamente: el error máximo entre 1/120 y 1/240 en este
-    // escenario (resortes de sway y kick, groundedBlend, adsT) fue de
-    // ~4.7e-5. La tolerancia queda con margen de sobra sin ser tan floja
-    // que deje pasar una regresión real a Euler por tick fijo.
-    const tolerancia = 0.001
+    // Medido empíricamente tras el fix (dt-normalización del sway target +
+    // swayScale reescalado, ver rig.ts capa 3 y tuning.ts): el error máximo
+    // entre 1/120 y 1/240 en este escenario (base+bob+sway+kick a ADS
+    // sostenido) quedó en el orden de las milésimas de metro, mismo orden
+    // que el error preexistente de kick/bob a esta escala de dt. La
+    // tolerancia queda con margen sobre lo medido.
+    const tolerancia = 0.01
     expect(Math.abs(outA.px - outB.px)).toBeLessThan(tolerancia)
     expect(Math.abs(outA.py - outB.py)).toBeLessThan(tolerancia)
     expect(Math.abs(outA.pz - outB.pz)).toBeLessThan(tolerancia)
     expect(Math.abs(outA.rx - outB.rx)).toBeLessThan(tolerancia)
     expect(Math.abs(outA.ry - outB.ry)).toBeLessThan(tolerancia)
     expect(Math.abs(outA.rz - outB.rz)).toBeLessThan(tolerancia)
+  })
+})
+
+describe('sway: velocidad de mouse, no delta acumulado por frame', () => {
+  // hip == ads (todo cero): aísla el sway del resto de las capas, mismo
+  // patrón que armaBob más abajo.
+  const armaSway: WeaponVisual = {
+    hip: transform(0, 0, 0, 0, 0, 0),
+    ads: transform(0, 0, 0, 0, 0, 0),
+    adsTime: 0.25,
+    drawTime: 0.25,
+    reloadTime: 1.0,
+    kickMagnitude: 1.0,
+  }
+
+  /** Corre a velocidad física de mouse constante y devuelve el pico de
+   *  |out.px| alcanzado. speed=0 y ads=false aíslan el sway de bob/base. */
+  function picoSwayPx(mouseVelX: number, dt: number, duracionS: number): number {
+    const state = createViewmodelState()
+    const out = transform()
+    const input: ViewmodelInput = {
+      speed: 0,
+      grounded: true,
+      ads: false,
+      mouseDeltaX: mouseVelX * dt,
+      mouseDeltaY: 0,
+    }
+    let pico = 0
+    for (let t = 0; t < duracionS - 1e-9; t += dt) {
+      stepViewmodel(state, input, armaSway, out, dt)
+      pico = Math.max(pico, Math.abs(out.px))
+    }
+    return pico
+  }
+
+  it('Defecto 1: a velocidad física de mouse constante, el sway a 120fps y a 240fps coincide', () => {
+    // Magnitud deliberadamente chica (1 y 10 px/s), replicando la medición
+    // exacta del QA. No son las "cientos de px/s" realistas a propósito:
+    // a magnitud realista, el código VIEJO satura el clamp en swayMax en
+    // ambos framerates por igual (Defecto 2), y esa saturación enmascara el
+    // Defecto 1 (el ratio da ~1 aunque el sway siga atado al framerate).
+    // Aislar el defecto de framerate requiere quedar fuera del rango donde
+    // el clamp viejo satura.
+    const duracion = 2
+
+    for (const mouseVelX of [1, 10]) {
+      const pico120 = picoSwayPx(mouseVelX, 1 / 120, duracion)
+      const pico240 = picoSwayPx(mouseVelX, 1 / 240, duracion)
+      const ratio = pico120 / pico240
+
+      // Código viejo: ratio ~1.98 (240fps da la mitad de sway que 120fps a
+      // la misma velocidad física de mouse). Framerate-independiente: ~1.
+      expect(ratio).toBeGreaterThan(0.9)
+      expect(ratio).toBeLessThan(1.1)
+    }
+  })
+
+  it('Defecto 2: a magnitudes reales de mouse (100-2000 px/s) el sway responde proporcional, no pegado al clamp', () => {
+    const duracion = 2
+    const dt = TICK_DT
+
+    const picoBajo = picoSwayPx(100, dt, duracion)
+    const picoMedio = picoSwayPx(800, dt, duracion)
+    const picoAlto = picoSwayPx(2000, dt, duracion)
+
+    // Proporcional: más velocidad de mouse, más sway. Con swayScale/swayMax
+    // viejos (0.6 / 0.05) los tres saturan al mismo valor exacto de
+    // swayMax y esta desigualdad estricta falla.
+    expect(picoBajo).toBeGreaterThan(0)
+    expect(picoBajo).toBeLessThan(picoMedio)
+    expect(picoMedio).toBeLessThan(picoAlto)
+
+    // El valor medio del rango típico no puede estar pegado al clamp: tiene
+    // que quedar en el medio de su rango operativo, no ser una señal de
+    // tres estados (+max, 0, -max). Ver derivación de swayScale en
+    // tuning.ts.
+    expect(picoMedio).toBeLessThan(VIEWMODEL.swayMax * 0.95)
+    expect(picoMedio).toBeGreaterThan(VIEWMODEL.swayMax * 0.05)
+  })
+
+  it('el clamp sigue existiendo, pero sólo para flicks genuinamente extremos por encima del rango típico', () => {
+    // El resorte es subamortiguado (persigue un target clampeado duro), así
+    // que el pico real puede pasarse un poco del clamp antes de asentarse
+    // ahí: no es un clamp de posición, es un clamp del TARGET. Se permite
+    // un margen de overshoot chico en vez de una igualdad exacta.
+    const picoFlick = picoSwayPx(6000, TICK_DT, 2)
+    expect(picoFlick).toBeGreaterThan(VIEWMODEL.swayMax * 0.95)
+    expect(picoFlick).toBeLessThan(VIEWMODEL.swayMax * 1.1)
   })
 })
 
