@@ -19,7 +19,7 @@
     },
     "rotationOffset": {
       "rx": 0,
-      "ry": 1.5707963267948966,
+      "ry": 0,
       "rz": 0
     },
     "scaleAdjust": 1,
@@ -71,7 +71,7 @@
     },
     "rotationOffset": {
       "rx": 0,
-      "ry": 1.5707963267948966,
+      "ry": 0,
       "rz": 0
     },
     "scaleAdjust": 1,
@@ -97,7 +97,7 @@
     },
     "rotationOffset": {
       "rx": 0,
-      "ry": 1.5707963267948966,
+      "ry": 0,
       "rz": 0
     },
     "scaleAdjust": 1,
@@ -123,7 +123,7 @@
     },
     "rotationOffset": {
       "rx": 0,
-      "ry": 1.5707963267948966,
+      "ry": 0,
       "rz": 0
     },
     "scaleAdjust": 1,
@@ -201,7 +201,7 @@
     },
     "rotationOffset": {
       "rx": 0,
-      "ry": 1.5707963267948966,
+      "ry": 0,
       "rz": 0
     },
     "scaleAdjust": 1,
