@@ -31,6 +31,7 @@ import {
   cellCenterZ,
   cellCol,
   cellRow,
+  buildMainComponentMask,
   nearestWalkableCellIndex,
   type NavGrid,
 } from '@/game/bots/navgrid'
@@ -114,6 +115,19 @@ export interface BotWorld {
    *  que elige un bot en Idle para cruzar el mapa. Horneada una vez por
    *  mapa, junto con el navgrid -- nunca en el camino de frame. */
   patrol: PatrolGraph
+  /**
+   * Máscara del componente conexo alcanzable del navgrid
+   * (bots/navgrid.ts buildMainComponentMask). Toda ELECCIÓN DE DESTINO la
+   * consulta, porque "caminable" y "alcanzable" no son lo mismo: el bake
+   * marca caminable el techo de cualquier muro o cobertura alta (superficie
+   * plana con espacio libre encima), y nadie puede subir ahí. Sin la
+   * máscara, nearestWalkableCellIndex devuelve alegremente esos techos como
+   * destino, A* no encuentra camino y el bot se queda plantado hasta el
+   * próximo cambio de estado. Medido jugando: 37% de las muestras de bot
+   * vivo en la arena y 52% en el búnker, casi todas en Retirarse sin camino.
+   * Horneada una vez por mapa, igual que el navgrid y la red de patrulla.
+   */
+  reachable: Uint8Array
   /** Posición de los ojos del objetivo (jugador), mundo. */
   targetEye: Vec3
   /** Reloj acumulado de simulación, segundos -- crece monótono, nunca se
@@ -135,6 +149,7 @@ export function createBotWorld(
     pathCtx: createPathfindingContext(grid),
     pathCache: createPathCache(),
     patrol: buildPatrolGraph(grid),
+    reachable: buildMainComponentMask(grid),
     targetEye: vec3(),
     simTimeS: 0,
     shots: createGunshotRegistry(),
@@ -407,7 +422,7 @@ function pickCandidateCell(
     const angle = (i / count) * Math.PI * 2 + bot.idlePhase
     const x = bot.player.position.x + Math.cos(angle) * BOTS.repositionSearchRadiusM
     const z = bot.player.position.z + Math.sin(angle) * BOTS.repositionSearchRadiusM
-    const cell = nearestWalkableCellIndex(grid, x, z)
+    const cell = nearestWalkableCellIndex(grid, x, z, 4, world.reachable)
     if (cell < 0) continue
     const cx = cellCenterX(grid, cellCol(grid, cell))
     const cz = cellCenterZ(grid, cellRow(grid, cell))
@@ -469,7 +484,7 @@ function pickIdleDestination(bot: BotState, world: BotWorld): void {
     if (heardFresh || seenFresh) {
       const useHeard = heardFresh && bot.timeSinceHeardS <= bot.timeSinceSeenS
       const src = useHeard ? bot.lastHeardPos : bot.lastKnownTargetPos
-      const goal = nearestWalkableCellIndex(world.grid, src.x, src.z)
+      const goal = nearestWalkableCellIndex(world.grid, src.x, src.z, 4, world.reachable)
       if (goal >= 0) {
         requestPathTo(bot, world, goal)
         if (bot.path.length > 0) return
@@ -505,6 +520,20 @@ function pickIdleDestination(bot: BotState, world: BotWorld): void {
  *   para buscar ángulo" degenera en salir a campo abierto y morir de pie,
  *   que se lee peor que el bot plantado que esta tarea viene a arreglar.
  */
+/**
+ * Desnivel máximo que admite un paso de strafe, metros. NO es
+ * MOVEMENT.mantleMaxHeight, aunque eso era lo que decía antes: el mantle
+ * (movement/mantle.ts) sólo procede EN EL AIRE, chocando una pared yendo
+ * hacia ella. Un bot en Enfrentar no tiene camino (Enfrentar lo limpia a
+ * propósito) y por lo tanto tampoco tiene el salto que steerAlongPath pide
+ * al subir de celda: caminando contra una caja de 1m se queda moliendo
+ * contra ella. Medido en el mapa "torre": 5.3s clavado contra una cobertura
+ * baja de 1m, en Enfrentar, empujando a 5 m/s sin avanzar. Un strafe es un
+ * paso lateral para buscar ángulo, no una escalada: se limita a lo que se
+ * sube caminando.
+ */
+const STRAFE_MAX_STEP = 0.35
+
 function canStrafeTowards(bot: BotState, world: BotWorld, dir: number): boolean {
   const s = Math.sin(bot.aimMotor.yaw)
   const c = Math.cos(bot.aimMotor.yaw)
@@ -517,8 +546,9 @@ function canStrafeTowards(bot: BotState, world: BotWorld, dir: number): boolean 
 
   const cell = nearestWalkableCellIndex(world.grid, px, pz, 0)
   if (cell < 0) return false
+  if (!world.reachable[cell]) return false
   const here = nearestWalkableCellIndex(world.grid, bot.player.position.x, bot.player.position.z, 0)
-  if (here >= 0 && Math.abs(world.grid.heights[cell] - world.grid.heights[here]) > MOVEMENT.mantleMaxHeight) {
+  if (here >= 0 && Math.abs(world.grid.heights[cell] - world.grid.heights[here]) > STRAFE_MAX_STEP) {
     return false
   }
 
@@ -675,7 +705,7 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
       break
     }
     case 'rotate': {
-      const goalCell = nearestWalkableCellIndex(world.grid, bot.lastHeardPos.x, bot.lastHeardPos.z)
+      const goalCell = nearestWalkableCellIndex(world.grid, bot.lastHeardPos.x, bot.lastHeardPos.z, 4, world.reachable)
       requestPathTo(bot, world, goalCell)
       break
     }

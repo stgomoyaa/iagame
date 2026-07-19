@@ -1,6 +1,7 @@
 import { Mesh, MeshBasicMaterial, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three'
 import { ARENA } from '@/game/map/arena'
 import { buildArenaGeometry } from '@/game/map/mesh'
+import type { MapDef } from '@/game/map/types'
 import type { Vec3 } from '@/game/math/vec3'
 
 /** FOV de la cámara del mundo en reposo (hip). combat/ads.ts interpola
@@ -69,7 +70,13 @@ export interface GameRenderer {
   dispose(): void
 }
 
-export function createRenderer(canvas: HTMLCanvasElement): GameRenderer {
+/**
+ * `map` es un parámetro y no la arena fija de antes: con tres mapas
+ * jugables (map/registry.ts) el renderer no puede tener uno cableado. Sigue
+ * fusionando el mapa entero en UNA geometría -- un draw call por mapa,
+ * cualquiera sea.
+ */
+export function createRenderer(canvas: HTMLCanvasElement, map: MapDef = ARENA): GameRenderer {
   const renderer = new WebGLRenderer({
     canvas,
     antialias: true,
@@ -89,7 +96,7 @@ export function createRenderer(canvas: HTMLCanvasElement): GameRenderer {
   const scene = new Scene()
   const camera = new PerspectiveCamera(WORLD_FOV, 1, 0.1, 200)
 
-  const geometry = buildArenaGeometry(ARENA)
+  const geometry = buildArenaGeometry(map)
   const material = new MeshBasicMaterial({ vertexColors: true })
   const arena = new Mesh(geometry, material)
   // La arena nunca se mueve: saltear el recálculo de matrices por frame.

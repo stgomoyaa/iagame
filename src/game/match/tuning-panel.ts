@@ -16,6 +16,7 @@
  */
 
 import { MATCH, type MatchTuning } from '@/game/match/tuning'
+import { MAP_STORAGE_KEY } from '@/game/map/registry'
 
 interface NumericField {
   key: keyof MatchTuning
@@ -44,7 +45,18 @@ export interface MatchTuningPanel {
   unmount(): void
 }
 
-export function createMatchTuningPanel(): MatchTuningPanel {
+/**
+ * `mapNames`/`currentMapName` entran por parámetro y no se leen de
+ * map/registry.ts acá adentro para que el panel siga siendo tonto: no
+ * decide qué mapas hay ni cuál está activo, sólo muestra lo que game.ts ya
+ * resolvió. Elegir uno guarda el nombre en localStorage y recarga: el mapa
+ * alimenta el navgrid, el BVH y la malla, todos horneados una sola vez al
+ * arrancar -- cambiarlo en caliente sería reconstruir la partida entera.
+ */
+export function createMatchTuningPanel(
+  mapNames: string[] = [],
+  currentMapName: string = '',
+): MatchTuningPanel {
   let root: HTMLDivElement | null = null
   let visible = false
 
@@ -68,6 +80,39 @@ export function createMatchTuningPanel(): MatchTuningPanel {
       titulo.textContent = 'tuning de partida  (tecla M para cerrar)'
       titulo.style.cssText = 'margin-bottom:8px;opacity:.6'
       root.appendChild(titulo)
+
+      if (mapNames.length > 0) {
+        const mapa = document.createElement('div')
+        mapa.style.cssText = 'margin-bottom:8px'
+        const mapaLabel = document.createElement('div')
+        mapaLabel.textContent = `mapa: ${currentMapName}`
+        mapa.appendChild(mapaLabel)
+        const mapaSelect = document.createElement('select')
+        mapaSelect.style.cssText = 'width:100%'
+        for (const nombre of mapNames) {
+          const option = document.createElement('option')
+          option.value = nombre
+          option.textContent = nombre
+          if (nombre === currentMapName) option.selected = true
+          mapaSelect.appendChild(option)
+        }
+        mapaSelect.addEventListener('change', () => {
+          try {
+            window.localStorage.setItem(MAP_STORAGE_KEY, mapaSelect.value)
+          } catch {
+            // Sin localStorage el cambio no sobrevive la recarga; el
+            // parámetro ?map= sigue siendo el camino que siempre funciona.
+          }
+          mapaLabel.textContent = `mapa: ${mapaSelect.value} (recargando)`
+          // La URL puede traer un ?map= viejo que ganaría sobre lo recién
+          // guardado: se limpia antes de recargar.
+          const url = new URL(window.location.href)
+          url.searchParams.delete('map')
+          window.location.replace(url.toString())
+        })
+        mapa.appendChild(mapaSelect)
+        root.appendChild(mapa)
+      }
 
       const modo = document.createElement('div')
       modo.style.cssText = 'margin-bottom:8px'
