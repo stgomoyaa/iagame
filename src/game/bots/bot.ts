@@ -42,6 +42,8 @@ import {
   type PathfindingContext,
 } from '@/game/bots/pathfinding'
 import { canHear, canSee, type RaycastMapFn } from '@/game/bots/perception'
+import { buildPatrolGraph, nearestPatrolNode, pickPatrolNode, type PatrolGraph } from '@/game/bots/patrol'
+import { nearestCoverDistanceXZ } from '@/game/bots/cover'
 import {
   createAimBrainState,
   createAimMotorState,
@@ -108,6 +110,10 @@ export interface BotWorld {
   grid: NavGrid
   pathCtx: PathfindingContext
   pathCache: PathCache
+  /** Red de patrulla horneada del navgrid (bots/patrol.ts): los destinos
+   *  que elige un bot en Idle para cruzar el mapa. Horneada una vez por
+   *  mapa, junto con el navgrid -- nunca en el camino de frame. */
+  patrol: PatrolGraph
   /** Posición de los ojos del objetivo (jugador), mundo. */
   targetEye: Vec3
   /** Reloj acumulado de simulación, segundos -- crece monótono, nunca se
@@ -128,6 +134,7 @@ export function createBotWorld(
     grid,
     pathCtx: createPathfindingContext(grid),
     pathCache: createPathCache(),
+    patrol: buildPatrolGraph(grid),
     targetEye: vec3(),
     simTimeS: 0,
     shots: createGunshotRegistry(),
@@ -192,6 +199,32 @@ export interface BotState {
 
   idleBaseYaw: number
   idlePhase: number
+
+  /** Semilla del desempate de patrulla (bots/patrol.ts). Es el `seed` con el
+   *  que se creó el bot, NO su `id`: el id sale de un contador global de
+   *  módulo, así que dos bots "equivalentes" creados en momentos distintos
+   *  del proceso patrullarían distinto. Con la semilla explícita, el
+   *  escuadrón número N de una partida se comporta igual que el número 1. */
+  patrolSeed: number
+  /** Nodo de patrulla (índice dentro de BotWorld.patrol) al que se dirige
+   *  este bot, -1 si todavía no eligió ninguno. Ver stepBotThink caso
+   *  'idle': queda excluido de la próxima elección para que la patrulla
+   *  avance en vez de rebotar entre dos puntos. */
+  patrolNode: number
+  /** true si el bot ya fue a mirar la última actividad conocida (enemigo
+   *  visto u oído) desde que entró en Idle. Sin esta marca volvería a pedir
+   *  el mismo destino cada think mientras la memoria siga fresca, y nunca
+   *  pasaría a patrullar de verdad. */
+  investigatedLastActivity: boolean
+
+  /** Sentido del strafe de Enfrentar: -1 izquierda, +1 derecha, 0 quieto
+   *  (sin terreno lateral válido). Ver stepBotThink caso 'engage'. */
+  strafeDir: number
+  /** Segundos sosteniendo el sentido actual de strafe. */
+  strafeHoldS: number
+  /** Punto donde el bot entró en Enfrentar: el strafe no se aleja más de
+   *  BOTS.engageStrafeRadiusM de acá. */
+  strafeAnchor: Vec3
 
   /** Segundos moviéndose por debajo de BOTS.stuckSpeedThreshold pese a tener
    *  intención de avanzar. Dispara el salto de emergencia -- ver stepBotMotor. */
@@ -270,6 +303,14 @@ export function createBotState(
 
     idleBaseYaw: 0,
     idlePhase: idlePhaseSample.yaw,
+
+    patrolSeed: seed,
+    patrolNode: -1,
+    investigatedLastActivity: false,
+
+    strafeDir: 0,
+    strafeHoldS: 0,
+    strafeAnchor: vec3(spawn.x, spawn.y, spawn.z),
 
     stuckTimeS: 0,
     // Escalonado inicial: se completa cuando se llama createBotSquad (más
@@ -395,6 +436,138 @@ function distanceXZ(ax: number, az: number, bx: number, bz: number): number {
   return Math.hypot(ax - bx, az - bz)
 }
 
+/**
+ * Elige a dónde va un bot que está en Idle y ya llegó (o nunca tuvo) su
+ * destino anterior. Este es el arreglo central de esta tarea: antes, Idle no
+ * pedía ningún camino y el bot se quedaba clavado donde perdió el contacto,
+ * girando la mira en el lugar hasta que alguien se le cruzara. Medido
+ * jugando: una partida TDM de 6 minutos con 7 de 8 bots congelados en Idle
+ * en simultáneo y un solo kill en toda la partida.
+ *
+ * Dos escalones, en este orden:
+ *
+ * 1. **Ir a mirar la última actividad conocida** (una vez por entrada a
+ *    Idle): el último lugar donde vio un enemigo o donde oyó un disparo, si
+ *    la memoria es más fresca que BOTS.huntMemoryS. Es exactamente lo que
+ *    hace un jugador que perdió a alguien de vista -- y usa sólo lo que el
+ *    bot ya sabía: NO se consulta ninguna posición viva de enemigos acá
+ *    (eso sería hacer trampa; ver bots/perception.ts para lo que un bot
+ *    tiene derecho a saber).
+ * 2. **Patrullar** (bots/patrol.ts): un nodo lejano y sesgado al centro del
+ *    mapa. El "por qué esta heurística y no un rumbo al azar" está
+ *    documentado en ese archivo.
+ *
+ * Si A* no encuentra camino al nodo elegido, el nodo queda igual como
+ * `patrolNode` y por lo tanto excluido del próximo intento: el bot elige
+ * otro en el think siguiente en vez de atascarse pidiendo lo imposible.
+ */
+function pickIdleDestination(bot: BotState, world: BotWorld): void {
+  if (!bot.investigatedLastActivity) {
+    bot.investigatedLastActivity = true
+    const heardFresh = bot.timeSinceHeardS <= BOTS.huntMemoryS
+    const seenFresh = bot.timeSinceSeenS <= BOTS.huntMemoryS
+    if (heardFresh || seenFresh) {
+      const useHeard = heardFresh && bot.timeSinceHeardS <= bot.timeSinceSeenS
+      const src = useHeard ? bot.lastHeardPos : bot.lastKnownTargetPos
+      const goal = nearestWalkableCellIndex(world.grid, src.x, src.z)
+      if (goal >= 0) {
+        requestPathTo(bot, world, goal)
+        if (bot.path.length > 0) return
+      }
+    }
+  }
+
+  const node = pickPatrolNode(
+    world.patrol,
+    bot.player.position.x,
+    bot.player.position.z,
+    bot.patrolNode,
+    bot.patrolSeed,
+  )
+  if (node < 0) return
+  bot.patrolNode = node
+  requestPathTo(bot, world, world.patrol.cell[node])
+}
+
+/**
+ * ¿Puede el bot dar un paso lateral de BOTS.engageStrafeProbeM hacia `dir`
+ * (-1 izquierda, +1 derecha, en ejes locales de su apuntado)? Tres
+ * condiciones, todas sobre información de mapa:
+ *
+ * - No alejarse más de BOTS.engageStrafeRadiusM del punto donde entró en
+ *   Enfrentar: buscar ángulo es bailar alrededor de una posición, no
+ *   emigrar.
+ * - La celda de destino tiene que ser caminable de verdad (radio 0 en
+ *   nearestWalkableCellIndex: sin el rescate en espiral, que acá mentiría) y
+ *   estar a un desnivel que stepPlayer pueda subir solo.
+ * - No quedar más lejos de la cobertura que ahora (bots/cover.ts, con
+ *   BOTS.engageStrafeCoverSlackM de holgura). Sin esta condición, "moverse
+ *   para buscar ángulo" degenera en salir a campo abierto y morir de pie,
+ *   que se lee peor que el bot plantado que esta tarea viene a arreglar.
+ */
+function canStrafeTowards(bot: BotState, world: BotWorld, dir: number): boolean {
+  const s = Math.sin(bot.aimMotor.yaw)
+  const c = Math.cos(bot.aimMotor.yaw)
+  // Dirección de mundo del eje "derecha" local -- inversa de
+  // worldToLocalAxes (que es su propia inversa, ver su comentario).
+  const px = bot.player.position.x + c * dir * BOTS.engageStrafeProbeM
+  const pz = bot.player.position.z - s * dir * BOTS.engageStrafeProbeM
+
+  if (distanceXZ(px, pz, bot.strafeAnchor.x, bot.strafeAnchor.z) > BOTS.engageStrafeRadiusM) return false
+
+  const cell = nearestWalkableCellIndex(world.grid, px, pz, 0)
+  if (cell < 0) return false
+  const here = nearestWalkableCellIndex(world.grid, bot.player.position.x, bot.player.position.z, 0)
+  if (here >= 0 && Math.abs(world.grid.heights[cell] - world.grid.heights[here]) > MOVEMENT.mantleMaxHeight) {
+    return false
+  }
+
+  const coverHere = nearestCoverDistanceXZ(
+    world.boxes,
+    bot.player.position.x,
+    bot.player.position.z,
+    BOTS.coverMinHeightM,
+  )
+  const coverThere = nearestCoverDistanceXZ(world.boxes, px, pz, BOTS.coverMinHeightM)
+  return coverThere <= coverHere + BOTS.engageStrafeCoverSlackM
+}
+
+/**
+ * Mantiene el sentido del strafe de Enfrentar. Reportado por dos revisiones
+ * distintas como lo más robótico del juego: en un duelo sostenido el bot se
+ * planta y dispara, cosa que ningún jugador hace. Acá se decide el sentido
+ * (el movimiento en sí lo aplica stepBotMotor, por el MISMO stepPlayer que
+ * usa el jugador -- un bot no puede strafear más rápido que un humano).
+ *
+ * Invierte el sentido cuando el actual deja de ser válido (pared, desnivel,
+ * o saldría de la cobertura) o cuando ya lo sostuvo BOTS.engageStrafeHoldS.
+ * El sostén mínimo importa: sin él, un bot pegado a una esquina invierte
+ * cada tick de IA y vibra, que se lee peor que quedarse quieto. Si ningún
+ * lado sirve, el sentido queda en 0 y el bot dispara plantado -- estar
+ * arrinconado contra cobertura es una razón legítima para no moverse.
+ */
+function updateEngageStrafe(bot: BotState, world: BotWorld, dt: number): void {
+  bot.strafeHoldS += dt
+
+  if (bot.strafeDir !== 0 && canStrafeTowards(bot, world, bot.strafeDir)) {
+    if (bot.strafeHoldS < BOTS.engageStrafeHoldS) return
+    bot.strafeHoldS = 0
+    if (canStrafeTowards(bot, world, -bot.strafeDir)) bot.strafeDir = -bot.strafeDir
+    return
+  }
+
+  bot.strafeHoldS = 0
+  // Arranque y rebote: se prueba primero el sentido contrario al actual (o
+  // el que dicta la fase del bot si venía en 0, para que dos bots que
+  // entran en Enfrentar juntos no bailen espejados).
+  const first = bot.strafeDir !== 0 ? -bot.strafeDir : bot.idlePhase >= 0 ? 1 : -1
+  if (canStrafeTowards(bot, world, first)) {
+    bot.strafeDir = first
+    return
+  }
+  bot.strafeDir = canStrafeTowards(bot, world, -first) ? -first : 0
+}
+
 // ---------------------------------------------------------------------------
 // Think: percepción + FSM + objetivos de apuntado/navegación. 15Hz por bot.
 // ---------------------------------------------------------------------------
@@ -493,7 +666,12 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
       if (justEntered) {
         clearPath(bot)
         bot.idleBaseYaw = bot.aimMotor.yaw
+        bot.investigatedLastActivity = false
+        // El nodo bajo los pies cuenta como recién visitado: el primer
+        // destino de patrulla nunca es el pedazo de suelo que ya pisa.
+        bot.patrolNode = nearestPatrolNode(world.patrol, bot.player.position.x, bot.player.position.z)
       }
+      if (hasArrivedAtGoal(bot)) pickIdleDestination(bot, world)
       break
     }
     case 'rotate': {
@@ -503,6 +681,14 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
     }
     case 'engage': {
       clearPath(bot)
+      if (justEntered) {
+        bot.strafeAnchor.x = bot.player.position.x
+        bot.strafeAnchor.y = bot.player.position.y
+        bot.strafeAnchor.z = bot.player.position.z
+        bot.strafeHoldS = BOTS.engageStrafeHoldS
+        bot.strafeDir = 0
+      }
+      updateEngageStrafe(bot, world, dt)
       break
     }
     case 'reposition': {
@@ -698,6 +884,13 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
       bot.wasVisible = false
       bot.timeSinceSeenS = Infinity
       bot.timeSinceHeardS = Infinity
+      // Reaparece en el spawn: la patrulla vieja (elegida desde donde murió)
+      // ya no tiene sentido, y no hay actividad conocida que investigar
+      // todavía -- las dos memorias acaban de quedar en Infinity.
+      bot.patrolNode = -1
+      bot.investigatedLastActivity = false
+      bot.strafeDir = 0
+      bot.strafeHoldS = 0
     }
     bot.input.forward = 0
     bot.input.right = 0
@@ -713,11 +906,6 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
     return
   }
 
-  if (bot.fsm.current === 'idle') {
-    bot.aimTargetYaw = bot.idleBaseYaw + Math.sin(world.simTimeS * 0.5 + bot.idlePhase) * degToRad(40)
-    bot.aimTargetPitch = 0
-  }
-
   // steerAlongPath() se calcula ANTES de mover el apuntado: Retirarse mira
   // hacia donde corre (huir mirando para atrás sería absurdo), y el
   // objetivo de apuntado de Retirarse no lo fija stepBotThink (ver el
@@ -726,6 +914,18 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
   const steer = steerAlongPath(bot, world)
   if (bot.fsm.current === 'retreat' && steer.moving) {
     bot.aimTargetYaw = steer.desiredYaw
+    bot.aimTargetPitch = 0
+  }
+
+  // Idle: barrido lento AL REDEDOR DEL RUMBO DE PATRULLA cuando se está
+  // moviendo (mirar hacia donde uno camina, barriendo a los costados en
+  // busca de contacto), o alrededor del último rumbo cuando no hay camino.
+  // El barrido sigue existiendo -- lo que cambió es que ya no es lo ÚNICO
+  // que hace Idle. Un bot que patrulla mirando fijo al frente tiene un cono
+  // de 110° y se pierde todo lo que pasa a los lados del pasillo.
+  if (bot.fsm.current === 'idle') {
+    if (steer.moving) bot.idleBaseYaw = steer.desiredYaw
+    bot.aimTargetYaw = bot.idleBaseYaw + Math.sin(world.simTimeS * 0.5 + bot.idlePhase) * degToRad(40)
     bot.aimTargetPitch = 0
   }
 
@@ -744,10 +944,16 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
     ? worldToLocalAxes(steer.worldX, steer.worldZ, bot.aimMotor.yaw)
     : { forward: 0, right: 0 }
 
-  bot.input.forward = axes.forward
-  bot.input.right = axes.right
+  const strafing = bot.fsm.current === 'engage' && bot.strafeDir !== 0
+  // Enfrentar no sigue ningún camino (clearPath en stepBotThink): su
+  // movimiento es puro lateral en ejes LOCALES, o sea exactamente las teclas
+  // A/D del jugador con la mira puesta en el objetivo. Mismo stepPlayer,
+  // misma velocidad de caminata, sin sprint -- un bot no se desliza más
+  // rápido que un humano.
+  bot.input.forward = strafing ? 0 : axes.forward
+  bot.input.right = strafing ? bot.strafeDir : axes.right
   bot.input.yaw = bot.aimMotor.yaw
-  bot.input.sprint = steer.moving
+  bot.input.sprint = steer.moving && !strafing
   bot.input.crouch = false
 
   const horizontalSpeed = Math.hypot(bot.player.velocity.x, bot.player.velocity.z)
