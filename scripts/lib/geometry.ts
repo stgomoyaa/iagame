@@ -89,16 +89,69 @@ export function boundsOf(positions: Float32Array): { min: number[]; max: number[
 }
 
 /**
+ * Cantidad de rebanadas en que se corta el arma a lo largo del eje del cañón
+ * para medir su perfil de grosor. Doce alcanza para separar cañón de culata
+ * incluso en una pistola de 22 cm (rebanadas de ~18 mm) y es lo bastante
+ * grueso como para que ninguna quede vacía por falta de vértices en un
+ * modelo low-poly.
+ */
+const MUZZLE_PROFILE_SLICES = 12
+
+/**
+ * Mediana de una lista no vacía de números. La mediana -y no el promedio- es
+ * lo que hace robusta la medición de grosor: un arma tiene una o dos
+ * rebanadas gordas (el cajón de mecanismos, la mira telescópica) que
+ * arrastran cualquier promedio, mientras que lo que distingue al lado del
+ * cañón es que la MAYORÍA de sus rebanadas son finas.
+ */
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+}
+
+/**
  * Determina el eje del cañón y hacia qué lado apunta la boca.
  *
  * El eje es la dimensión mayor de la caja envolvente: un arma es larga en la
- * dirección del cañón. Para el sentido, se parte el arma por la mitad de ese
- * eje y se compara el grosor promedio de cada mitad. La mitad del cañón es
- * notoriamente más delgada que la de la culata y el cargador, así que la boca
- * apunta hacia la mitad más delgada.
+ * dirección del cañón. Para el sentido vale la regla física obvia -la boca
+ * está en el extremo más delgado, porque del lado opuesto viven culata,
+ * empuñadura y cargador- pero lo que decide el resultado no es la regla sino
+ * cómo se mide "más delgada". Acá se mide así:
  *
- * La confianza es la diferencia relativa de grosor. Un arma casi simétrica da
- * confianza baja y hay que revisarla a mano.
+ *   1. Se corta el arma en rebanadas perpendiculares al eje del cañón.
+ *   2. De cada rebanada se toma su sección transversal LOCAL: la mayor de
+ *      las dos extensiones perpendiculares dentro de esa rebanada.
+ *   3. Se compara la MEDIANA de las rebanadas de cada mitad. La boca apunta
+ *      hacia la mitad de mediana menor.
+ *
+ * Los tres puntos son deliberados, porque la versión anterior medía el
+ * grosor como el promedio, por vértice, de la distancia de cada vértice al
+ * EJE CENTRAL de la caja envolvente, y eso se equivocaba en la mayoría de un
+ * pack CC0 real (33 de 40 armas quedaban al revés) por dos razones
+ * independientes:
+ *
+ *   - Distancia al eje central no es grosor. La empuñadura y el cargador
+ *     cuelgan hacia abajo, así que el centro de la caja envolvente queda por
+ *     DEBAJO de la línea del cañón. Medido desde ahí, el cañón -fino pero
+ *     lejos del centro- puntúa alto, y el cajón de mecanismos -gordo pero
+ *     montado justo sobre ese centro- puntúa bajo. La medición terminaba
+ *     diciendo que el cañón era la parte gruesa. Medir la extensión dentro
+ *     de la rebanada elimina el problema: no hay un centro global del que
+ *     depender.
+ *   - Promediar por vértice mide densidad de malla, no geometría. Miras,
+ *     guardamontes y empuñaduras concentran muchos vértices en poco volumen
+ *     y dominaban el promedio. Una rebanada pesa lo mismo que cualquier otra
+ *     tenga 8 vértices o 400.
+ *
+ * Se usa la MAYOR de las dos extensiones y no el área ni la diagonal porque
+ * distingue mejor un cañón de una culata: el cañón es fino en las dos
+ * direcciones, mientras que la culata es angosta pero alta, y esa altura es
+ * justamente la señal.
+ *
+ * La confianza es la diferencia relativa entre ambas medianas. Un arma casi
+ * simétrica sobre su eje -un subfusil con culata plegable, tan fina como su
+ * cañón- da confianza baja y hay que revisarla a mano.
  */
 export function detectMuzzle(positions: Float32Array): {
   axis: 0 | 1 | 2
@@ -112,37 +165,51 @@ export function detectMuzzle(positions: Float32Array): {
   if (size[1] > size[axis]) axis = 1
   if (size[2] > size[axis]) axis = 2
 
-  const mid = (min[axis] + max[axis]) / 2
   const perp = [0, 1, 2].filter((a) => a !== axis)
+  const span = size[axis]
 
-  let lowSum = 0
-  let lowCount = 0
-  let highSum = 0
-  let highCount = 0
+  // Extensión perpendicular por rebanada, acumulada como min/max local.
+  const sliceMin = Array.from({ length: MUZZLE_PROFILE_SLICES }, () => [Infinity, Infinity])
+  const sliceMax = Array.from({ length: MUZZLE_PROFILE_SLICES }, () => [-Infinity, -Infinity])
 
   for (let i = 0; i < positions.length; i += 3) {
-    const centerA = (min[perp[0]] + max[perp[0]]) / 2
-    const centerB = (min[perp[1]] + max[perp[1]]) / 2
-    const da = positions[i + perp[0]] - centerA
-    const db = positions[i + perp[1]] - centerB
-    const radius = Math.hypot(da, db)
+    const t = span > 0 ? (positions[i + axis] - min[axis]) / span : 0
+    let slice = Math.floor(t * MUZZLE_PROFILE_SLICES)
+    if (slice >= MUZZLE_PROFILE_SLICES) slice = MUZZLE_PROFILE_SLICES - 1
+    if (slice < 0) slice = 0
 
-    if (positions[i + axis] < mid) {
-      lowSum += radius
-      lowCount++
-    } else {
-      highSum += radius
-      highCount++
+    for (let k = 0; k < 2; k++) {
+      const v = positions[i + perp[k]]
+      if (v < sliceMin[slice][k]) sliceMin[slice][k] = v
+      if (v > sliceMax[slice][k]) sliceMax[slice][k] = v
     }
   }
 
-  const lowAvg = lowCount > 0 ? lowSum / lowCount : 0
-  const highAvg = highCount > 0 ? highSum / highCount : 0
-  const denom = Math.max(lowAvg, highAvg)
-  const confidence = denom > 0 ? Math.abs(lowAvg - highAvg) / denom : 0
+  const low: number[] = []
+  const high: number[] = []
+  const half = MUZZLE_PROFILE_SLICES / 2
+
+  for (let s = 0; s < MUZZLE_PROFILE_SLICES; s++) {
+    // Una rebanada sin vértices no aporta: no es "delgada", es un hueco del
+    // modelo, y contarla como cero inclinaría la mediana de esa mitad.
+    if (sliceMin[s][0] === Infinity) continue
+    const thickness = Math.max(sliceMax[s][0] - sliceMin[s][0], sliceMax[s][1] - sliceMin[s][1])
+    if (s < half) low.push(thickness)
+    else high.push(thickness)
+  }
+
+  // Sin vértices de un lado no hay comparación posible: se devuelve una
+  // orientación cualquiera con confianza nula, que es exactamente lo que
+  // `needsManualReview` está para atrapar.
+  if (low.length === 0 || high.length === 0) return { axis, sign: -1, confidence: 0 }
+
+  const lowThickness = median(low)
+  const highThickness = median(high)
+  const denom = Math.max(lowThickness, highThickness)
+  const confidence = denom > 0 ? Math.abs(lowThickness - highThickness) / denom : 0
 
   // La boca apunta hacia la mitad más delgada.
-  const sign: 1 | -1 = highAvg < lowAvg ? 1 : -1
+  const sign: 1 | -1 = highThickness < lowThickness ? 1 : -1
   return { axis, sign, confidence }
 }
 

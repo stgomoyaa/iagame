@@ -110,6 +110,92 @@ function makeGunCloud(axis: 0 | 1 | 2, muzzleSign: 1 | -1): Float32Array {
   return flattenPoints(points)
 }
 
+/**
+ * Nube con la silueta de un arma real vista de perfil, construida para
+ * reproducir el caso en que medir el grosor como distancia promedio al eje
+ * central de la caja envolvente da vuelta la respuesta:
+ *
+ *   - El cañón es un tubo fino que vive ENTERO por encima del centro
+ *     vertical del arma, así que todos sus vértices están lejos de ese
+ *     centro y ninguno cerca.
+ *   - La mitad de la culata (cajón, empuñadura, cargador) es mucho más
+ *     gruesa, pero se reparte de arriba abajo cruzando el centro, así que
+ *     acumula un montón de vértices CERCA de él.
+ *
+ * Promediando distancia al centro, la mitad gruesa puntúa más bajo que el
+ * tubo fino y la boca sale al revés. Medir la extensión dentro de cada
+ * rebanada no se deja engañar: las rebanadas del cañón siguen siendo las
+ * finas.
+ *
+ * El eje perpendicular `barrelAxis + 1` (módulo 3) hace de "arriba".
+ */
+function makeGunCloudWithGrip(barrelAxis: 0 | 1 | 2, muzzleSign: 1 | -1): Float32Array {
+  const upAxis = ((barrelAxis + 1) % 3) as 0 | 1 | 2
+  const sideAxis = ((barrelAxis + 2) % 3) as 0 | 1 | 2
+
+  const points: Vec3[] = []
+  const push = (axisVal: number, up: number, side: number): void => {
+    const p: Vec3 = [0, 0, 0]
+    p[barrelAxis] = axisVal * muzzleSign
+    p[upAxis] = up
+    p[sideAxis] = side
+    points.push(p)
+  }
+
+  // Cañón: tubo fino, montado alto, del lado de la boca.
+  for (let i = 0; i <= 8; i++) {
+    const axisVal = 0.2 + (0.8 * i) / 8
+    for (const up of [0.15, 0.21]) for (const side of [-0.03, 0.03]) push(axisVal, up, side)
+  }
+
+  // Cajón, empuñadura y culata: bloque alto del lado opuesto, con vértices
+  // repartidos en toda su altura (no sólo en los bordes), como los tiene
+  // un modelo real con guardamonte, cargador y cantonera.
+  for (let i = 0; i <= 10; i++) {
+    const axisVal = -1 + (1.1 * i) / 10
+    for (let j = 0; j <= 6; j++) {
+      const up = -0.4 + (0.7 * j) / 6
+      for (const side of [-0.05, 0.05]) push(axisVal, up, side)
+    }
+  }
+
+  return flattenPoints(points)
+}
+
+/**
+ * Arma fina en los dos extremos: cañón adelante, culata plegable de varilla
+ * atrás, con el volumen concentrado al medio. Geométricamente ambigua a
+ * propósito.
+ */
+function makeSymmetricThinEndsCloud(barrelAxis: 0 | 1 | 2): Float32Array {
+  const perp = ([0, 1, 2] as const).filter((a) => a !== barrelAxis)
+  const points: Vec3[] = []
+  const push = (axisVal: number, a: number, b: number): void => {
+    const p: Vec3 = [0, 0, 0]
+    p[barrelAxis] = axisVal
+    p[perp[0]] = a
+    p[perp[1]] = b
+    points.push(p)
+  }
+
+  for (let i = 0; i <= 24; i++) {
+    const axisVal = -1 + (2 * i) / 24
+    // Sólo las dos rebanadas centrales son gruesas; el resto es delgado por
+    // igual a ambos lados.
+    const r = Math.abs(axisVal) < 0.12 ? 0.25 : 0.03
+    for (const [a, b] of [
+      [r, 0],
+      [-r, 0],
+      [0, r],
+      [0, -r],
+    ] as Array<[number, number]>) {
+      push(axisVal, a, b)
+    }
+  }
+
+  return flattenPoints(points)
+}
+
 /** Cubo simétrico: mismo grosor en ambas mitades, sin extremo delgado. */
 function makeSymmetricBoxCloud(): Float32Array {
   const points: Vec3[] = []
@@ -263,6 +349,30 @@ describe('detectMuzzle', () => {
     const cloud = makeSymmetricBoxCloud()
     const { confidence } = detectMuzzle(cloud)
     expect(confidence).toBeLessThan(0.05)
+  })
+
+  it('acierta aunque la empuñadura baje el centro de la caja por debajo del cañón', () => {
+    // La regresión que motivó reescribir la medición: con la empuñadura
+    // colgando, el centro de la caja envolvente queda por debajo de la línea
+    // del cañón, así que medir el grosor como distancia al eje central
+    // premia al cañón (fino pero lejos del centro) y castiga al cajón de
+    // mecanismos (grueso pero montado sobre ese centro). Resultado: la boca
+    // se detectaba al revés en la mayoría de un pack CC0 real.
+    for (const muzzleSign of [1, -1] as const) {
+      const cloud = makeGunCloudWithGrip(2, muzzleSign)
+      const { axis, sign } = detectMuzzle(cloud)
+      expect(axis).toBe(2)
+      expect(sign).toBe(muzzleSign)
+    }
+  })
+
+  it('la confianza baja cuando ambos extremos son igual de delgados', () => {
+    // Un subfusil con culata plegable: cañón fino adelante, varilla fina
+    // atrás. Es el caso que la heurística no puede resolver sola, y lo
+    // honesto es reportarlo con confianza baja para que lo atrape la
+    // revisión manual, no fingir certeza.
+    const { confidence } = detectMuzzle(makeSymmetricThinEndsCloud(2))
+    expect(confidence).toBeLessThan(0.15)
   })
 })
 

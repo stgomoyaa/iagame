@@ -15,9 +15,9 @@
         0.42500001192092896
       ]
     },
-    "muzzleConfidence": 0.118,
+    "muzzleConfidence": 0.576,
     "upAxisConfidence": 0.844,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "assaultrifle-2",
@@ -35,7 +35,7 @@
         0.42500001192092896
       ]
     },
-    "muzzleConfidence": 0.472,
+    "muzzleConfidence": 0.248,
     "upAxisConfidence": 0.878,
     "needsManualReview": false
   },
@@ -55,7 +55,7 @@
         0.42500001192092896
       ]
     },
-    "muzzleConfidence": 0.492,
+    "muzzleConfidence": 0.597,
     "upAxisConfidence": 0.878,
     "needsManualReview": false
   },
@@ -75,7 +75,7 @@
         0.42500001192092896
       ]
     },
-    "muzzleConfidence": 0.36,
+    "muzzleConfidence": 0.368,
     "upAxisConfidence": 0.878,
     "needsManualReview": false
   },
@@ -95,7 +95,7 @@
         0.42500001192092896
       ]
     },
-    "muzzleConfidence": 0.472,
+    "muzzleConfidence": 0.248,
     "upAxisConfidence": 0.878,
     "needsManualReview": false
   },
@@ -115,7 +115,7 @@
         0.42500001192092896
       ]
     },
-    "muzzleConfidence": 0.251,
+    "muzzleConfidence": 0.615,
     "upAxisConfidence": 0.807,
     "needsManualReview": false
   },
@@ -135,7 +135,7 @@
         0.42500001192092896
       ]
     },
-    "muzzleConfidence": 0.202,
+    "muzzleConfidence": 0.664,
     "upAxisConfidence": 0.85,
     "needsManualReview": false
   },
@@ -155,9 +155,9 @@
         0.42500001192092896
       ]
     },
-    "muzzleConfidence": 0.019,
+    "muzzleConfidence": 0.793,
     "upAxisConfidence": 0.762,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "assaultrifle2-4",
@@ -175,7 +175,7 @@
         0.42500001192092896
       ]
     },
-    "muzzleConfidence": 0.287,
+    "muzzleConfidence": 0.329,
     "upAxisConfidence": 0.843,
     "needsManualReview": false
   },
@@ -195,9 +195,9 @@
         0.32499998807907104
       ]
     },
-    "muzzleConfidence": 0.2,
+    "muzzleConfidence": 0.032,
     "upAxisConfidence": 0.799,
-    "needsManualReview": false
+    "needsManualReview": true
   },
   {
     "slug": "bullpup-2",
@@ -215,7 +215,7 @@
         0.32499998807907104
       ]
     },
-    "muzzleConfidence": 0.164,
+    "muzzleConfidence": 0.273,
     "upAxisConfidence": 0.796,
     "needsManualReview": false
   },
@@ -235,7 +235,7 @@
         0.32499998807907104
       ]
     },
-    "muzzleConfidence": 0.316,
+    "muzzleConfidence": 0.676,
     "upAxisConfidence": 0.806,
     "needsManualReview": false
   },
@@ -255,9 +255,9 @@
         0.10999999940395355
       ]
     },
-    "muzzleConfidence": 0.075,
+    "muzzleConfidence": 0.724,
     "upAxisConfidence": 0.722,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "pistol-2",
@@ -275,9 +275,9 @@
         0.10999999940395355
       ]
     },
-    "muzzleConfidence": 0.092,
+    "muzzleConfidence": 0.724,
     "upAxisConfidence": 0.722,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "pistol-3",
@@ -295,9 +295,9 @@
         0.10999999940395355
       ]
     },
-    "muzzleConfidence": 0.028,
+    "muzzleConfidence": 0.495,
     "upAxisConfidence": 0.746,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "pistol-4",
@@ -315,9 +315,9 @@
         0.10999999940395355
       ]
     },
-    "muzzleConfidence": 0.096,
+    "muzzleConfidence": 0.501,
     "upAxisConfidence": 0.815,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "pistol-5",
@@ -335,9 +335,9 @@
         0.10999999940395355
       ]
     },
-    "muzzleConfidence": 0.071,
+    "muzzleConfidence": 0.695,
     "upAxisConfidence": 0.771,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "pistol-6",
@@ -355,9 +355,9 @@
         0.10999999940395355
       ]
     },
-    "muzzleConfidence": 0.017,
+    "muzzleConfidence": 0.409,
     "upAxisConfidence": 0.734,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "revolver-1",
@@ -375,7 +375,7 @@
         0.10999999940395355
       ]
     },
-    "muzzleConfidence": 0.358,
+    "muzzleConfidence": 0.591,
     "upAxisConfidence": 0.669,
     "needsManualReview": false
   },
@@ -395,7 +395,7 @@
         0.10999999940395355
       ]
     },
-    "muzzleConfidence": 0.363,
+    "muzzleConfidence": 0.685,
     "upAxisConfidence": 0.688,
     "needsManualReview": false
   },
@@ -415,7 +415,7 @@
         0.10999999940395355
       ]
     },
-    "muzzleConfidence": 0.351,
+    "muzzleConfidence": 0.771,
     "upAxisConfidence": 0.7,
     "needsManualReview": false
   },
@@ -435,7 +435,7 @@
         0.10999999940395355
       ]
     },
-    "muzzleConfidence": 0.164,
+    "muzzleConfidence": 0.575,
     "upAxisConfidence": 0.678,
     "needsManualReview": false
   },
@@ -455,7 +455,7 @@
         0.10999999940395355
       ]
     },
-    "muzzleConfidence": 0.385,
+    "muzzleConfidence": 0.763,
     "upAxisConfidence": 0.694,
     "needsManualReview": false
   },
@@ -475,9 +475,9 @@
         0.4749999940395355
       ]
     },
-    "muzzleConfidence": 0.011,
+    "muzzleConfidence": 0.414,
     "upAxisConfidence": 0.738,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "shotgun-2",
@@ -495,9 +495,9 @@
         0.4749999940395355
       ]
     },
-    "muzzleConfidence": 0.206,
+    "muzzleConfidence": 0.077,
     "upAxisConfidence": 0.74,
-    "needsManualReview": false
+    "needsManualReview": true
   },
   {
     "slug": "shotgun-3",
@@ -515,9 +515,9 @@
         0.4749999940395355
       ]
     },
-    "muzzleConfidence": 0.033,
+    "muzzleConfidence": 0.487,
     "upAxisConfidence": 0.738,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "shotgun-4",
@@ -535,9 +535,9 @@
         0.4749999940395355
       ]
     },
-    "muzzleConfidence": 0.124,
+    "muzzleConfidence": 0.449,
     "upAxisConfidence": 0.785,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "shotgun-sawedoff",
@@ -555,7 +555,7 @@
         0.4749999940395355
       ]
     },
-    "muzzleConfidence": 0.164,
+    "muzzleConfidence": 0.501,
     "upAxisConfidence": 0.586,
     "needsManualReview": false
   },
@@ -575,9 +575,9 @@
         0.4749999940395355
       ]
     },
-    "muzzleConfidence": 0.008,
+    "muzzleConfidence": 0.52,
     "upAxisConfidence": 0.745,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "sniperrifle-1",
@@ -595,9 +595,9 @@
         0.574999988079071
       ]
     },
-    "muzzleConfidence": 0.05,
+    "muzzleConfidence": 0.737,
     "upAxisConfidence": 0.69,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "sniperrifle-2",
@@ -615,9 +615,9 @@
         0.574999988079071
       ]
     },
-    "muzzleConfidence": 0.035,
+    "muzzleConfidence": 0.805,
     "upAxisConfidence": 0.678,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "sniperrifle-3",
@@ -635,9 +635,9 @@
         0.574999988079071
       ]
     },
-    "muzzleConfidence": 0.089,
+    "muzzleConfidence": 0.662,
     "upAxisConfidence": 0.629,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "sniperrifle-4",
@@ -655,9 +655,9 @@
         0.574999988079071
       ]
     },
-    "muzzleConfidence": 0.013,
+    "muzzleConfidence": 0.78,
     "upAxisConfidence": 0.659,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "sniperrifle-5",
@@ -675,7 +675,7 @@
         0.574999988079071
       ]
     },
-    "muzzleConfidence": 0.278,
+    "muzzleConfidence": 0.515,
     "upAxisConfidence": 0.343,
     "needsManualReview": false
   },
@@ -695,9 +695,9 @@
         0.574999988079071
       ]
     },
-    "muzzleConfidence": 0.005,
+    "muzzleConfidence": 0.8,
     "upAxisConfidence": 0.675,
-    "needsManualReview": true
+    "needsManualReview": false
   },
   {
     "slug": "submachinegun-1",
@@ -715,7 +715,7 @@
         0.22499999403953552
       ]
     },
-    "muzzleConfidence": 0.316,
+    "muzzleConfidence": 0.689,
     "upAxisConfidence": 0.814,
     "needsManualReview": false
   },
@@ -735,9 +735,9 @@
         0.22499999403953552
       ]
     },
-    "muzzleConfidence": 0.275,
+    "muzzleConfidence": 0.043,
     "upAxisConfidence": 0.828,
-    "needsManualReview": false
+    "needsManualReview": true
   },
   {
     "slug": "submachinegun-3",
@@ -755,7 +755,7 @@
         0.22499999403953552
       ]
     },
-    "muzzleConfidence": 0.088,
+    "muzzleConfidence": 0.109,
     "upAxisConfidence": 0.791,
     "needsManualReview": true
   },
@@ -775,7 +775,7 @@
         0.22499999403953552
       ]
     },
-    "muzzleConfidence": 0.411,
+    "muzzleConfidence": 0.448,
     "upAxisConfidence": 0.806,
     "needsManualReview": false
   },
@@ -795,7 +795,7 @@
         0.22499999403953552
       ]
     },
-    "muzzleConfidence": 0.243,
+    "muzzleConfidence": 0.423,
     "upAxisConfidence": 0.816,
     "needsManualReview": false
   }
