@@ -85,6 +85,11 @@ function posSliders(prefix: string, offset: (v: WeaponVisual) => Transform): Sli
   }))
 }
 
+/** Un grado por paso: la grilla cae exacta en 0, 90 y 180, que son las
+ *  correcciones que realmente necesitan los modelos mal orientados. Con un
+ *  paso en radianes redondos ni siquiera el cero era alcanzable. */
+const ROTATION_STEP = Math.PI / 180
+
 const SLIDERS: SliderSpec[] = [
   ...posSliders('hipOffset', (v) => v.hipOffset),
   ...posSliders('adsOffset', (v) => v.adsOffset),
@@ -92,7 +97,7 @@ const SLIDERS: SliderSpec[] = [
     label: 'rotation.x',
     min: -Math.PI,
     max: Math.PI,
-    step: 0.01,
+    step: ROTATION_STEP,
     get: (v) => v.rotationOffset.rx,
     set: (v, value) => {
       v.rotationOffset.rx = value
@@ -102,7 +107,7 @@ const SLIDERS: SliderSpec[] = [
     label: 'rotation.y',
     min: -Math.PI,
     max: Math.PI,
-    step: 0.01,
+    step: ROTATION_STEP,
     get: (v) => v.rotationOffset.ry,
     set: (v, value) => {
       v.rotationOffset.ry = value
@@ -112,7 +117,7 @@ const SLIDERS: SliderSpec[] = [
     label: 'rotation.z',
     min: -Math.PI,
     max: Math.PI,
-    step: 0.01,
+    step: ROTATION_STEP,
     get: (v) => v.rotationOffset.rz,
     set: (v, value) => {
       v.rotationOffset.rz = value
