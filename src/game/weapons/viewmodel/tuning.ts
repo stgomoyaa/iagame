@@ -67,8 +67,27 @@ const SWAY_MAX_M = 0.05
 const SWAY_TYPICAL_MAX_PX_S = 2000
 const SWAY_TYPICAL_MAX_FRACTION = 0.75
 
+/**
+ * El bob tiene que leerse como cadencia de pasos, no como vibración.
+ *
+ * La fase avanza `speed * dt * bobFreq` radianes, y el componente vertical usa
+ * el doble de esa frecuencia, así que las oscilaciones verticales por segundo
+ * son `speed * bobFreq / pi`. Igualando eso a la cadencia real de una persona
+ * esprintando (unos 3 pasos por segundo a 8 m/s) sale:
+ *
+ *   bobFreq = 3 * pi / 8 = 1.18
+ *
+ * A velocidad de caminata (5 m/s) eso da 1.9 pasos por segundo, que también es
+ * la cadencia correcta al caminar.
+ *
+ * Estaba en 6.0, que daba 15.3 oscilaciones verticales por segundo a sprint:
+ * cinco veces la cadencia humana, y se leía como si el arma tiritara.
+ */
+const SPRINT_STEPS_PER_SECOND = 3
+const SPRINT_SPEED_MS = 8
+
 export const VIEWMODEL: ViewmodelTuning = {
-  bobFreq: 6.0,
+  bobFreq: (SPRINT_STEPS_PER_SECOND * Math.PI) / SPRINT_SPEED_MS,
   bobAmp: 0.02,
 
   swayScale: (SWAY_TYPICAL_MAX_FRACTION * SWAY_MAX_M) / SWAY_TYPICAL_MAX_PX_S,
