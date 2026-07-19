@@ -5,7 +5,22 @@ import { describe, expect, it } from 'vitest'
 const GAME_DIR = join(process.cwd(), 'src/game')
 
 /** Únicos archivos de src/game autorizados a importar Three. */
-const PUEDEN_USAR_THREE = ['engine/renderer.ts', 'map/mesh.ts']
+const PUEDEN_USAR_THREE = [
+  'engine/renderer.ts',
+  'map/mesh.ts',
+  'weapons/viewmodel/renderer.ts',
+  // three-mesh-bvh (fase 1, hitscan) exige un Ray y una BufferGeometry
+  // reales para raycastFirst(): no alcanza con un objeto {x,y,z} duck-typed.
+  // El resto del sistema de combate es matemática pura y no importa three;
+  // este es el único punto de contacto (ver el comentario de cabecera de
+  // combat/hitscan.ts).
+  'combat/hitscan.ts',
+  // Dianas (fase 1, sección 6): la lógica (targets/targets.ts) es
+  // matemática pura, igual que combat/hitboxes.ts; este archivo es el
+  // único punto de contacto con la escena real para dibujarlas (mismo
+  // motivo que map/mesh.ts).
+  'targets/renderer.ts',
+]
 
 function archivosTs(dir: string, base = ''): string[] {
   const out: string[] = []
@@ -45,10 +60,15 @@ describe('límites de arquitectura', () => {
   })
 
   it('sólo el renderer y el mesh importan Three', () => {
+    // El patrón cubre tanto 'three' pelado como cualquier subpath
+    // ('three/examples/jsm/...', 'three/webgpu', etc.): un patrón que sólo
+    // matcheara la raíz dejaba pasar cualquier subpath sin que el guard
+    // fallara nunca, que es peor que no tener guard.
     for (const f of archivos) {
       const src = readFileSync(join(GAME_DIR, f), 'utf8')
       const importaThree =
-        /from\s+['"]three['"]/.test(src) || /import\s*\(\s*['"]three['"]\s*\)/.test(src)
+        /from\s+['"]three(\/[^'"]*)?['"]/.test(src) ||
+        /import\s*\(\s*['"]three(\/[^'"]*)?['"]\s*\)/.test(src)
       if (importaThree) {
         expect(PUEDEN_USAR_THREE, `${f} no está autorizado a importar three`).toContain(f)
       }

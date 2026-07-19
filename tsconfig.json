@@ -11,6 +11,11 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    // scripts/convert-weapons.ts importa './lib/geometry.ts' con extensión
+    // explícita porque Node en ESM nativo la exige (ver comentario en ese
+    // archivo). tsc por defecto rechaza extensiones .ts en imports; noEmit
+    // ya está en true, así que habilitar esto no cambia nada de la emisión.
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "incremental": true,
     "plugins": [

@@ -36,6 +36,38 @@ describe('tracker de estadísticas', () => {
     expect(t.stats.overBudget).toBe(true)
   })
 
+  it('gpuMs y gpuPeakMs arrancan en -1 (sin medición todavía)', () => {
+    const t = createStatsTracker()
+    expect(t.stats.gpuMs).toBe(-1)
+    expect(t.stats.gpuPeakMs).toBe(-1)
+  })
+
+  it('overBudget usa el máximo entre cpu y gpu, no la suma', () => {
+    const t = createStatsTracker()
+    t.beginFrame()
+    // cpu real del test es prácticamente nulo; gpu bien por sobre presupuesto.
+    t.endFrame(1, 1, 5, 5)
+    expect(t.stats.gpuMs).toBe(5)
+    expect(t.stats.overBudget).toBe(true)
+  })
+
+  it('gpu bajo presupuesto no tapa un cpu que sí lo supera', () => {
+    const t = createStatsTracker()
+    t.beginFrame()
+    const fin = performance.now() + FRAME_BUDGET_MS + 2
+    while (performance.now() < fin) { /* quemar tiempo a propósito */ }
+    t.endFrame(1, 1, 0.1, 0.2)
+    expect(t.stats.overBudget).toBe(true)
+  })
+
+  it('gpuMs desconocido (-1) no arrastra el veredicto: sólo cuenta cpu', () => {
+    const t = createStatsTracker()
+    t.beginFrame()
+    t.endFrame(1, 1)
+    expect(t.stats.gpuMs).toBe(-1)
+    expect(t.stats.overBudget).toBe(false)
+  })
+
   it('runBenchmark corre exactamente las pasadas pedidas', () => {
     let n = 0
     runBenchmark(() => { n++ }, 50)

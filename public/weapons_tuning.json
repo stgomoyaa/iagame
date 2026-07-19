@@ -1,0 +1,367 @@
+{
+  "_comment": "Generado automaticamente desde los seeds heuristicos de src/game/weapons/seed.ts (ver seedWeaponOffsets y scripts/convert-weapons.ts), con dos excepciones QA a mano: assaultrifle-1 (hipOffset/adsOffset/rotationOffset tuneados por Santiago mirando la pantalla, ground truth, no generado) y pistol-2 (rotationOffset.ry = pi: el cañon apuntaba al jugador, confirmado en el navegador con ?debug=1). No se edita a mano el resto: el boton EXPORT del panel de tuning sobreescribe este archivo completo la proxima vez que alguien ajuste algo.",
+  "assaultrifle-1": {
+    "hipOffset": {
+      "x": 0.23,
+      "y": -0.24,
+      "z": 0.665,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.175,
+      "z": 0.495,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0.0698131700797733,
+      "ry": -3.07177948351002,
+      "rz": 0.0698131700797733
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.22,
+    "kickMagnitude": 0.6
+  },
+  "assaultrifle-2": {
+    "hipOffset": {
+      "x": 0.2235000026226044,
+      "y": -0.16100000143051146,
+      "z": 0.7215000140666961,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.12552964687347412,
+      "z": 0.551500014066696,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.22,
+    "kickMagnitude": 0.6
+  },
+  "assaultrifle-3": {
+    "hipOffset": {
+      "x": 0.2235000026226044,
+      "y": -0.16100000143051146,
+      "z": 0.7215000140666961,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.1983526647090912,
+      "z": 0.551500014066696,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.26,
+    "kickMagnitude": 0.8
+  },
+  "assaultrifle-4": {
+    "hipOffset": {
+      "x": 0.2235000026226044,
+      "y": -0.16100000143051146,
+      "z": 0.7215000140666961,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.12388380616903305,
+      "z": 0.551500014066696,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.2,
+    "kickMagnitude": 0.875
+  },
+  "assaultrifle-5": {
+    "hipOffset": {
+      "x": 0.2235000026226044,
+      "y": -0.16100000143051146,
+      "z": 0.7215000140666961,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.12552964687347412,
+      "z": 0.551500014066696,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.22,
+    "kickMagnitude": 0.6
+  },
+  "assaultrifle2-1": {
+    "hipOffset": {
+      "x": 0.2235000026226044,
+      "y": -0.16100000143051146,
+      "z": 0.7215000140666961,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.14722037315368652,
+      "z": 0.551500014066696,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.2,
+    "kickMagnitude": 0.875
+  },
+  "assaultrifle2-2": {
+    "hipOffset": {
+      "x": 0.2235000026226044,
+      "y": -0.16100000143051146,
+      "z": 0.7215000140666961,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.15766432881355286,
+      "z": 0.551500014066696,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.26,
+    "kickMagnitude": 0.8
+  },
+  "assaultrifle2-3": {
+    "hipOffset": {
+      "x": 0.2235000026226044,
+      "y": -0.16100000143051146,
+      "z": 0.7215000140666961,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.16508015990257263,
+      "z": 0.551500014066696,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.22,
+    "kickMagnitude": 0.6
+  },
+  "assaultrifle2-4": {
+    "hipOffset": {
+      "x": 0.2235000026226044,
+      "y": -0.16100000143051146,
+      "z": 0.7215000140666961,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.22342267632484436,
+      "z": 0.551500014066696,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.26,
+    "kickMagnitude": 0.8
+  },
+  "bullpup-1": {
+    "hipOffset": {
+      "x": 0.20149999737739563,
+      "y": -0.14899999856948853,
+      "z": 0.6034999859333038,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.0954236388206482,
+      "z": 0.43349998593330374,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.16,
+    "kickMagnitude": 0.45
+  },
+  "bullpup-2": {
+    "hipOffset": {
+      "x": 0.20149999737739563,
+      "y": -0.14899999856948853,
+      "z": 0.6034999859333038,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.1313064694404602,
+      "z": 0.43349998593330374,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.2,
+    "kickMagnitude": 0.5
+  },
+  "bullpup-3": {
+    "hipOffset": {
+      "x": 0.20149999737739563,
+      "y": -0.14899999856948853,
+      "z": 0.6034999859333038,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.12044775485992432,
+      "z": 0.43349998593330374,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.26,
+    "kickMagnitude": 0.8
+  },
+  "pistol-1": {
+    "hipOffset": {
+      "x": 0.15419999986886979,
+      "y": -0.12319999992847443,
+      "z": 0.34979999929666517,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.07022702693939209,
+      "z": 0.17979999929666515,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.14,
+    "kickMagnitude": 0.85
+  },
+  "pistol-2": {
+    "hipOffset": {
+      "x": 0.15419999986886979,
+      "y": -0.12319999992847443,
+      "z": 0.34979999929666517,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": 0,
+      "y": -0.07022702693939209,
+      "z": 0.17979999929666515,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.14,
+    "kickMagnitude": 0.85
+  }
+}

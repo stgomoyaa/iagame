@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ARENA, box } from '@/game/map/arena'
+import { MOVEMENT } from '@/game/movement/tuning'
 import { PLAYER_CAPSULE } from '@/game/physics/capsule'
 import type { Box } from '@/game/map/types'
 
@@ -9,6 +10,51 @@ const MAX_MANTLE_HEIGHT = 1.2
 const PERIMETER_WALL_HEIGHT = 6
 /** Qué tan cerca en planta (XZ) tiene que estar un escalón de apoyo real. */
 const XZ_TOLERANCE = PLAYER_CAPSULE.radius
+
+/**
+ * Pico de un salto, en metros, derivado de las constantes de tuning (no
+ * hardcodeado): parábola continua con v0 = jumpVelocity y g = gravity.
+ * El motor real integra a pasos discretos de TICK_HZ (gravedad aplicada
+ * el mismo tick que el impulso de salto), lo que da un pico algo más bajo
+ * que la fórmula continua (con la tuning actual, ~0.935 real contra ~0.960
+ * de la fórmula). La fórmula continua sobreestima el alcance real, así que
+ * es una cota conservadora para esta prueba: si con este número más
+ * generoso una superficie ya queda fuera de alcance, en el juego real
+ * queda todavía más lejos.
+ */
+function jumpApex(): number {
+  return MOVEMENT.jumpVelocity ** 2 / (2 * MOVEMENT.gravity)
+}
+
+/**
+ * Altura máxima de un borde mantleable alcanzable de un salto desde una
+ * superficie a `surfaceHeight`. Saltando desde ahí los pies suben hasta
+ * `surfaceHeight + jumpApex()` antes de empezar a caer, y el mantle agarra
+ * cualquier borde hasta `mantleMaxHeight` por encima de los pies en el
+ * instante del contacto (ver mantle.ts) — el mejor instante posible es el
+ * pico del salto.
+ */
+function maxLedgeReachFrom(surfaceHeight: number): number {
+  return surfaceHeight + jumpApex() + MOVEMENT.mantleMaxHeight
+}
+
+/**
+ * Distancia horizontal máxima cubierta durante un salto completo (despegue
+ * a aterrizaje a la misma altura), derivada de las mismas constantes de
+ * tuning: tiempo de vuelo `2 * jumpVelocity / gravity` a la velocidad
+ * horizontal máxima de desplazamiento (sprint).
+ */
+function maxJumpHorizontalDistance(): number {
+  const tiempoDeVuelo = (2 * MOVEMENT.jumpVelocity) / MOVEMENT.gravity
+  return MOVEMENT.sprintSpeed * tiempoDeVuelo
+}
+
+/** Distancia horizontal mínima en planta (XZ) entre dos cajas (0 si se solapan). */
+function horizontalGapXZ(a: Box, b: Box): number {
+  const dx = Math.max(0, b.min.x - a.max.x, a.min.x - b.max.x)
+  const dz = Math.max(0, b.min.z - a.max.z, a.min.z - b.max.z)
+  return Math.hypot(dx, dz)
+}
 
 /**
  * Muros de cobertura/separación de carriles: por diseño no son plataformas
@@ -24,10 +70,10 @@ const XZ_TOLERANCE = PLAYER_CAPSULE.radius
  * de matchear y el test siguiente los vuelve a exigir alcanzables.
  */
 const COBERTURA_NO_ESCALABLE: ReadonlyArray<readonly [number, number, number, number]> = [
-  [-10, -22, -9, -6],
-  [-10, 6, -9, 22],
-  [9, -22, 10, -6],
-  [9, 6, 10, 22],
+  [-10, -22, -9, -10],
+  [-10, 10, -9, 22],
+  [9, -22, 10, -10],
+  [9, 10, 10, 22],
   [-4, -26, 4, -24],
   [-4, 24, 4, 26],
 ]
@@ -137,6 +183,59 @@ describe('arena', () => {
         )
       }
       expect(alcanzables.has(b)).toBe(true)
+    }
+  })
+
+  it('ninguna cobertura alta queda parable al alcance de un salto encadenado con mantle', () => {
+    // Mirror del test anterior: ahí probamos que todo lo escalable ES
+    // alcanzable; acá probamos que la cobertura alta marcada como "bloquea
+    // línea de vista de pie" (COBERTURA_NO_ESCALABLE, misma lista) NO lo es,
+    // ni siquiera encadenando una caja mantleable de 1m como escalón previo.
+    // Ese encadenamiento es justo el exploit real: una caja suelta de 1m
+    // (cobertura baja, pensada para encadenar movimiento) puesta cerca de un
+    // separador de 2.2m convierte a este último en una escalera de dos
+    // pasos. Por eso el chequeo necesita dos componentes, no sólo altura:
+    // un salto real también tiene que poder cubrir la distancia horizontal
+    // hasta el borde.
+    const maxHorizontal = maxJumpHorizontalDistance()
+
+    const candidatas = ARENA.boxes.filter(
+      (b) => b.max.y > 0 && b.max.y !== PERIMETER_WALL_HEIGHT,
+    )
+
+    // Mismo BFS que arriba, pero la condición de salto entre dos apoyos usa
+    // el alcance derivado de jump apex + mantle (no un límite fijo de
+    // mantle), y exige además que el hueco horizontal entre las dos cajas
+    // entre en el alcance de un salto completo.
+    const alcanzables = new Set<Box>()
+    let cambio = true
+    while (cambio) {
+      cambio = false
+      for (const b of candidatas) {
+        if (alcanzables.has(b)) continue
+
+        const desdeElPiso = b.max.y <= maxLedgeReachFrom(0)
+        const conApoyo = [...alcanzables].some(
+          (soporte) =>
+            b.max.y <= maxLedgeReachFrom(soporte.max.y) &&
+            horizontalGapXZ(b, soporte) <= maxHorizontal,
+        )
+
+        if (desdeElPiso || conApoyo) {
+          alcanzables.add(b)
+          cambio = true
+        }
+      }
+    }
+
+    const coberturaAlta = ARENA.boxes.filter(esCoberturaNoEscalable)
+    for (const b of coberturaAlta) {
+      if (alcanzables.has(b)) {
+        throw new Error(
+          `Cobertura alta en [${b.min.x}, ${b.min.z}] a [${b.max.x}, ${b.max.z}] queda parable: un salto encadenado (jump apex ${jumpApex().toFixed(4)}m + mantle ${MOVEMENT.mantleMaxHeight}m, alcance horizontal ${maxHorizontal.toFixed(4)}m) la alcanza. Rompe "bloquea línea de vista de pie".`,
+        )
+      }
+      expect(alcanzables.has(b)).toBe(false)
     }
   })
 })

@@ -79,8 +79,39 @@ describe('bunny hop', () => {
       maxVista = Math.max(maxVista, lengthHorizontal(s.velocity))
     }
     // El tope es suave, así que se permite un margen por encima, no infinito.
-    // El equilibrio calculado es ~18.8 m/s con decay 12; 1.5x da 21.6 de holgura.
-    expect(maxVista).toBeLessThan(MOVEMENT.bhopSoftCap * 1.5)
+    // Medido: el pico real converge a ~15.01 m/s (ver el comentario de
+    // bhopSoftCapDecay en tuning.ts), no a los ~18.8 que sugería el cálculo
+    // teórico de antes (bhopSoftCap * 1.5 = 21.6, un 44% por encima de la
+    // realidad). 17 da margen real sin dejar pasar una regresión que
+    // acerque el equilibrio de vuelta a ese 18.8 teórico.
+    expect(maxVista).toBeLessThan(17)
+  })
+
+  it('el bhop llega de verdad a su velocidad de recompensa medida, no sólo "más que sprint"', () => {
+    // El test anterior (arriba) sólo pedía superar el sprint (8.0): una
+    // regresión que redujera el equilibrio del bhop a, digamos, 9 m/s
+    // seguiría pasando esa barra sin que nada la detectara. Éste pin-ea el
+    // número real: ~14.45 m/s sostenido (ver bhop.test, medido sobre 20k
+    // ticks) es el piso de la oscilación en régimen, una vez que convergió.
+    const s = createPlayerState(vec3(0, 0, 0))
+    for (let i = 0; i < 10; i++) stepPlayer(s, input(), piso, TICK_DT)
+
+    let yaw = 0
+    const N = 20000
+    const speeds: number[] = []
+    for (let i = 0; i < N; i++) {
+      yaw += 0.012
+      stepPlayer(s, input({ jump: true, right: 1, yaw, sprint: true }), piso, TICK_DT)
+      speeds.push(lengthHorizontal(s.velocity))
+    }
+
+    const cola = speeds.slice(Math.floor(N * 0.75))
+    const sostenido = Math.min(...cola)
+    // Margen alrededor del 14.45 medido: suficiente para no ser frágil
+    // ante variación de punto flotante, ajustado para que una regresión
+    // real (bhop roto, o de vuelta cerca del 18.8 teórico) sí falle.
+    expect(sostenido).toBeGreaterThan(13.5)
+    expect(sostenido).toBeLessThan(15.5)
   })
 
   it('sin saltar, la fricción frena hasta la velocidad de caminata', () => {

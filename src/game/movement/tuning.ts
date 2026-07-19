@@ -25,7 +25,22 @@ export interface MovementTuning {
   bhopSoftCapDecay: number
 
   slideBoost: number
-  /** Techo duro de velocidad horizontal al entrar en slide: el boost nunca la supera. */
+  /**
+   * Techo de velocidad horizontal al entrar en slide: el boost nunca la
+   * supera. Se deriva de `bhopSoftCap` en cada lectura (ver el getter en
+   * MOVEMENT más abajo), así que sigue al valor vivo de `bhopSoftCap`
+   * incluso si el panel de tuning lo muta en caliente — no es una copia
+   * fijada al arrancar.
+   *
+   * Esto sólo clampea la velocidad *al entrar* al slide. `applySoftCap`
+   * (bhop.ts) corre nada más en la rama aérea de step.ts: si el jugador
+   * aterriza con velocidad aérea alta, esa velocidad entra a la rama de
+   * suelo sin reclampear. Medido: hasta ~16 m/s en el tick de aterrizaje,
+   * por encima de este techo (14.4 con la tuning por defecto). No es un
+   * runaway — la propia rama aérea lo acota como equilibrio del decay
+   * exponencial — pero "techo de velocidad en el suelo" no es 100% literal
+   * fuera del instante de entrada al slide.
+   */
   slideMaxSpeed: number
   slideDuration: number
   slideEndSpeedScale: number
@@ -72,16 +87,31 @@ export const MOVEMENT: MovementTuning = {
   // airAccel * dt * airWishSpeedCap = 100 * (1/128) * 0.5 = 0.39 m/s por tick.
   // El equilibrio del decay exponencial es gain / (1 - exp(-decay * dt)).
   // Con decay 3 el equilibrio queda en +16.8 m/s sobre el tope (31 m/s reales),
-  // o sea el tope no toparía nada. Con 12 queda en +4.4, que sostiene ~18.8 m/s:
-  // el bhop premia, pero no se descontrola.
+  // o sea el tope no toparía nada. Con 12 ese mismo cálculo teórico da +4.4
+  // (18.8 m/s reales) — pero asume ganancia en TODOS los ticks aéreos, y no
+  // es lo que pasa. Medido de verdad (20k ticks de strafe perfecto, mismo
+  // patrón que bhop.test.ts): converge a ~14.45 m/s sostenido (el piso de
+  // la oscilación en régimen) con picos de ~15.01, bastante por debajo del
+  // 18.8 teórico. La causa: con incrementos de yaw fijos, la proyección de
+  // la velocidad actual sobre el wishDir de ese tick a veces ya supera
+  // airWishSpeedCap (addSpeed <= 0 en accelerate.ts) y ese tick no suma
+  // nada — cerca de un 28% de los ticks aéreos, en esta medición. La
+  // ganancia promedio real por tick queda por debajo de la máxima teórica,
+  // así que el equilibrio también.
   bhopSoftCapDecay: 12.0,
 
   slideBoost: 1.35,
   // El mismo tope que bhopSoftCap, a propósito: si el slide pudiera superar
   // el tope del bhop, sería la vía barata de saltárselo (agachar y soltar es
-  // trivial comparado con air-strafear). Un solo techo de velocidad en
-  // suelo, no dos números que alguien puede desincronizar al tunear.
-  slideMaxSpeed: bhopSoftCap,
+  // trivial comparado con air-strafear). Getter, no un valor copiado al
+  // inicializar el módulo: `bhopSoftCap` de acá abajo es mutable (el panel
+  // de tuning en engine/tuning-panel.ts lo escribe en vivo), y una copia
+  // fijada en este objeto se habría quedado pegada al valor de arranque.
+  // Con el getter, no hay dos números que alguien pueda desincronizar al
+  // tunear: hay uno solo, leído dos veces.
+  get slideMaxSpeed(): number {
+    return MOVEMENT.bhopSoftCap
+  },
   slideDuration: 0.7,
   slideEndSpeedScale: 0.6,
   slideFriction: 1.2,

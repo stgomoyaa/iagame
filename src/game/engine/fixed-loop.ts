@@ -1,4 +1,5 @@
-import { MAX_FRAME_DT, TICK_DT } from '@/game/engine/constants'
+import { TICK_DT } from '@/game/engine/constants'
+import { sanitizeDt } from '@/game/engine/dt'
 
 export interface FixedLoop {
   /** Consume el tiempo del frame. Devuelve cuántos ticks debe correr el llamador. */
@@ -16,12 +17,9 @@ export function createFixedLoop(): FixedLoop {
 
   return {
     advance(frameDt: number): number {
-      // NaN es el único caso que las clamps no cubren: se propagaría al
-      // acumulador y congelaría la simulación para siempre. Las dos clamps
-      // ya resuelven ambos infinitos y los deltas negativos por sí solas.
-      accumulator += Number.isNaN(frameDt)
-        ? 0
-        : Math.min(Math.max(frameDt, 0), MAX_FRAME_DT)
+      // Ver engine/dt.ts: sanitizeDt es el guard compartido contra NaN,
+      // infinitos y deltas negativos que un clamp de sólo min/max no cubre.
+      accumulator += sanitizeDt(frameDt)
 
       let ticks = 0
       while (accumulator >= TICK_DT) {

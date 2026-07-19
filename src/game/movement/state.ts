@@ -11,6 +11,17 @@ export interface PlayerInput {
   jump: boolean
   sprint: boolean
   crouch: boolean
+  /**
+   * Multiplicador de velocidad de movimiento por ADS (sección 4 del spec
+   * de fase 1: "velocidad de movimiento: multiplica por speedScale").
+   * Opcional para no romper los ~370 tests existentes que arman un
+   * PlayerInput sin este campo — `undefined` se trata como 1 (sin efecto),
+   * ver targetSpeed() en step.ts. game.ts lo escribe cada frame con el
+   * valor interpolado de combat/ads.ts (adsSpeedMultiplier), no un booleano
+   * fijo: así la desaceleración entra suave junto con la transición visual
+   * del ADS, no de golpe.
+   */
+  adsSpeedScale?: number
 }
 
 export interface PlayerState {
