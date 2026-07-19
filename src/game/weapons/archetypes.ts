@@ -85,6 +85,26 @@ export interface RecoilSpec {
   pattern: Array<[number, number]>
   /** Velocidad con la que la cámara vuelve hacia el origen tras cada impulso, radianes/seg. */
   recovery: number
+  /**
+   * Segundos que tarda `shotIndex` (combat/recoil.ts) en deshacerse por
+   * completo — un cargador entero de índice — mientras el gatillo está
+   * suelto. NO es lo mismo que `recovery` de arriba: `recovery` regresa el
+   * offset de CÁMARA ya aplicado (radianes/seg) hacia cero; esto gobierna
+   * la posición dentro del PATRÓN que el próximo disparo va a leer. Un
+   * rifle real (CS, Source) tarda ~0.3-0.4s en enfriar del todo el índice
+   * de dispersión, así que este valor vive en esa banda por defecto
+   * (0.30-0.45s en el roster de abajo) y se ajusta por arquetipo para que
+   * cada clase tenga su propio carácter: la LMG (recuperación más lenta,
+   * pensada para sostener fuego largo) contra la pistola (recuperación más
+   * rápida, taps precisos no deberían sentirse penalizados). La tasa real
+   * en "disparos por segundo" se DERIVA de `magazine / indexRecoveryTime`
+   * (ver indexRecoveryRate() en combat/recoil.ts) en vez de guardarse como
+   * campo aparte, para que un rebalanceo de cargador no deje la tasa
+   * desincronizada. Ver el comentario de cabecera de stepRecoilRecovery en
+   * combat/recoil.ts para el razonamiento completo de por qué esto decae
+   * de forma continua en vez de resetear por umbral.
+   */
+  indexRecoveryTime: number
   spread: SpreadCurve
 }
 
@@ -385,6 +405,9 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // AR base porque el calibre es más chico, ver AR_REFERENCE_CLIMB_DEG_MIN/MAX.
       pattern: generateRecoilPattern(101, 30, degToRad(12), degToRad(6), degToRad(0.1)),
       recovery: 14,
+      // Recuperación de índice más rápida que la línea base (ar-1): SMG de
+      // control, coherente con recovery=14 (la más alta del roster).
+      indexRecoveryTime: 0.34,
       spread: { base: 0.006, max: 0.03, growthPerShot: 0.004, recoverySpeed: 0.25 },
     },
   },
@@ -406,6 +429,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // smg-1, coherente con "gana en control" del comentario de arriba.
       pattern: generateRecoilPattern(202, 25, degToRad(9), degToRad(3), degToRad(0.1)),
       recovery: 11,
+      indexRecoveryTime: 0.36,
       spread: { base: 0.005, max: 0.026, growthPerShot: 0.0035, recoverySpeed: 0.22 },
     },
   },
@@ -428,6 +452,11 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // de línea base contra el que se mide el resto del arsenal.
       pattern: generateRecoilPattern(303, 30, degToRad(17.5), degToRad(8), degToRad(0.15)),
       recovery: 9,
+      // Ancla del roster: 30 balas / 0.40s = 75 disparos/seg de tasa de
+      // recuperación (indexRecoveryRate más abajo), contra una cadencia de
+      // 600 RPM = 10 disparos/seg — la misma proporción (~7.5x) que CS de
+      // verdad, porque ar-1 es literalmente la referencia de ese cálculo.
+      indexRecoveryTime: 0.4,
       spread: { base: 0.004, max: 0.02, growthPerShot: 0.0025, recoverySpeed: 0.18 },
     },
   },
@@ -454,6 +483,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     recoil: {
       pattern: generateRecoilPattern(404, 3, degToRad(5), degToRad(1.5), degToRad(0.3)),
       recovery: 13,
+      indexRecoveryTime: 0.38,
       spread: { base: 0.003, max: 0.012, growthPerShot: 0.004, recoverySpeed: 0.3 },
     },
   },
@@ -475,6 +505,8 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // base porque pega más fuerte por disparo, aunque con menos balas.
       pattern: generateRecoilPattern(505, 25, degToRad(20), degToRad(6), degToRad(0.2)),
       recovery: 8,
+      // Fusil de batalla, más pesado que ar-1: recupera un poco más lento.
+      indexRecoveryTime: 0.44,
       spread: { base: 0.0035, max: 0.017, growthPerShot: 0.002, recoverySpeed: 0.16 },
     },
   },
@@ -500,6 +532,11 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     recoil: {
       pattern: generateRecoilPattern(707, 5, degToRad(7), degToRad(0.3), degToRad(0.2)),
       recovery: 4,
+      // Cadencia bajísima (0.75 disparos/seg): el margen sobre la tasa de
+      // recuperación es enorme pase lo que pase, así que este valor importa
+      // poco en la práctica — se mantiene snappy (extremo bajo del rango)
+      // porque cada tiro ya es un evento discreto, no un spray.
+      indexRecoveryTime: 0.32,
       spread: { base: 0.0005, max: 0.002, growthPerShot: 0.001, recoverySpeed: 0.5 },
     },
   },
@@ -520,6 +557,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     recoil: {
       pattern: generateRecoilPattern(606, 10, degToRad(11), degToRad(1), degToRad(0.2)),
       recovery: 6,
+      indexRecoveryTime: 0.35,
       spread: { base: 0.001, max: 0.006, growthPerShot: 0.002, recoverySpeed: 0.4 },
     },
   },
@@ -542,6 +580,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     recoil: {
       pattern: generateRecoilPattern(808, 6, degToRad(9), degToRad(2.5), degToRad(0.3)),
       recovery: 10,
+      indexRecoveryTime: 0.33,
       spread: { base: 0.02, max: 0.05, growthPerShot: 0.01, recoverySpeed: 0.3 },
     },
   },
@@ -565,6 +604,12 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     recoil: {
       pattern: generateRecoilPattern(909, 100, degToRad(24), degToRad(13), degToRad(0.05)),
       recovery: 7,
+      // La más lenta del roster (tope del rango, 0.30-0.45s): construida
+      // para sostener fuego largo, no para toques rápidos. Con un cargador
+      // de 100, la tasa derivada (100/0.45 ≈ 222 disparos/seg) sigue muy
+      // por encima de su cadencia real (700 RPM ≈ 11.7/seg) — más lenta en
+      // carácter no significa que sprayar salga gratis.
+      indexRecoveryTime: 0.45,
       spread: { base: 0.005, max: 0.035, growthPerShot: 0.0015, recoverySpeed: 0.1 },
     },
   },
@@ -585,6 +630,9 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     recoil: {
       pattern: generateRecoilPattern(1010, 12, degToRad(10), degToRad(4), degToRad(0.15)),
       recovery: 12,
+      // La más rápida del roster: sidearm de toques precisos, un doble tap
+      // no puede sentirse penalizado por el disparo anterior.
+      indexRecoveryTime: 0.3,
       spread: { base: 0.006, max: 0.022, growthPerShot: 0.005, recoverySpeed: 0.28 },
     },
   },
