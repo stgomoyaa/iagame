@@ -223,7 +223,19 @@ el MVP, sin penetración de materiales.
 
 ## 6. Armas
 
-40 arquetipos, data-driven. Un arma es un objeto de datos puro más una referencia a un mesh.
+**Corregido el 2026-07-18.** La versión original de esta sección decía "40 arquetipos".
+Estaba mal: 40 sets de estadísticas distintos son imposibles de balancear e
+indistinguibles jugando. La separación correcta es:
+
+- **10 arquetipos de estadísticas.** Son las reglas de juego: daño, cadencia,
+  retroceso, tiempos. Es lo que se balancea.
+- **40 modelos cosméticos.** Cada uno mapea a un arquetipo. Varios modelos comparten
+  arquetipo. El modelo no cambia cómo se juega, sólo cómo se ve.
+
+Esto es lo que hacen los shooters reales, y hace que el arsenal grande sea contenido
+en vez de deuda de balance.
+
+Un arma es un objeto de datos puro más una referencia a un mesh.
 
 ```ts
 interface WeaponSpec {
@@ -241,6 +253,90 @@ interface WeaponSpec {
 ```
 
 Las armas se desbloquean por nivel de cuenta. El loadout permite un arma primaria y una secundaria.
+
+### 6.1 Viewmodel
+
+**Agregado el 2026-07-18.** Toda la animación del viewmodel es **procedural**, compuesta
+como capas de transformación aditivas evaluadas por frame con cero asignaciones. No hay
+animación hecha a mano por arma: 40 armas × 5 animaciones sería trabajo de arte que no
+tenemos, y es justo lo que este enfoque evita.
+
+Capas, en orden determinista de composición:
+
+| Capa | Qué hace |
+|---|---|
+| `sway` | Retardo respecto al movimiento del mouse, con resorte amortiguado |
+| `bob` | Figura de ocho según velocidad, se desvanece en el aire y en ADS |
+| `adsLayer` | Interpola de `hipOffset` a `adsOffset` en `adsTime`; también mueve el FOV y el multiplicador de sensibilidad |
+| `shootKick` | Impulso atrás, arriba y con roll leve, con retorno elástico; magnitud por arma |
+| `reloadLayer` | Secuencia por código: baja, inclina, pausa de cargador afuera, vuelve. Emite eventos en `magOut` y `magIn` para munición y audio |
+| `drawLayer` | Sube desde abajo al cambiar de arma |
+
+El núcleo de composición de capas es **matemática pura, sin objetos de Three.js**, para
+que sea testeable con Vitest en milisegundos. La conversión al grafo de escena ocurre en
+el borde, igual que con el resto del juego.
+
+Configuración visual por arma, separada de las estadísticas del arquetipo:
+
+```ts
+interface WeaponVisual {
+  slug: string
+  archetype: string
+  hipOffset: Transform
+  adsOffset: Transform
+  adsTime: number
+  drawTime: number
+  reloadTime: number
+  kickMagnitude: number
+  scaleAdjust: number
+}
+```
+
+`adsOffset` se siembra con una heurística (centro del bounding box alineado al eje de
+cámara, altura estimada de miras) para que las 40 armas sean usables antes de tunear
+nada a mano. El ajuste fino se hace con el panel en vivo, no en código.
+
+### 6.2 `ModelSource`
+
+**Agregado el 2026-07-18.** No existía en la versión original de este spec.
+
+Costura para que el origen del mesh no filtre al resto del sistema: `procedural | glb`.
+Hoy sólo se implementa `glb`. La variante `procedural` queda declarada porque fue la
+propuesta original de armas y sigue siendo la salida si algún arquetipo no encuentra
+modelo CC0 decente. **No hay soporte de `.mdl`** y no está planificado.
+
+### 6.3 Pipeline de assets
+
+**Agregado el 2026-07-18.** Los packs CC0 llegan en FBX, no en glTF.
+
+Conversión con **FBX2glTF** (binario suelto de ~20MB) y normalización con
+**`@gltf-transform/core`** en Node. Se descartó Blender headless: son ~1GB de
+dependencia y dejaría el script en Python, separado del stack del proyecto.
+
+El script normaliza escala a tamaño real (una SMG mide ~0.6m), orienta con +Y arriba y
+el cañón hacia -Z, reduce los materiales a un slot básico (el spec prohíbe el costo de
+PBR, ver sección 2) y escribe `public/assets/weapons/index.json` con slug, nombre, conteo
+de triángulos y bounding box.
+
+**Riesgo conocido:** detectar la orientación del cañón por bounding box acierta en la
+mayoría y falla en armas de silueta atípica (escopetas, revólveres, cualquier cosa con
+bípode). Se presupuesta corrección manual para 5 a 10 modelos, y por eso el panel de
+tuning necesita sliders de **rotación**, no sólo de posición y escala.
+
+Los FBX de origen **nunca se commitean**: sólo los GLB convertidos (CC0, seguros) y el
+script. El directorio de descarga va al `.gitignore`.
+
+### 6.4 Panel de tuning de armas
+
+**Agregado el 2026-07-18.** Overlay de debug detrás de `?debug=1`, DOM plano, sin React.
+
+Selector de las 40 armas, sliders en vivo de `hipOffset`, `adsOffset`, rotación,
+`scaleAdjust`, `adsTime` y `kickMagnitude`, más atajos para probar ADS, culatazo y
+recarga. Un botón exporta `weapons_tuning.json`, que el juego carga al arrancar pisando
+los valores heurísticos.
+
+Es el multiplicador de velocidad de todo el sistema: tunear un arma pasa de un ciclo de
+compilación a uno o dos minutos sin rebuild.
 
 ## 7. Skins
 
@@ -443,6 +539,19 @@ Cada fase cierra midiendo el presupuesto de 2.5ms. Si una fase lo rompe, se arre
 | **3** | 40 armas, generador de skins, armería, loadout | Hay razón real para cambiar de arma. |
 | **4** | Rangos, RR, colocaciones, XP, drop de skins, menús | Da ganas de jugar otra. |
 | **5** | *Opcional*: modelos rigged de bots, audio final, pulido | Se ve terminado. |
+
+**No hay fase 6.** Las fases son 0 a 5 y la 5 es opcional. Cualquier trabajo que se
+describa como "fase 6" está fuera de este spec.
+
+**Sistema de armas y viewmodel (secciones 6.1 a 6.4):** cubre el alcance de viewmodel de
+las fases 1 y 3, y se construye como bloque propio **después de cerrar la fase 0**. El
+motivo es de dependencias, no de preferencia: el rig del viewmodel se parenta a la cámara,
+que se crea en la fase 0, y el panel de tuning de armas reusa la infraestructura de sliders
+en vivo que también se construye ahí. Arrancarlo antes sería construir contra aire.
+
+Dentro de la fase 1 queda el disparo, el ADS y el sistema de feedback; el viewmodel de esa
+fase lo aporta este bloque. Dentro de la fase 3 quedan las skins, la armería y el loadout;
+los 40 modelos y su pipeline los aporta este bloque.
 
 **Definition of done del MVP: fin de la fase 4.** La fase 5 es explícitamente opcional.
 
