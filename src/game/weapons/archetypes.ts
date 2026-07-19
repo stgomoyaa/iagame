@@ -152,16 +152,93 @@ function mulberry32(seed: number): () => number {
 }
 
 /**
- * Genera un patrón de retroceso determinista de `length` disparos.
+ * Cuántos disparos (en absoluto, no como fracción del cargador) le toma a
+ * la curva vertical llegar a su punto medio de subida. Es un conteo
+ * ABSOLUTO a propósito, no una fracción del largo del patrón: la ventana
+ * real en la que un jugador puede seguir tirando "al bulto" antes de que el
+ * arma empiece a subir en serio es fisiológica (el retroceso tarda lo mismo
+ * en manifestarse en un cargador de 12 que en uno de 100), no proporcional
+ * al tamaño del cargador. Con un valor fijo, cualquier arma (pistola de 12
+ * o LMG de 100) tiene una apertura ajustada de verdad en vez de que el
+ * cargador largo la diluya. 16 deja los primeros 2-3 disparos bien planos
+ * (ver el test de share en archetypes.test.ts) sin que el paso más
+ * pronunciado de la rampa (que cae justo en este punto medio) se dispare
+ * por encima del múltiplo de paso típico que ya vigila el test de
+ * discontinuidades (la lmg, con su cargador de 100, es la que más al límite
+ * queda: ~8.7x el paso típico, bajo el techo de 12x).
+ */
+const VERTICAL_RISE_SHOTS = 16
+
+/**
+ * Fracción (chica) del climb total que sigue subiendo de forma lineal y
+ * pareja a lo largo de TODO el patrón, por encima de la curva de rampa
+ * (`smoothstep`). Sin esto, una vez pasado el punto de rise, la pendiente
+ * de la rampa cae a casi cero (plateau perfecto) y el jitter — que es
+ * ruido, puede ir para cualquier lado — podría hacer que un disparo quede
+ * más abajo que el anterior, rompiendo la garantía de "nunca baja" incluso
+ * antes del clamp de abajo. Un colchón lineal chico mantiene una pendiente
+ * de fondo siempre positiva bajo la rampa, así el plateau es "casi plano",
+ * no "matemáticamente plano".
+ */
+const VERTICAL_TAIL_SHARE = 0.08
+
+/**
+ * Fracción del patrón (relativa, no absoluta como VERTICAL_RISE_SHOTS)
+ * antes de que el serpenteo horizontal empiece a moverse. A diferencia de
+ * la vertical, acá SÍ tiene que ser una fracción del cargador entero: la
+ * propiedad que hay que garantizar es "el primer cuarto del cargador se
+ * mueve poco", así que el punto de arranque del serpenteo tiene que quedar
+ * por delante de ese cuarto (0.3 > 0.25) para cualquier arma, sea cual sea
+ * su largo — con un conteo absoluto (como el de la vertical) un cargador de
+ * 100 balas (lmg) dejaría el arranque mucho antes del primer cuarto.
+ */
+const HORIZONTAL_RISE_FRACTION = 0.3
+
+/** Cuántos ciclos completos de seno entra el serpenteo horizontal una vez
+ *  que arranca (después de HORIZONTAL_RISE_FRACTION): más de un ciclo
+ *  entero para que se note el zigzag izquierda-derecha-izquierda típico de
+ *  CS, no el medio-arco suave que tenía la curva vieja. */
+const HORIZONTAL_SWEEP_CYCLES = 2.25
+
+/** Curva de Hermite: 0 en x=0, 1 en x=1, pendiente 0 en ambos extremos. Es
+ *  la "S" que da la apertura ajustada al arrancar y el aplanado al llegar
+ *  al final de la rampa, sin discontinuidad de pendiente en ninguno de los
+ *  dos empalmes (con el plateau de después, y con el cero de shot 0). */
+function smoothstep(x: number): number {
+  const t = Math.min(1, Math.max(0, x))
+  return t * t * (3 - 2 * t)
+}
+
+/**
+ * Genera un patrón de retroceso determinista de `length` disparos, con la
+ * silueta de tres fases de un spray estilo CS/Valorant:
  *
- * La componente vertical sube con la raíz cuadrada del progreso: los
- * primeros disparos suben rápido y los últimos ya están cerca del techo,
- * igual que el retroceso real de un arma de fuego. La componente
- * horizontal serpentea con un seno (medio período hacia un lado, medio
- * hacia el otro), el patrón en "checkmark" típico de un rifle. `jitter`
- * agrega ruido de la seed para que ningún arma tenga un patrón
- * perfectamente geométrico, pero el ruido sale del mismo PRNG determinista,
- * no de Math.random(): misma seed, mismo patrón, siempre.
+ * 1. Apertura: los primeros disparos casi no se mueven (tirar al bulto
+ *    tiene que ser preciso). El disparo 0 es EXACTAMENTE [0, 0] — sin
+ *    jitter siquiera — porque el primer balazo de un cargador fresco no
+ *    puede tener ningún desvío, ni el del ruido.
+ * 2. Rampa: una subida vertical larga y bastante recta a lo largo de más o
+ *    menos el primer tercio del cargador (`VERTICAL_RISE_SHOTS` disparos en
+ *    términos absolutos — ver su comentario). `smoothstep` da el tramo
+ *    lento-rápido-lento característico: lento al arrancar (fase 1), rápido
+ *    en el medio (la rampa en sí), lento otra vez al acercarse al techo
+ *    (el aplane hacia la fase 3).
+ * 3. Plateau + serpenteo: pasado el punto de rise, la vertical ya está
+ *    prácticamente en su techo (`VERTICAL_TAIL_SHARE` la sigue empujando
+ *    un poco, apenas, para no quedar matemáticamente plana bajo jitter — ver
+ *    su comentario) y el resto del cargador lo domina el serpenteo
+ *    horizontal, que recién ahí arranca (antes de `HORIZONTAL_RISE_FRACTION`
+ *    del cargador el horizontal es CERO exacto, no sólo chico).
+ *
+ * Antes (bug corregido): la vertical subía con `sqrt(progress)`, que tiene
+ * su pendiente más pronunciada justo al arrancar — el primer disparo solo
+ * ya se comía ~18% de todo el climb del cargador (medido sobre un AR de 30
+ * balas), exactamente al revés de cómo sube un arma real. El horizontal
+ * serpenteaba con un solo medio-seno a lo largo de TODO el cargador en
+ * simultáneo con esa subida — la combinación daba una "banana" suave en vez
+ * de la silueta de tallo-recto-y-luego-zigzag de un patrón real. Ver los
+ * tests de forma en archetypes.test.ts (comparan proporciones, no números
+ * fijos, para que una futura recalibración los siga poniendo a prueba).
  *
  * `jitter` tiene que quedar chico *relativo al paso típico entre disparos*
  * (`verticalClimb / (length - 1)`), no relativo a `verticalClimb` total: un
@@ -180,12 +257,40 @@ export function generateRecoilPattern(
 ): Array<[number, number]> {
   const rand = mulberry32(seed)
   const pattern: Array<[number, number]> = []
+  const riseFraction = length > 1 ? Math.min(1, VERTICAL_RISE_SHOTS / (length - 1)) : 1
+  const sweepSpan = Math.max(1e-6, 1 - HORIZONTAL_RISE_FRACTION)
+  let previousVertical = 0
+
   for (let i = 0; i < length; i++) {
     const progress = length > 1 ? i / (length - 1) : 1
-    const vertical = verticalClimb * Math.sqrt(progress) + (rand() - 0.5) * jitter
-    const horizontal = horizontalDrift * Math.sin(progress * Math.PI * 1.5) + (rand() - 0.5) * jitter
+    const verticalNoise = (rand() - 0.5) * jitter
+    const horizontalNoise = (rand() - 0.5) * jitter
+
+    // Disparo 0: exactamente cero, sin jitter. Se descarta el ruido ya
+    // consumido del PRNG (no se salta la llamada a rand()) para que el resto
+    // de la secuencia no dependa de si el disparo 0 tiene o no jitter.
+    if (i === 0) {
+      pattern.push([0, 0])
+      previousVertical = 0
+      continue
+    }
+
+    const climbShape = (1 - VERTICAL_TAIL_SHARE) * smoothstep(progress / riseFraction) + VERTICAL_TAIL_SHARE * progress
+    const verticalRaw = verticalClimb * climbShape + verticalNoise
+    // Nunca baja del disparo anterior: la rampa de base (climbShape) ya es
+    // monótona por construcción, pero el jitter solo, sumado encima de un
+    // tramo casi plano del plateau, sí podría hacerla retroceder un pelo.
+    // Este clamp es la garantía dura, no una esperanza estadística.
+    const vertical = Math.max(verticalRaw, previousVertical)
+    previousVertical = vertical
+
+    const sweepProgress = Math.max(0, progress - HORIZONTAL_RISE_FRACTION) / sweepSpan
+    const horizontal =
+      horizontalDrift * Math.sin(sweepProgress * HORIZONTAL_SWEEP_CYCLES * Math.PI * 2) + horizontalNoise
+
     pattern.push([horizontal, vertical])
   }
+
   return pattern
 }
 

@@ -314,3 +314,90 @@ describe('retroceso: cordura física de las magnitudes', () => {
     }
   })
 })
+
+/**
+ * Forma de la curva, estilo CS: la sección de arriba ya cubría magnitudes
+ * (cuánto sube en total). Esto cubre la FORMA (cómo se reparte esa subida en
+ * el tiempo), que es justo lo que raíz cuadrada rompía: los primeros
+ * disparos se comían casi un quinto de todo el climb, al revés de cómo
+ * funciona un spray real (apertura ajustada, ráfaga vertical, luego
+ * plateau). Ver el comentario largo en generateRecoilPattern().
+ *
+ * Las armas full-auto sostenido (fireMode 'auto': smg-1, smg-2, ar-1, ar-3,
+ * lmg) son las que tienen esta silueta de 3 fases. Las semi/cerrojo (sniper,
+ * shotgun, pistola) y la ráfaga (ar-2) ya están documentadas como "golpe
+ * seco" en vez de rampa — con 3-12 disparos no hay margen para que una
+ * apertura-rampa-plateau se note, y el spec ya las trata distinto (ver sus
+ * comentarios en archetypes.ts). Las pruebas de silueta sólo aplican a las
+ * de fuego sostenido, que es para lo que existe la silueta.
+ */
+describe('retroceso: forma de la curva (apertura ajustada, rampa, plateau — estilo CS)', () => {
+  const AUTO_IDS = ARCHETYPE_LIST.filter((a) => a.fireMode === 'auto').map((a) => a.id)
+
+  it('el disparo 0 de todo arquetipo da offset exactamente cero, sin jitter (arranque de cargador limpio)', () => {
+    for (const a of ARCHETYPE_LIST) {
+      const [x, y] = a.recoil.pattern[0]
+      expect(x, a.id).toBe(0)
+      expect(y, a.id).toBe(0)
+    }
+  })
+
+  it('la subida vertical nunca retrocede dentro de un patrón: puede aplanarse, pero jamás baja', () => {
+    for (const a of ARCHETYPE_LIST) {
+      const ys = verticals(a.id)
+      for (let i = 1; i < ys.length; i++) {
+        expect(ys[i], `${a.id} disparo ${i - 1}->${i}: ${radToDeg(ys[i - 1]).toFixed(3)}° -> ${radToDeg(ys[i]).toFixed(3)}°`).toBeGreaterThanOrEqual(ys[i - 1])
+      }
+    }
+  })
+
+  // Este es el test que habría atajado el bug original: con raíz cuadrada,
+  // los primeros 3 disparos ya se comían 26-29% del climb total (medido
+  // sobre smg-1/smg-2/ar-1/ar-3; 14% incluso en la lmg de 100 balas). Estilo
+  // CS, tiene que quedar bien por debajo de eso: los primeros disparos son
+  // para tirar al bulto con precisión, no el inicio de la escalada.
+  it('el share del climb total gastado en los primeros 3 disparos queda chico (esto habría detectado el bug de raíz cuadrada)', () => {
+    const FIRST_THREE_SHOTS_SHARE_MAX = 0.12
+    for (const id of AUTO_IDS) {
+      const ys = verticals(id)
+      const total = Math.max(...ys) - Math.min(...ys)
+      const share = (ys[2] - ys[0]) / total
+      expect(share, `${id}: ${(share * 100).toFixed(1)}% del climb ya en el disparo 3`).toBeLessThan(
+        FIRST_THREE_SHOTS_SHARE_MAX,
+      )
+    }
+  })
+
+  it('el último cuarto del cargador aporta poco climb vertical: la rampa ya aplanó antes de llegar ahí', () => {
+    const FINAL_QUARTER_SHARE_MAX = 0.1
+    for (const id of AUTO_IDS) {
+      const ys = verticals(id)
+      const total = Math.max(...ys) - Math.min(...ys)
+      const q3Index = Math.floor((ys.length - 1) * 0.75)
+      const climbBeforeFinalQuarter = ys[q3Index] - ys[0]
+      const finalQuarterShare = 1 - climbBeforeFinalQuarter / total
+      expect(
+        finalQuarterShare,
+        `${id}: el último cuarto aporta ${(finalQuarterShare * 100).toFixed(1)}% del climb`,
+      ).toBeLessThan(FINAL_QUARTER_SHARE_MAX)
+    }
+  })
+
+  it('el desvío horizontal en el primer cuarto del cargador es chico frente a su máximo, y crece después', () => {
+    const FIRST_QUARTER_HORIZONTAL_RATIO_MAX = 0.3
+    for (const id of AUTO_IDS) {
+      const xs = ARCHETYPES[id].recoil.pattern.map(([x]) => Math.abs(x))
+      const maxAbs = Math.max(...xs)
+      const q1Index = Math.floor((xs.length - 1) * 0.25)
+      const maxAbsFirstQuarter = Math.max(...xs.slice(0, q1Index + 1))
+      const maxAbsAfter = Math.max(...xs.slice(q1Index + 1))
+      const ratio = maxAbs > 0 ? maxAbsFirstQuarter / maxAbs : 0
+      expect(ratio, `${id}: primer cuarto llega a ${(ratio * 100).toFixed(1)}% del máximo horizontal`).toBeLessThan(
+        FIRST_QUARTER_HORIZONTAL_RATIO_MAX,
+      )
+      expect(maxAbsAfter, `${id}: el resto del cargador no supera al primer cuarto`).toBeGreaterThan(
+        maxAbsFirstQuarter,
+      )
+    }
+  })
+})

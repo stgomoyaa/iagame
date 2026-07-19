@@ -148,4 +148,19 @@ describe('el primer disparo de un cargador fresco no tiene retroceso apreciable'
       expect(Math.abs(state.pitchOffset), id).toBeLessThan(Math.max(totalClimb * 0.3, 0.01))
     }
   })
+
+  it('shotIndex 0 da un offset EXACTAMENTE cero, sin jitter: tap-firing tiene que ser preciso al pixel', () => {
+    // Más estricto que el test de arriba: no "chico", sino cero exacto. Es
+    // la propiedad puntual que pide la sección de retroceso estilo CS — el
+    // primer balazo de un cargador fresco no puede tener NINGÚN desvío, ni
+    // siquiera el ruido de jitter, o tirar un solo tiro de precisión deja de
+    // ser preciso al 100%.
+    for (const id of Object.keys(ARCHETYPES) as ArchetypeId[]) {
+      const archetype = ARCHETYPES[id]
+      const state = createRecoilState()
+      applyRecoilShot(state, archetype)
+      expect(state.pitchOffset, id).toBe(0)
+      expect(state.yawOffset, id).toBe(0)
+    }
+  })
 })
