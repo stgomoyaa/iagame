@@ -5,6 +5,19 @@ import { buildArenaGeometry } from '@/game/map/mesh'
 export interface GameRenderer {
   readonly camera: PerspectiveCamera
   readonly renderer: WebGLRenderer
+  /**
+   * Contexto WebGL2 crudo, para medir GPU real vía
+   * EXT_disjoint_timer_query_webgl2 (ver engine/gpu-timer.ts). Three no
+   * expone ningún timestamp de GPU en WebGLRenderer — sólo en su renderer
+   * WebGPU, que este proyecto no usa — así que hay que hablarle directo al
+   * contexto. Se expone acá (y no en stats.ts o gpu-timer.ts) porque este es
+   * uno de los tres únicos archivos de src/game autorizados a importar three
+   * (ver architecture.test.ts): WebGL2RenderingContext es un global del DOM,
+   * no un tipo de Three, así que exponerlo no rompe ese límite.
+   * null si el contexto de este WebGLRenderer no resultó ser WebGL2 (no
+   * debería pasar con esta configuración, pero no se fuerza con un cast).
+   */
+  readonly gl: WebGL2RenderingContext | null
   render(): void
   resize(width: number, height: number): void
   dispose(): void
@@ -38,9 +51,13 @@ export function createRenderer(canvas: HTMLCanvasElement): GameRenderer {
   arena.updateMatrix()
   scene.add(arena)
 
+  const rawContext = renderer.getContext()
+  const gl = rawContext instanceof WebGL2RenderingContext ? rawContext : null
+
   return {
     camera,
     renderer,
+    gl,
     render(): void {
       renderer.clear()
       renderer.render(scene, camera)

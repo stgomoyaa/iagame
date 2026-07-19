@@ -1,5 +1,6 @@
 import { MAX_FRAME_DT } from '@/game/engine/constants'
 import { createFixedLoop } from '@/game/engine/fixed-loop'
+import { createGpuTimer } from '@/game/engine/gpu-timer'
 import { createInputSystem } from '@/game/engine/input'
 import { createRenderer } from '@/game/engine/renderer'
 import { createStatsTracker, runBenchmark } from '@/game/engine/stats'
@@ -43,6 +44,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   const gfx = createRenderer(canvas)
   const viewmodel = createViewmodelRenderer(gfx.renderer)
   const stats = createStatsTracker()
+  const gpuTimer = createGpuTimer(gfx.gl)
   const tuning = createTuningPanel()
   const input = createInputSystem(() => SENSITIVITY)
   const loop = createFixedLoop()
@@ -118,6 +120,12 @@ export function createGame(canvas: HTMLCanvasElement): Game {
 
     gfx.camera.rotation.set(input.pitch, input.player.yaw, 0, 'YXZ')
 
+    // El timer de GPU bracketea desde acá (antes del clear + render del
+    // mundo) hasta después de la pasada del viewmodel, más abajo: esas dos
+    // pasadas y sus dos clears son exactamente lo que la auditoría de
+    // performance midió como "costo de GPU de un rAF completo".
+    gpuTimer.beginFrame()
+
     gfx.renderer.info.reset()
     gfx.render()
     // El WebGLRenderer resetea renderer.info en cada llamada a render()
@@ -149,13 +157,17 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       viewmodel.weapon.position.set(vmOut.px, vmOut.py, -vmOut.pz)
       viewmodel.weapon.rotation.set(vmOut.rx, vmOut.ry, vmOut.rz)
       viewmodel.render(gfx.camera)
+      gpuTimer.endFrame()
 
       stats.endFrame(
         worldCalls + gfx.renderer.info.render.calls,
         worldTriangles + gfx.renderer.info.render.triangles,
+        gpuTimer.stats.gpuMs,
+        gpuTimer.stats.peakMs,
       )
     } else {
-      stats.endFrame(worldCalls, worldTriangles)
+      gpuTimer.endFrame()
+      stats.endFrame(worldCalls, worldTriangles, gpuTimer.stats.gpuMs, gpuTimer.stats.peakMs)
     }
   }
 
