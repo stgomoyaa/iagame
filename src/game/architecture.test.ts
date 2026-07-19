@@ -25,6 +25,13 @@ const PUEDEN_USAR_THREE = [
   // targets/targets.ts. Único archivo nuevo de esta tarea con permiso de
   // importar three -- mismo motivo que targets/renderer.ts.
   'bots/renderer.ts',
+  // Skins (fase 3, sección 7): el generador (skins/generator.ts y todo lo
+  // que cuelga de él) es matemática pura y no importa three. Estos dos son
+  // el borde contra la escena, mismo criterio que map/mesh.ts:
+  // material.ts inyecta el shader de skin sobre el material del arma, y
+  // preview.ts dibuja el arma en la armería.
+  'skins/material.ts',
+  'skins/preview.ts',
 ]
 
 function archivosTs(dir: string, base = ''): string[] {

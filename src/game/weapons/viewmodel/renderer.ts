@@ -27,6 +27,8 @@ import {
   type WebGLRenderer,
 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { createSkinHandle, type SkinHandle } from '@/game/skins/material'
+import type { Skin } from '@/game/skins/generator'
 import { getWeaponVisual } from '@/game/weapons/registry'
 
 /** FOV propio del viewmodel, independiente del de mundo (90° en
@@ -61,6 +63,18 @@ export interface ViewmodelRenderer {
   readonly attachedSlug: string | null
 
   /**
+   * Skin equipada, o null para el aspecto de fábrica del GLB. Se aplica al
+   * cambiar de arma o de skin, nunca por frame: el trabajo por frame es
+   * escribir un uniform de tiempo (ver `render`), y eso es una asignación de
+   * número (sección 2 del spec: cero asignaciones por frame).
+   *
+   * Se guarda acá y no en el handle de la malla porque una malla puede no
+   * estar cargada todavía cuando el jugador equipa la skin: al adjuntarse,
+   * `attach` se la aplica.
+   */
+  setSkin(skin: Skin | null): void
+
+  /**
    * Segunda pasada de render: copia la orientación de la cámara del mundo,
    * limpia sólo profundidad y dibuja encima. No devuelve estadísticas para
    * no asignar un objeto por frame: `renderer.info.render` ya queda
@@ -68,7 +82,7 @@ export interface ViewmodelRenderer {
    * es responsabilidad del llamador (game.ts) leerlo y sumarlo al del
    * mundo antes de que la próxima pasada lo resetee.
    */
-  render(worldCamera: PerspectiveCamera): void
+  render(worldCamera: PerspectiveCamera, timeSeconds?: number): void
   resize(width: number, height: number): void
   dispose(): void
   /**
@@ -155,6 +169,11 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
 
   const loader = new GLTFLoader()
   const cache = new Map<string, Mesh>()
+  // Un handle de skin por malla cacheada, creado una sola vez al cargar el
+  // GLB: es ahí donde se parcha el shader (skins/material.ts). Volver a un
+  // arma ya cargada no recompila nada, sólo vuelve a escribir uniforms.
+  const skinHandles = new Map<string, SkinHandle>()
+  let currentSkin: Skin | null = null
   // requestedSlug: la última arma pedida por setWeaponSlug, gane o pierda su
   // carga. attachedSlug: la última arma efectivamente puesta en modelRoot —
   // render() lee ÉSTA para elegir rotationOffset/scaleAdjust, nunca
@@ -180,6 +199,7 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
     modelRoot.add(mesh)
     attachedSlug = slug
     lastLoadError = null
+    skinHandles.get(slug)?.setSkin(currentSkin)
   }
 
   function failLoad(slug: string, message: string, err?: unknown): void {
@@ -207,6 +227,8 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
           return
         }
         ensureVertexColors(mesh)
+        const handle = createSkinHandle(mesh)
+        if (handle) skinHandles.set(slug, handle)
         cache.set(slug, mesh)
         if (requestedSlug === slug) attach(slug, mesh)
       })
@@ -227,10 +249,18 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
       else load(slug)
     },
 
-    render(worldCamera: PerspectiveCamera): void {
+    setSkin(skin: Skin | null): void {
+      currentSkin = skin
+      if (attachedSlug) skinHandles.get(attachedSlug)?.setSkin(skin)
+    },
+
+    render(worldCamera: PerspectiveCamera, timeSeconds = 0): void {
       camera.rotation.copy(worldCamera.rotation)
 
       if (attachedSlug) {
+        // Único trabajo por frame de todo el sistema de skins: escribir un
+        // número en un uniform ya existente.
+        skinHandles.get(attachedSlug)?.setTime(timeSeconds)
         const visual = getWeaponVisual(attachedSlug)
         modelRoot.rotation.set(
           visual.rotationOffset.rx,
@@ -252,6 +282,7 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
     dispose(): void {
       for (const mesh of cache.values()) disposeModel(mesh)
       cache.clear()
+      skinHandles.clear()
     },
 
     get attachedSlug(): string | null {

@@ -26,6 +26,8 @@ import { BOTS } from '@/game/bots/tuning'
 import { raycastMap, setRaycastMap } from '@/game/combat/hitscan'
 import type { Hitbox } from '@/game/combat/hitboxes'
 import { ARCHETYPES, type ArchetypeId } from '@/game/weapons/archetypes'
+import { LOADOUT_SLOTS, skinForSlot, type LoadoutSlot } from '@/game/progression/loadout'
+import { accountLevel, createProgressStore } from '@/game/progression/store'
 import { getWeaponVisual, weaponIndex } from '@/game/weapons/registry'
 import { createRigWeapon, syncRigWeapon } from '@/game/weapons/viewmodel/adapt'
 import { createViewmodelRenderer } from '@/game/weapons/viewmodel/renderer'
@@ -376,9 +378,33 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   }
   const shotResult = createShotResult()
 
-  const firstSlug = weaponIndex()[0]?.slug ?? null
-  let currentSlug = firstSlug
-  if (currentSlug) viewmodel.setWeaponSlug(currentSlug)
+  // Loadout del jugador (fase 3, sección 6 del spec: un arma primaria y una
+  // secundaria). Se lee UNA vez al crear la partida, no por frame: la
+  // armería es una pantalla aparte y no se puede cambiar el loadout con la
+  // partida corriendo. La ranura arranca en la primaria, así que el arma con
+  // la que el jugador spawnea es la que eligió.
+  const progressStore = createProgressStore()
+  const progress = progressStore.load()
+  const nivel = accountLevel(progress)
+  const loadout = progress.loadout
+
+  let currentSlot: LoadoutSlot = 'primary'
+  let currentSlug = loadout.primary.slug ?? loadout.secondary.slug ?? weaponIndex()[0]?.slug ?? null
+
+  function equipSlot(slot: LoadoutSlot): void {
+    const slug = loadout[slot].slug
+    if (slug === null || slug === currentSlug) return
+    currentSlot = slot
+    currentSlug = slug
+    viewmodel.setSkin(skinForSlot(loadout, slot))
+    viewmodel.setWeaponSlug(slug)
+    startDraw(vmState, rigWeapon)
+  }
+
+  if (currentSlug) {
+    viewmodel.setSkin(skinForSlot(loadout, currentSlot))
+    viewmodel.setWeaponSlug(currentSlug)
+  }
 
   // El botón derecho del panel de tuning sostiene ADS como acción de prueba
   // (sección 6.4 del spec); el botón izquierdo sostiene disparo (fase 1),
@@ -513,6 +539,15 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   // justo lo que hay que poder verificar a mano en el navegador (spec,
   // "confirmá que la viñeta apunta al lado correcto"). J resetea la vida
   // para no tener que recargar la página entre pruebas.
+  // Cambio de ranura del loadout: 1 primaria, 2 secundaria (fase 3, sección
+  // 6 del spec). Va acá y no en engine/input.ts porque no es un estado
+  // sostenido que el motor lea cada tick: es un evento puntual que cambia
+  // qué arma está equipada, igual que la selección del panel de tuning.
+  function onLoadoutKeyDown(e: KeyboardEvent): void {
+    if (e.code === 'Digit1') equipSlot(LOADOUT_SLOTS[0])
+    else if (e.code === 'Digit2') equipSlot(LOADOUT_SLOTS[1])
+  }
+
   function onDebugKeyDown(e: KeyboardEvent): void {
     if (!debugModeEnabled()) return
     if (e.code === 'KeyH') {
@@ -908,7 +943,10 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       // se tocan.
       viewmodel.weapon.position.set(vmOut.px, vmOut.py, -vmOut.pz)
       viewmodel.weapon.rotation.set(vmOut.rx, vmOut.ry, vmOut.rz)
-      viewmodel.render(gfx.camera)
+      // now/1000: el reloj de las animaciones de skin (pulso, flujo, ciclo
+      // de tono). Se pasa el timestamp del rAF en vez de acumular un
+      // contador propio para no sumar estado que se pueda desincronizar.
+      viewmodel.render(gfx.camera, now / 1000)
       gpuTimer.endFrame()
 
       stats.endFrame(
@@ -949,6 +987,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       window.addEventListener('resize', onResize)
       canvas.addEventListener('click', onCanvasClickForAudio)
       window.addEventListener('keydown', onDebugKeyDown)
+      window.addEventListener('keydown', onLoadoutKeyDown)
       // 'webglcontextlost'/'webglcontextrestored' no están en el
       // HTMLElementEventMap de lib.dom.d.ts (son del spec de WebGL, no de
       // HTML): TS los acepta igual por el overload genérico de
@@ -975,6 +1014,19 @@ export function createGame(canvas: HTMLCanvasElement): Game {
           archetypeId: combatArchetypeId,
           reloading: vmState.reloading,
           reloadHeld: input.reloadHeld,
+          // Loadout y skin equipada (fase 3): para verificar sin pointer
+          // lock que el arma con la que se spawnea es la elegida en la
+          // armería, y que la skin persistida es la que se aplicó.
+          loadout: {
+            nivel,
+            slot: currentSlot,
+            slug: currentSlug,
+            attachedSlug: viewmodel.attachedSlug,
+            primary: { ...loadout.primary },
+            secondary: { ...loadout.secondary },
+            skin: skinForSlot(loadout, currentSlot)?.name ?? null,
+            skinRareza: skinForSlot(loadout, currentSlot)?.rarity ?? null,
+          },
           // Último disparo del JUGADOR resuelto (sección "Build" de la
           // tarea): a qué le pegó de verdad, para verificar el combate
           // contra participantes de partida sin depender sólo de lo visual
@@ -1083,6 +1135,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       window.removeEventListener('resize', onResize)
       canvas.removeEventListener('click', onCanvasClickForAudio)
       window.removeEventListener('keydown', onDebugKeyDown)
+      window.removeEventListener('keydown', onLoadoutKeyDown)
       canvas.removeEventListener('webglcontextlost', onContextLost, false)
       canvas.removeEventListener('webglcontextrestored', onContextRestored, false)
       input.detach()

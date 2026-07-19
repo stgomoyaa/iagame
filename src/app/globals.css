@@ -24,3 +24,236 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ---------------------------------------------------------------------------
+   Armería (fase 3). Pantalla de menú, no HUD de partida: no compite con el
+   presupuesto de frame del motor.
+
+   Los tokens viven acá y no como clases sueltas porque la armería tiene tres
+   columnas que comparten el mismo lenguaje de líneas, y repetir los valores
+   en utilidades arbitrarias los deja desincronizados al primer ajuste. El
+   fondo es el mismo #05070b del resto del juego, a propósito: la armería y
+   la partida son la misma aplicación.
+   ------------------------------------------------------------------------ */
+.arm {
+  --arm-fondo: #05070b;
+  --arm-panel: oklch(0.168 0.014 255);
+  --arm-panel-alto: oklch(0.205 0.016 255);
+  --arm-linea: oklch(0.30 0.015 255);
+  --arm-linea-tenue: oklch(0.235 0.013 255);
+  --arm-texto: oklch(0.925 0.006 255);
+  --arm-tenue: oklch(0.66 0.012 255);
+  --arm-apagado: oklch(0.48 0.012 255);
+  --arm-acento: oklch(0.82 0.145 195);
+
+  --arm-space-xs: 0.375rem;
+  --arm-space-sm: 0.625rem;
+  --arm-space-md: 1rem;
+  --arm-space-lg: 1.5rem;
+  --arm-space-xl: 2.25rem;
+
+  --arm-chaflan: 14px;
+
+  background: var(--arm-fondo);
+  color: var(--arm-texto);
+  min-height: 100%;
+  flex: 1;
+}
+
+/* Chaflán: la firma geométrica de la pantalla. Corta la esquina superior
+   derecha y la inferior izquierda, así los paneles no son rectángulos
+   redondeados genéricos. */
+.arm-chaflan {
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--arm-chaflan)) 0,
+    100% var(--arm-chaflan),
+    100% 100%,
+    var(--arm-chaflan) 100%,
+    0 calc(100% - var(--arm-chaflan))
+  );
+}
+
+.arm-mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.arm-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 20rem) minmax(0, 1fr) minmax(0, 17rem);
+  /* start y no stretch: las tres columnas tienen alturas propias y con
+     stretch la vitrina se estira detrás de la lista dejando un hueco en
+     blanco bajo las estadísticas. */
+  align-items: start;
+  gap: var(--arm-space-md);
+}
+
+@media (max-width: 1100px) {
+  .arm-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.arm-panel {
+  background: var(--arm-panel);
+  border: 1px solid var(--arm-linea-tenue);
+}
+
+/* Fila de arma. Sin sombra ni card flotante: la selección se marca con un
+   riel de acento y un cambio de tono, que es lo que hace un HUD. */
+.arm-fila {
+  display: grid;
+  grid-template-columns: 3px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--arm-space-sm);
+  width: 100%;
+  padding: var(--arm-space-xs) var(--arm-space-sm);
+  border-bottom: 1px solid var(--arm-linea-tenue);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.arm-fila::before {
+  content: '';
+  display: block;
+  align-self: stretch;
+  background: transparent;
+}
+
+.arm-fila:hover:not(:disabled) {
+  background: var(--arm-panel-alto);
+}
+
+.arm-fila:focus-visible {
+  outline: 1px solid var(--arm-acento);
+  outline-offset: -1px;
+}
+
+.arm-fila:active:not(:disabled) {
+  background: color-mix(in oklch, var(--arm-panel-alto), var(--arm-acento) 8%);
+}
+
+.arm-fila:disabled {
+  cursor: not-allowed;
+  color: var(--arm-apagado);
+}
+
+.arm-fila[aria-pressed='true'] {
+  background: var(--arm-panel-alto);
+}
+
+.arm-fila[aria-pressed='true']::before {
+  background: var(--arm-acento);
+}
+
+/* Barra de estadística segmentada: doce muescas, no una barra continua.
+   Se lee como un instrumento y no como un progress bar de formulario. */
+.arm-barra {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 2px;
+  height: 0.5rem;
+}
+
+.arm-muesca {
+  background: var(--arm-linea-tenue);
+}
+
+.arm-muesca[data-on='1'] {
+  background: var(--arm-acento);
+}
+
+.arm-chip {
+  display: grid;
+  grid-template-columns: 3px minmax(0, 1fr);
+  gap: var(--arm-space-sm);
+  width: 100%;
+  padding: var(--arm-space-xs) var(--arm-space-sm);
+  border: 1px solid var(--arm-linea-tenue);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 140ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-color 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.arm-chip:hover {
+  background: var(--arm-panel-alto);
+}
+
+.arm-chip:focus-visible {
+  outline: 1px solid var(--arm-acento);
+  outline-offset: -1px;
+}
+
+.arm-chip[aria-pressed='true'] {
+  background: var(--arm-panel-alto);
+  border-color: var(--arm-rareza, var(--arm-linea));
+}
+
+.arm-chip::before {
+  content: '';
+  display: block;
+  align-self: stretch;
+  background: var(--arm-rareza, var(--arm-linea-tenue));
+}
+
+.arm-tab {
+  padding: var(--arm-space-xs) var(--arm-space-md);
+  border: 1px solid var(--arm-linea-tenue);
+  background: transparent;
+  color: var(--arm-tenue);
+  cursor: pointer;
+  transition:
+    color 140ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-color 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.arm-tab:hover {
+  color: var(--arm-texto);
+}
+
+.arm-tab:focus-visible {
+  outline: 1px solid var(--arm-acento);
+  outline-offset: -1px;
+}
+
+.arm-tab[aria-selected='true'] {
+  color: var(--arm-texto);
+  border-color: var(--arm-acento);
+}
+
+.arm-enlace {
+  color: var(--arm-acento);
+  border-bottom: 1px solid color-mix(in oklch, var(--arm-acento), transparent 60%);
+  transition: border-color 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.arm-enlace:hover,
+.arm-enlace:focus-visible {
+  border-bottom-color: var(--arm-acento);
+  outline: none;
+}
+
+.arm-lista {
+  max-height: 60vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--arm-linea) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arm-fila,
+  .arm-chip,
+  .arm-tab,
+  .arm-enlace {
+    transition: none;
+  }
+}
