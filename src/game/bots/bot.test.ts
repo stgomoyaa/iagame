@@ -374,3 +374,201 @@ describe('invariantes de movimiento de bots bajo fuzz (mismas reglas físicas qu
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Idle patrulla (no se queda clavado) y Enfrentar strafea (no dispara plantado).
+// Los dos comportamientos que esta tarea agrega, medidos sobre la arena real.
+// ---------------------------------------------------------------------------
+
+describe('Idle caza en vez de esperar', () => {
+  it('un bot en Idle sin ningún contacto recorre metros reales del mapa', () => {
+    const grid = buildNavGrid(ARENA, 1, 1.8)
+    const world = createBotWorld(ARENA.boxes, raycastMap, grid)
+    const bot = createBotState(vec3(-25, 0.1, -25), 0.5, ARCHETYPE, 11)
+    // Objetivo fuera de todo alcance de visión y audición: el bot no tiene
+    // ni va a tener contacto en toda la corrida -- es el escenario exacto
+    // que antes lo congelaba.
+    world.targetEye.x = 1e6
+    world.targetEye.y = 1e6
+    world.targetEye.z = 1e6
+
+    const inicioX = bot.player.position.x
+    const inicioZ = bot.player.position.z
+
+    for (let tick = 0; tick < 1200; tick++) {
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+    }
+
+    expect(bot.fsm.current).toBe('idle')
+    const recorrido = Math.hypot(bot.player.position.x - inicioX, bot.player.position.z - inicioZ)
+    expect(recorrido, `un bot en Idle se movió sólo ${recorrido.toFixed(1)}m`).toBeGreaterThan(10)
+  })
+
+  it('sin contacto en 60s de simulación, dos bots en esquinas opuestas terminan viéndose', () => {
+    const grid = buildNavGrid(ARENA, 1, 1.8)
+    const world = createBotWorld(ARENA.boxes, raycastMap, grid)
+    const a = createBotState(vec3(-25, 0.1, -25), 0.5, ARCHETYPE, 21)
+    const b = createBotState(vec3(25, 0.1, 25), 0.5, ARCHETYPE, 22)
+    const bots = [a, b]
+
+    let seVieron = false
+    // 60s a 128Hz. Cada bot "ve" al otro: se reescribe targetEye antes de
+    // cada think, igual que hace match/squad.ts en una partida real.
+    for (let tick = 0; tick < 7680 && !seVieron; tick++) {
+      world.simTimeS += TICK_DT
+      for (const bot of bots) {
+        const otro = bot === a ? b : a
+        world.targetEye.x = otro.player.position.x
+        world.targetEye.y = otro.player.position.y + otro.player.eyeHeight
+        world.targetEye.z = otro.player.position.z
+        stepAllBotsThink([bot], world, TICK_DT)
+      }
+      stepAllBotsMotor(bots, world, TICK_DT)
+      if (a.fsm.current === 'engage' || b.fsm.current === 'engage') seVieron = true
+    }
+
+    expect(seVieron, 'dos bots patrullando no se encontraron en 60s').toBe(true)
+  })
+
+  it('al entrar en Idle con un disparo reciente en la memoria, va a mirar dónde sonó', () => {
+    const grid = buildNavGrid(ARENA, 1, 1.8)
+    const world = createBotWorld(ARENA.boxes, raycastMap, grid)
+    const bot = createBotState(vec3(-20, 0.1, -20), 0.5, ARCHETYPE, 31)
+    world.targetEye.x = 1e6
+    world.targetEye.y = 1e6
+    world.targetEye.z = 1e6
+
+    // Un disparo dentro del radio de audición, en dirección al centro.
+    world.simTimeS = 1
+    registerGunshot(world.shots, vec3(-8, 1.6, -8), world.simTimeS)
+    stepBotThink(bot, world, 1 / BOTS.aiTickHz)
+    expect(bot.fsm.current).toBe('rotate')
+
+    // Se deja vencer la sospecha (suspicionMemoryS) sin reforzarla: cae a
+    // Idle, y ahí es donde el bot decide ir a mirar el lugar del disparo.
+    let distanciaMinima = Infinity
+    for (let tick = 0; tick < 2560; tick++) {
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+      const d = Math.hypot(bot.player.position.x - -8, bot.player.position.z - -8)
+      if (d < distanciaMinima) distanciaMinima = d
+    }
+
+    expect(distanciaMinima, `nunca se acercó al disparo (mínimo ${distanciaMinima.toFixed(1)}m)`).toBeLessThan(3)
+  })
+
+  it('la patrulla no usa posiciones vivas de enemigos: mover el objetivo lejos no cambia el recorrido', () => {
+    function correr(objetivo: { x: number; z: number }): number[] {
+      const grid = buildNavGrid(ARENA, 1, 1.8)
+      const world = createBotWorld(ARENA.boxes, raycastMap, grid)
+      const bot = createBotState(vec3(-25, 0.1, -25), 0.5, ARCHETYPE, 41)
+      // Los dos objetivos están fuera del rango de visión y audición del
+      // bot: si la patrulla fuera honesta, el recorrido tiene que ser
+      // idéntico en las dos corridas.
+      world.targetEye.y = 1.6
+      const camino: number[] = []
+      for (let tick = 0; tick < 1200; tick++) {
+        world.simTimeS += TICK_DT
+        world.targetEye.x = objetivo.x
+        world.targetEye.z = objetivo.z
+        stepAllBotsThink([bot], world, TICK_DT)
+        stepAllBotsMotor([bot], world, TICK_DT)
+        if (tick % 100 === 0) camino.push(Math.round(bot.player.position.x * 100), Math.round(bot.player.position.z * 100))
+      }
+      return camino
+    }
+
+    expect(correr({ x: 1e6, z: 1e6 })).toEqual(correr({ x: -1e6, z: -1e6 }))
+  })
+})
+
+describe('Enfrentar strafea en vez de disparar plantado', () => {
+  function mundoDeDuelo() {
+    const grid = buildNavGrid(ARENA, 1, 1.8)
+    const world = createBotWorld(ARENA.boxes, raycastMap, grid)
+    // Junto a la cobertura baja del carril izquierdo (map/arena.ts), con
+    // línea de vista limpia hacia el objetivo.
+    const bot = createBotState(vec3(-16, 0.1, 6), 0.5, ARCHETYPE, 51)
+    bot.aimMotor.yaw = 0
+    world.targetEye.x = -16
+    world.targetEye.y = 1.6
+    world.targetEye.z = -6
+    return { world, bot }
+  }
+
+  it('un bot en Enfrentar se mueve lateralmente, no se queda clavado', () => {
+    const { world, bot } = mundoDeDuelo()
+    const inicioX = bot.player.position.x
+    const inicioZ = bot.player.position.z
+
+    let lateralMaximo = 0
+    for (let tick = 0; tick < 640; tick++) {
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+      if (bot.fsm.current !== 'engage') continue
+      const d = Math.hypot(bot.player.position.x - inicioX, bot.player.position.z - inicioZ)
+      if (d > lateralMaximo) lateralMaximo = d
+    }
+
+    expect(bot.fsm.current).toBe('engage')
+    expect(lateralMaximo, `el bot en Enfrentar se movió ${lateralMaximo.toFixed(2)}m`).toBeGreaterThan(0.8)
+  })
+
+  it('el strafe no se aleja del punto donde entró en Enfrentar: busca ángulo, no emigra', () => {
+    const { world, bot } = mundoDeDuelo()
+
+    for (let tick = 0; tick < 1280; tick++) {
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+      if (bot.fsm.current !== 'engage') continue
+      const d = Math.hypot(
+        bot.player.position.x - bot.strafeAnchor.x,
+        bot.player.position.z - bot.strafeAnchor.z,
+      )
+      // Radio del ancla más el sondeo y un margen de un paso de física: el
+      // bot decide a 15Hz pero se mueve a 128Hz.
+      expect(d, `tick ${tick}: se alejó ${d.toFixed(2)}m del ancla`).toBeLessThan(
+        BOTS.engageStrafeRadiusM + BOTS.engageStrafeProbeM + 1,
+      )
+    }
+  })
+
+  it('el strafe no puede ir más rápido que el jugador: usa el mismo stepPlayer', () => {
+    const { world, bot } = mundoDeDuelo()
+    for (let tick = 0; tick < 640; tick++) {
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+      if (bot.fsm.current !== 'engage') continue
+      expect(bot.input.sprint, 'un bot strafeando en combate no esprinta').toBe(false)
+      expect(lengthHorizontal(bot.player.velocity)).toBeLessThanOrEqual(MOVEMENT.walkSpeed + 0.5)
+    }
+  })
+
+  it('sin terreno lateral válido a ningún lado, el sentido queda en 0 (dispara plantado antes que salir a campo abierto)', () => {
+    const grid = buildNavGrid(ARENA, 1, 1.8)
+    const world = createBotWorld(ARENA.boxes, raycastMap, grid)
+    // Metido en la esquina del mapa, mirando en diagonal hacia afuera: los
+    // dos lados dan contra muro perimetral.
+    const bot = createBotState(vec3(-28.5, 0.1, -28.5), 0.5, ARCHETYPE, 61)
+    bot.aimMotor.yaw = Math.PI * 0.75
+    world.targetEye.x = -28.5
+    world.targetEye.y = 1.6
+    world.targetEye.z = -28.5
+    bot.fsm.current = 'engage'
+    bot.strafeAnchor.x = bot.player.position.x
+    bot.strafeAnchor.z = bot.player.position.z
+
+    for (let tick = 0; tick < 60; tick++) {
+      stepBotThink(bot, world, 1 / BOTS.aiTickHz)
+    }
+
+    expect(Math.abs(bot.player.position.x)).toBeLessThan(30)
+    expect(Math.abs(bot.player.position.z)).toBeLessThan(30)
+  })
+})
