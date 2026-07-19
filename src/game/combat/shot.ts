@@ -26,10 +26,19 @@ export interface ShotResult {
   distance: number
   damage: number
   part: BodyPart | 'none'
+  /**
+   * Índice de la diana golpeada (Hitbox.owner, ver combat/hitboxes.ts),
+   * o -1 si el impacto fue contra el mapa o no hubo impacto. Hasta la
+   * sección 6 del spec (dianas) `owner` viajaba como dato opaco -- nadie lo
+   * leía todavía, TARGET_HITBOXES estaba vacío en game.ts -- así que no
+   * hacía falta exponerlo acá. Ahora que las dianas existen (targets/), lo
+   * necesitan para saber A CUÁL de ellas restarle vida.
+   */
+  owner: number
 }
 
 export function createShotResult(): ShotResult {
-  return { hit: false, distance: 0, damage: 0, part: 'none' }
+  return { hit: false, distance: 0, damage: 0, part: 'none', owner: -1 }
 }
 
 // Scratch preasignados a nivel de módulo: fireShot() se llama por disparo
@@ -84,15 +93,18 @@ export function fireShot(
     out.distance = scratchHitboxHit.distance
     out.part = part
     out.damage = damageAtRange(archetype, out.distance) * HITBOX_MULTIPLIER[part]
+    out.owner = scratchHitboxHit.owner
   } else if (scratchMapHit.hit) {
     out.hit = true
     out.distance = scratchMapHit.distance
     out.part = 'none'
     out.damage = 0
+    out.owner = -1
   } else {
     out.hit = false
     out.distance = MAX_SHOT_DISTANCE
     out.part = 'none'
     out.damage = 0
+    out.owner = -1
   }
 }

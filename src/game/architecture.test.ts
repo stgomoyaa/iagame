@@ -15,6 +15,11 @@ const PUEDEN_USAR_THREE = [
   // este es el único punto de contacto (ver el comentario de cabecera de
   // combat/hitscan.ts).
   'combat/hitscan.ts',
+  // Dianas (fase 1, sección 6): la lógica (targets/targets.ts) es
+  // matemática pura, igual que combat/hitboxes.ts; este archivo es el
+  // único punto de contacto con la escena real para dibujarlas (mismo
+  // motivo que map/mesh.ts).
+  'targets/renderer.ts',
 ]
 
 function archivosTs(dir: string, base = ''): string[] {

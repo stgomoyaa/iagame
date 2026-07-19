@@ -1,0 +1,98 @@
+/**
+ * Sonido de hitmarker, 100% procedural con Web Audio (sección 5 del spec:
+ * "no bajar samples"): un oscilador más una envolvente de ganancia
+ * reproduce un click convincente a costo de descarga cero y totalmente
+ * tuneable (ver FEEDBACK.hitmarkerAudio). Coherente con el sesgo del
+ * proyecto por generación procedural (el viewmodel anima por código, las
+ * skins salen de una seed) — los samples de disparo reales quedan fuera de
+ * alcance a propósito (sección "fuera de alcance" del spec).
+ *
+ * Política de autoplay del navegador: `AudioContext` no se crea hasta
+ * `unlock()`, y `unlock()` sólo tiene efecto real si corre dentro de un
+ * gesto de usuario (game.ts la cuelga del primer click sobre el canvas).
+ * Cualquier fallo -- contexto bloqueado, extensión inexistente, un throw
+ * de la API -- degrada en silencio: `playHitmarker` nunca tira, sólo no
+ * suena. Esto no se puede testear con Vitest (entorno 'node', sin Web
+ * Audio real, ver vitest.config.ts) — por eso este archivo es puramente
+ * imperativo, sin funciones puras que valga la pena separar aparte.
+ */
+
+import type { HitmarkerTier } from '@/game/feedback/hitmarkers'
+import { FEEDBACK } from '@/game/feedback/tuning'
+
+export interface FeedbackAudio {
+  /** Crea (si hace falta) y reanuda el AudioContext. Llamar sólo desde
+   *  dentro de un handler de gesto de usuario (click, keydown). No-op si ya
+   *  está desbloqueado o si Web Audio no está disponible. */
+  unlock(): void
+  /** Reproduce el click del nivel pedido. No-op silencioso si el contexto
+   *  no está listo (bloqueado por autoplay, no soportado, no desbloqueado
+   *  todavía). */
+  playHitmarker(tier: HitmarkerTier): void
+}
+
+interface AudioContextCtor {
+  new (): AudioContext
+}
+
+function resolveAudioContextCtor(): AudioContextCtor | null {
+  if (typeof window === 'undefined') return null
+  const w = window as unknown as {
+    AudioContext?: AudioContextCtor
+    webkitAudioContext?: AudioContextCtor
+  }
+  return w.AudioContext ?? w.webkitAudioContext ?? null
+}
+
+export function createFeedbackAudio(): FeedbackAudio {
+  let ctx: AudioContext | null = null
+  let unlocked = false
+
+  return {
+    unlock(): void {
+      if (unlocked) return
+      unlocked = true
+
+      try {
+        if (!ctx) {
+          const Ctor = resolveAudioContextCtor()
+          if (!Ctor) return
+          ctx = new Ctor()
+        }
+        if (ctx.state === 'suspended') {
+          // resume() devuelve una promesa; un rechazo (bloqueado por el
+          // navegador) no debe volverse un error no manejado.
+          ctx.resume().catch(() => {})
+        }
+      } catch {
+        ctx = null
+      }
+    },
+
+    playHitmarker(tier: HitmarkerTier): void {
+      const c = ctx
+      if (!c || c.state !== 'running') return
+
+      try {
+        const spec = FEEDBACK.hitmarkerAudio[tier]
+        const osc = c.createOscillator()
+        const gain = c.createGain()
+
+        osc.type = spec.type
+        const now = c.currentTime
+        osc.frequency.setValueAtTime(spec.freqStart, now)
+        osc.frequency.exponentialRampToValueAtTime(Math.max(1, spec.freqEnd), now + spec.durationS)
+
+        gain.gain.setValueAtTime(spec.gain, now)
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + spec.durationS)
+
+        osc.connect(gain)
+        gain.connect(c.destination)
+        osc.start(now)
+        osc.stop(now + spec.durationS)
+      } catch {
+        // Degrada en silencio: nunca tirar desde el camino de feedback.
+      }
+    },
+  }
+}

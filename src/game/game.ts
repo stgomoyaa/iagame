@@ -15,6 +15,7 @@ import { createViewmodelRenderer } from '@/game/weapons/viewmodel/renderer'
 import {
   createViewmodelState,
   easeInOutCubic,
+  fire,
   startDraw,
   startReload,
   stepViewmodel,
@@ -35,8 +36,23 @@ import {
   stepCombat,
   type CombatInput,
 } from '@/game/combat/combat'
-import { createShotResult } from '@/game/combat/shot'
-import type { Hitbox } from '@/game/combat/hitboxes'
+import { computeForward, createShotResult } from '@/game/combat/shot'
+import { vec3 } from '@/game/math/vec3'
+import type { ScreenPoint } from '@/game/engine/renderer'
+import { applyHit, createDefaultTargetDefs, createTargets, stepTargets } from '@/game/targets/targets'
+import { createTargetsRenderer } from '@/game/targets/renderer'
+import { createFeedbackAudio } from '@/game/feedback/audio'
+import { createFeedbackOverlay } from '@/game/feedback/overlay'
+import {
+  createFeedbackState,
+  onDamageTaken,
+  onHitConfirmed,
+  onShotFired,
+  stepFeedback,
+} from '@/game/feedback/feedback'
+import { directionYaw, vignetteBearing } from '@/game/feedback/vignette'
+import { resetPlayerHealth } from '@/game/feedback/health-vfx'
+import { FEEDBACK } from '@/game/feedback/tuning'
 
 export interface Game {
   start(): void
@@ -52,15 +68,6 @@ export interface Game {
 
 const SENSITIVITY = 0.0022
 
-/**
- * Hitboxes de objetivos en la arena. Vacío en fase 1 a propósito: las
- * dianas (sección 6 del spec) son la próxima tarea, no ésta. El sistema de
- * combate (combat/shot.ts, combat/combat.ts) ya sabe qué hacer con una
- * lista no vacía — fase 2 sólo tiene que poblar esto, no tocar el resto del
- * camino de disparo.
- */
-const TARGET_HITBOXES: Hitbox[] = []
-
 export function createGame(canvas: HTMLCanvasElement): Game {
   const gfx = createRenderer(canvas)
   const viewmodel = createViewmodelRenderer(gfx.renderer)
@@ -69,6 +76,28 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   const tuning = createTuningPanel()
   const loop = createFixedLoop()
   const player = createPlayerState(ARENA.spawns[0])
+
+  // Dianas de la arena (sección 6 del spec de fase 1): hitboxes reales,
+  // estáticas y móviles, que stepCombat() consume tal cual consumía la
+  // lista vacía que había acá antes -- el sistema de combate no cambia,
+  // sólo deja de recibir un array vacío.
+  const targetsState = createTargets(createDefaultTargetDefs())
+  const targetsRenderer = createTargetsRenderer(gfx.scene, targetsState)
+
+  // Sistema de feedback (sección 5 del spec de fase 1): un solo estado
+  // preasignado, una capa de DOM imperativo para pintarlo y un controlador
+  // de audio aparte (Web Audio real, no cabe en un estado puro). Ver
+  // feedback/feedback.ts para por qué el audio queda afuera del estado.
+  const feedbackState = createFeedbackState()
+  const feedbackOverlay = createFeedbackOverlay()
+  const feedbackAudio = createFeedbackAudio()
+
+  // Scratch preasignado para proyectar el punto de impacto a pantalla
+  // (sección 5: número de daño flotante en el punto de impacto). Nunca se
+  // reasigna, sólo se muta dentro de frame().
+  const scratchForward = vec3()
+  const scratchHitPoint = vec3()
+  const scratchScreenPoint: ScreenPoint = { x: 0, y: 0, visible: false }
 
   // Multiplicador de sensibilidad por ADS (sección 4 del spec de fase 1):
   // se lee en vivo desde el callback de createInputSystem, así que tiene
@@ -224,6 +253,35 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   function onResize(): void {
     gfx.resize(canvas.clientWidth, canvas.clientHeight)
     viewmodel.resize(canvas.clientWidth, canvas.clientHeight)
+    feedbackOverlay.resize(canvas.clientWidth, canvas.clientHeight)
+  }
+
+  // Política de autoplay del navegador (sección 5 del spec: "la creación
+  // del audio context tiene que estar detrás de un gesto de usuario"):
+  // el primer click sobre el canvas desbloquea Web Audio. Un listener
+  // aparte del que ya registra engine/input.ts para pedir el pointer lock
+  // -- ambos escuchan 'click' sobre el mismo elemento sin pisarse.
+  function onCanvasClickForAudio(): void {
+    feedbackAudio.unlock()
+  }
+
+  // Hook de debug para ejercitar "al recibir daño" (viñeta direccional,
+  // shake, latido/desaturación) sin bots todavía (fase 2): detrás del mismo
+  // gate ?debug=1 que el resto de los hooks de este archivo, así que no
+  // existe en producción. H simula un golpe desde un punto fijo del mundo
+  // (+Z): girar en el juego mueve visiblemente el lado de la viñeta, que es
+  // justo lo que hay que poder verificar a mano en el navegador (spec,
+  // "confirmá que la viñeta apunta al lado correcto"). J resetea la vida
+  // para no tener que recargar la página entre pruebas.
+  function onDebugKeyDown(e: KeyboardEvent): void {
+    if (!debugModeEnabled()) return
+    if (e.code === 'KeyH') {
+      const sourceYaw = directionYaw(0, 1)
+      const bearing = vignetteBearing(input.player.yaw, sourceYaw)
+      onDamageTaken(feedbackState, bearing, 18)
+    } else if (e.code === 'KeyJ') {
+      resetPlayerHealth(feedbackState.health)
+    }
   }
 
   function frame(now: number): void {
@@ -234,6 +292,13 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     const frameDt = lastTime === 0 ? 0 : (now - lastTime) / 1000
     lastTime = now
     const dt = sanitizeDt(frameDt)
+
+    // Dianas (sección 6 del spec de fase 1): mueven, cuentan su flash de
+    // impacto y reaparecen. Corre siempre, haya o no un arma equipada
+    // todavía -- son parte de la arena, no del arma -- y ANTES de
+    // stepCombat() más abajo, para que el hitscan de este mismo frame vea
+    // las hitboxes ya en su posición de este frame, no la del anterior.
+    stepTargets(targetsState, dt)
 
     // Se lee una sola vez por frame: attachedSlug es el modelo
     // EFECTIVAMENTE en pantalla (ver weapons/viewmodel/renderer.ts), no el
@@ -286,6 +351,10 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     // en que salió la bala.
     let finalPitch = input.pitch
     let finalYaw = input.player.yaw
+    // Cuántos disparos resolvió stepCombat() este frame: se usa después de
+    // este bloque (feedback de disparo/impacto), así que vive afuera del
+    // `if` en vez de quedar atrapado en un `const` de bloque.
+    let shotsFired = 0
 
     if (shownSlug && archetype) {
       syncRigWeapon(rigWeapon, getWeaponVisual(shownSlug))
@@ -309,7 +378,17 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       combatInput.reloading = vmState.reloading
       combatInput.pitch = input.pitch
       combatInput.yaw = input.player.yaw
-      stepCombat(combatState, archetype, combatInput, TARGET_HITBOXES, dt, shotResult)
+      shotsFired = stepCombat(combatState, archetype, combatInput, targetsState.hitboxes, dt, shotResult)
+
+      // Culatazo del arma (weapons/viewmodel/rig.ts: fire(), sección "qué
+      // existe" del spec) + punch de cámara (feedback/camera-punch.ts,
+      // sección 5) por cada disparo real que salió este frame -- no por
+      // frame: un frame largo que se puso al día con más de un disparo
+      // (fire-control.ts) tiene que sentir cada uno, no sólo el último.
+      for (let i = 0; i < shotsFired; i++) {
+        fire(vmState, rigWeapon)
+        onShotFired(feedbackState)
+      }
 
       // R sostenida: startReload() es un no-op mientras ya hay una recarga
       // en curso (ver el comentario de esa función en rig.ts), así que
@@ -330,7 +409,52 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       sensMultiplier = adsSensitivityMultiplier(archetype.ads, easedAdsT)
     }
 
-    gfx.camera.rotation.set(finalPitch, finalYaw, 0, 'YXZ')
+    // Envejece hitmarkers/números de daño/viñetas/shake e integra el
+    // impulso de punch que onShotFired() acaba de sumar arriba (si hubo
+    // disparo este frame): tiene que correr ANTES de leer
+    // feedbackState.cameraPunch.roll de la línea de abajo, para que el
+    // punch de ESTE disparo ya se sienta en la rotación de ESTE frame, no
+    // en el siguiente. Corre siempre, con o sin arma equipada -- el shake
+    // y la viñeta de daño recibido no dependen de tener un arma en mano.
+    stepFeedback(feedbackState, dt)
+
+    gfx.camera.rotation.set(finalPitch, finalYaw, feedbackState.cameraPunch.roll, 'YXZ')
+
+    // Impacto confirmado contra una diana real (owner >= 0: golpear el
+    // mapa da owner -1, ver combat/shot.ts) -- hitmarker + número de daño +
+    // sonido + resta de vida a la diana (sección 5 y 6 del spec). Corre
+    // DESPUÉS de fijar la rotación de cámara de arriba: worldToScreen()
+    // necesita la orientación de ESTE frame para proyectar bien el punto de
+    // impacto, no la del frame anterior.
+    if (shotsFired > 0 && shotResult.hit && shotResult.part !== 'none' && shotResult.owner >= 0) {
+      const killed = applyHit(targetsState, shotResult.owner, shotResult.damage)
+
+      // Punto de impacto reconstruido: cámara + forward(pitch,yaw) * distancia.
+      // No es EXACTO -- ignora la dispersión de este disparo en particular
+      // (combat/spread.ts la aplica adentro de stepCombat/fireShot y no la
+      // devuelve hacia afuera), así que puede quedar corrido unos pocos
+      // píxeles del punto real. El cono de dispersión de este arsenal es
+      // chico (<3°, ver archetypes.ts) y el número de daño sólo necesita
+      // aparecer "cerca" del impacto, no exacto -- evita reimplementar la
+      // proyección con el offset de dispersión sumado sólo para esto.
+      computeForward(finalPitch, finalYaw, scratchForward)
+      scratchHitPoint.x = combatInput.origin.x + scratchForward.x * shotResult.distance
+      scratchHitPoint.y = combatInput.origin.y + scratchForward.y * shotResult.distance
+      scratchHitPoint.z = combatInput.origin.z + scratchForward.z * shotResult.distance
+      gfx.worldToScreen(scratchHitPoint, scratchScreenPoint)
+
+      const tier = onHitConfirmed(
+        feedbackState,
+        scratchScreenPoint.x,
+        scratchScreenPoint.y,
+        shotResult.damage,
+        shotResult.part === 'head',
+        killed,
+      )
+      feedbackAudio.playHitmarker(tier)
+    }
+
+    targetsRenderer.sync(targetsState)
 
     // El timer de GPU bracketea desde acá (antes del clear + render del
     // mundo) hasta después de la pasada del viewmodel, más abajo: esas dos
@@ -379,6 +503,13 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     }
 
     updateWeaponErrorBanner()
+
+    // Capa visual del feedback (hitmarkers, números de daño, viñeta,
+    // latido/desaturación, shake del canvas): DOM imperativo, se actualiza
+    // todos los frames -- no es React, así que no compite con el
+    // presupuesto de frame del motor (ver el comentario de cabecera de
+    // feedback/overlay.ts).
+    feedbackOverlay.render(feedbackState)
   }
 
   return {
@@ -391,9 +522,12 @@ export function createGame(canvas: HTMLCanvasElement): Game {
         stats.mount(canvas.parentElement)
         tuning.mount(canvas.parentElement)
         weaponTuning?.mount(canvas.parentElement)
+        feedbackOverlay.mount(canvas.parentElement, canvas)
       }
       loadWeaponTuningOverrides().catch(() => {})
       window.addEventListener('resize', onResize)
+      canvas.addEventListener('click', onCanvasClickForAudio)
+      window.addEventListener('keydown', onDebugKeyDown)
       // 'webglcontextlost'/'webglcontextrestored' no están en el
       // HTMLElementEventMap de lib.dom.d.ts (son del spec de WebGL, no de
       // HTML): TS los acepta igual por el overload genérico de
@@ -420,19 +554,72 @@ export function createGame(canvas: HTMLCanvasElement): Game {
           archetypeId: combatArchetypeId,
           reloading: vmState.reloading,
           reloadHeld: input.reloadHeld,
+          // Sección 5/6 del spec: estado del feedback y las dianas, para
+          // verificar en el navegador sin depender sólo de lo visual (mismo
+          // espíritu que el resto de este hook de sólo lectura).
+          feedback: {
+            health: feedbackState.health.health,
+            shakeMagnitude: feedbackState.shake.magnitude,
+            cameraPunchRoll: feedbackState.cameraPunch.roll,
+            hitmarkersActivos: feedbackState.hitmarkers.pool.items.filter((e) => e.active).length,
+            numerosDeDanoActivos: feedbackState.damageNumbers.pool.items.filter((e) => e.active)
+              .length,
+            vinetasActivas: feedbackState.vignette.pool.items.filter((e) => e.active).length,
+          },
+          targets: targetsState.targets.map((t) => ({
+            alive: t.alive,
+            health: t.health,
+            x: t.position.x,
+          })),
         })
+
+        // Hook de control para verificación en navegador sin pointer lock
+        // (que no funciona en automatización -- Playwright/CDP no pueden
+        // pedirlo ni concederlo). A diferencia de __combatDebug (sólo
+        // lectura), éste SÍ mueve estado: teletransporta al jugador y fija
+        // pitch/yaw a mano, detrás del mismo gate ?debug=1. El disparo en sí
+        // no necesita un hook nuevo -- el panel de tuning de armas ya
+        // escucha 'mousedown' en `window` sin requerir el lock (ver
+        // weapons/viewmodel/tuning-panel.ts), así que un MouseEvent
+        // sintético alcanza.
+        ;(
+          window as unknown as {
+            __debugTeleport?: (x: number, y: number, z: number, yaw: number, pitch: number) => void
+          }
+        ).__debugTeleport = (x, y, z, yaw, pitch) => {
+          player.position.x = x
+          player.position.y = y
+          player.position.z = z
+          player.prevPosition.x = x
+          player.prevPosition.y = y
+          player.prevPosition.z = z
+          input.player.yaw = yaw
+          input.pitch = pitch
+        }
+
+        // El objeto de tuning en sí (sección 5 del spec: "en un objeto
+        // mutable... para poder exponerlo a un panel de debug más
+        // adelante"): un panel real todavía no existe, pero exponerlo ya
+        // deja el terreno preparado, y de paso sirve para inspeccionar/
+        // ajustar valores en vivo desde la consola al verificar en el
+        // navegador.
+        ;(window as unknown as { __feedbackTuning?: typeof FEEDBACK }).__feedbackTuning = FEEDBACK
       }
     },
     stop(): void {
       running = false
       cancelAnimationFrame(rafId)
       window.removeEventListener('resize', onResize)
+      canvas.removeEventListener('click', onCanvasClickForAudio)
+      window.removeEventListener('keydown', onDebugKeyDown)
       canvas.removeEventListener('webglcontextlost', onContextLost, false)
       canvas.removeEventListener('webglcontextrestored', onContextRestored, false)
       input.detach()
       stats.unmount()
       tuning.unmount()
       weaponTuning?.unmount()
+      feedbackOverlay.unmount()
+      targetsRenderer.dispose()
       weaponErrorBanner?.remove()
       weaponErrorBanner = null
       shownLoadError = null
