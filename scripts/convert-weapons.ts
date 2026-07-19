@@ -29,6 +29,16 @@
  * Falla por archivo sin cortar el lote, e imprime una tabla al final.
  * Es idempotente: salta lo ya convertido salvo que se pase --force.
  *
+ * El índice (`index.json`) se fusiona con el que ya existe en el
+ * directorio de salida al final de cada corrida: nunca se reescribe sólo
+ * con lo convertido en esta ejecución. Si no fuera así, una corrida
+ * incremental (que saltea lo ya convertido) o una parcialmente fallida
+ * borraría del índice -y por lo tanto del registry, del panel de tuning y
+ * del arma de arranque del juego- las armas que ya estaban convertidas.
+ * Una entrada existente cuyo .glb ya no está en el directorio de salida se
+ * descarta (huérfana) y se loguea qué se descartó; ver `mergeIndex` en
+ * `lib/merge-index.ts` para la política completa.
+ *
  * LIMITACIÓN CONOCIDA: tanto la detección de la boca como la del eje
  * "arriba" son heurísticas sobre la geometría (distribución de masa y
  * extensión de la caja envolvente). Aciertan en la mayoría de las siluetas
@@ -39,8 +49,17 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { basename, extname, join, resolve } from 'node:path'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { createRequire } from 'node:module'
+import { basename, dirname, extname, join } from 'node:path'
 import { Document, NodeIO } from '@gltf-transform/core'
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions'
 import {
@@ -64,6 +83,7 @@ import {
   slugify,
   targetLengthFor,
 } from './lib/geometry.ts'
+import { mergeIndex, type IndexEntry } from './lib/merge-index.ts'
 
 /** Bajo esta confianza, la orientación del cañón se marca para revisión manual. */
 const MUZZLE_CONFIDENCE_THRESHOLD = 0.15
@@ -71,28 +91,44 @@ const MUZZLE_CONFIDENCE_THRESHOLD = 0.15
 /** Bajo esta confianza, el eje "arriba" elegido se marca para revisión manual. */
 const UP_AXIS_CONFIDENCE_THRESHOLD = 0.15
 
-const FBX2GLTF_BIN = resolve(
-  'node_modules/.pnpm/fbx2gltf@0.9.7-p1/node_modules/fbx2gltf/bin/Darwin/FBX2glTF',
-)
+/**
+ * Directorio de binarios por SO dentro del paquete "fbx2gltf", tal como lo
+ * empaqueta ese paquete (no es `process.platform` directo: usa los nombres
+ * de `os.type()`, con otra convención de mayúsculas).
+ */
+const FBX2GLTF_PLATFORM_DIRS: Record<string, string> = {
+  darwin: 'Darwin',
+  linux: 'Linux',
+  win32: 'Windows_NT',
+}
 
-interface IndexEntry {
-  slug: string
-  name: string
-  triangles: number
-  /** Caja envolvente tras normalizar, en metros. */
-  bounds: { min: [number, number, number]; max: [number, number, number] }
-  /**
-   * Qué tan clara fue la detección de la boca. Cerca de 0 significa que el
-   * arma es casi simétrica y la orientación probablemente esté mal.
-   */
-  muzzleConfidence: number
-  /**
-   * Qué tan clara fue la detección del eje "arriba". Cerca de 0 significa
-   * que la sección transversal es casi cuadrada y no queda claro cuál lado
-   * es el ancho y cuál el alto.
-   */
-  upAxisConfidence: number
-  needsManualReview: boolean
+/**
+ * Resuelve el binario de FBX2glTF por resolución estándar de módulos de
+ * Node en vez de una ruta fija a la estructura interna de un gestor de
+ * paquetes en particular: una ruta hardcodeada a
+ * `.pnpm/fbx2gltf@<versión>/...` se rompe con npm o yarn, con cualquier
+ * bump de versión del paquete "fbx2gltf", y en cualquier SO que no sea
+ * macOS. `require.resolve` sigue el algoritmo real de resolución de
+ * node_modules (funciona igual con pnpm, npm o yarn) para encontrar el
+ * `index.js` del paquete, y desde ahí el binario cuelga de una carpeta fija
+ * (`bin/<SO>/FBX2glTF`) definida por el propio paquete.
+ *
+ * Devuelve `undefined` si el paquete no está instalado o el SO no tiene
+ * binario empaquetado: quien llama decide cómo fallar (fallo ruidoso, no
+ * silencioso).
+ */
+function resolveFbx2GltfBin(): string | undefined {
+  const platformDir = FBX2GLTF_PLATFORM_DIRS[process.platform]
+  if (!platformDir) return undefined
+
+  try {
+    const require = createRequire(import.meta.url)
+    const pkgEntry = require.resolve('fbx2gltf')
+    const ext = process.platform === 'win32' ? '.exe' : ''
+    return join(dirname(pkgEntry), 'bin', platformDir, `FBX2glTF${ext}`)
+  } catch {
+    return undefined
+  }
 }
 
 interface Failure {
@@ -178,71 +214,109 @@ async function convertOne(
   io: NodeIO,
   fbxPath: string,
   outPath: string,
+  fbx2gltfBin: string,
 ): Promise<IndexEntry> {
   const tmpGlb = outPath.replace(/\.glb$/, '.raw.glb')
 
-  execFileSync(FBX2GLTF_BIN, ['--binary', '--input', fbxPath, '--output', tmpGlb], {
-    stdio: 'pipe',
-  })
+  // El .raw.glb es un archivo temporal: si cualquier paso de acá para abajo
+  // lanza, no puede quedar tirado en el directorio de salida, donde se
+  // sirve y eventualmente se commitea. El finally cubre tanto el camino
+  // feliz como cualquier falla intermedia.
+  try {
+    execFileSync(fbx2gltfBin, ['--binary', '--input', fbxPath, '--output', tmpGlb], {
+      stdio: 'pipe',
+    })
 
-  const doc = await io.read(tmpGlb)
+    const doc = await io.read(tmpGlb)
 
-  // Aplanar y fusionar: el viewmodel quiere una malla, no una jerarquía.
-  await doc.transform(flatten(), dedup(), joinMeshes(), weld())
+    // Aplanar y fusionar: el viewmodel quiere una malla, no una jerarquía.
+    await doc.transform(flatten(), dedup(), joinMeshes(), weld())
 
-  // FBX2glTF deja un transform residual en el nodo (~100x de escala y -90°
-  // en X) que flatten() compone hacia abajo pero no hornea en la malla: es
-  // el resabio de la conversión de unidades/eje del FBX de origen. Se
-  // descarta acá, antes de detectar cañón y eje "arriba", en vez de dejarlo
-  // para el final: esas detecciones (más abajo) son autoreferenciales sobre
-  // la propia geometría, no asumen ninguna convención de ejes de entrada, así
-  // que hornear este transform primero no cambia el resultado normalizado,
-  // sólo asegura que el nodo llegue a la escritura final en identidad.
-  for (const node of doc.getRoot().listNodes()) clearNodeTransform(node)
+    // FBX2glTF deja un transform residual en el nodo (~100x de escala y -90°
+    // en X) que flatten() compone hacia abajo pero no hornea en la malla: es
+    // el resabio de la conversión de unidades/eje del FBX de origen. Se
+    // descarta acá, antes de detectar cañón y eje "arriba", en vez de dejarlo
+    // para el final: esas detecciones (más abajo) son autoreferenciales sobre
+    // la propia geometría, no asumen ninguna convención de ejes de entrada, así
+    // que hornear este transform primero no cambia el resultado normalizado,
+    // sólo asegura que el nodo llegue a la escritura final en identidad.
+    for (const node of doc.getRoot().listNodes()) clearNodeTransform(node)
 
-  // Hornear el color de cada material en vértices y colapsar a un único
-  // material antes de volver a fusionar: recién ahí join() puede juntar
-  // primitivos que antes tenían materiales distintos.
-  bakeVertexColors(doc)
-  await doc.transform(joinMeshes())
+    // Hornear el color de cada material en vértices y colapsar a un único
+    // material antes de volver a fusionar: recién ahí join() puede juntar
+    // primitivos que antes tenían materiales distintos.
+    bakeVertexColors(doc)
+    await doc.transform(joinMeshes())
 
-  const positions = collectPositions(doc)
-  if (positions.length === 0) throw new Error('el modelo no tiene vértices')
+    const positions = collectPositions(doc)
+    if (positions.length === 0) throw new Error('el modelo no tiene vértices')
 
-  const name = basename(fbxPath, extname(fbxPath))
+    const name = basename(fbxPath, extname(fbxPath))
 
-  const { axis, sign, confidence } = detectMuzzle(positions)
-  const { axis: upAxis, confidence: upAxisConfidence } = detectUpAxis(positions, axis)
-  const targetLengthM = targetLengthFor(name)
-  const matrix = buildNormalizeMatrix(positions, axis, sign, upAxis, targetLengthM)
+    const { axis, sign, confidence } = detectMuzzle(positions)
+    const { axis: upAxis, confidence: upAxisConfidence } = detectUpAxis(positions, axis)
+    const targetLengthM = targetLengthFor(name)
+    const matrix = buildNormalizeMatrix(positions, axis, sign, upAxis, targetLengthM)
 
-  for (const mesh of doc.getRoot().listMeshes()) {
-    transformMesh(mesh, matrix)
+    for (const mesh of doc.getRoot().listMeshes()) {
+      transformMesh(mesh, matrix)
+    }
+
+    // Sin PBR: el presupuesto de frame no lo permite y las skins se aplican
+    // en runtime como override de material.
+    await doc.transform(unlit(), prune())
+
+    const finalPositions = collectPositions(doc)
+    const b = boundsOf(finalPositions)
+
+    await io.write(outPath, doc)
+
+    return {
+      slug: slugify(name),
+      name: displayName(name),
+      triangles: countTriangles(doc),
+      bounds: {
+        min: [b.min[0], b.min[1], b.min[2]],
+        max: [b.max[0], b.max[1], b.max[2]],
+      },
+      muzzleConfidence: Number(confidence.toFixed(3)),
+      upAxisConfidence: Number(upAxisConfidence.toFixed(3)),
+      needsManualReview:
+        confidence < MUZZLE_CONFIDENCE_THRESHOLD ||
+        upAxisConfidence < UP_AXIS_CONFIDENCE_THRESHOLD,
+    }
+  } finally {
+    if (existsSync(tmpGlb)) unlinkSync(tmpGlb)
   }
+}
 
-  // Sin PBR: el presupuesto de frame no lo permite y las skins se aplican
-  // en runtime como override de material.
-  await doc.transform(unlit(), prune())
+/**
+ * Lee el index.json existente en el directorio de salida, si lo hay. Un
+ * índice ausente (primera corrida en un outDir nuevo) o corrupto se trata
+ * como vacío: el merge de todas formas repuebla las entradas correctas a
+ * partir de lo que haya en disco y de esta corrida, así que no hace falta
+ * abortar por esto.
+ */
+function readExistingIndex(outDir: string): IndexEntry[] {
+  const indexPath = join(outDir, 'index.json')
+  if (!existsSync(indexPath)) return []
 
-  const finalPositions = collectPositions(doc)
-  const b = boundsOf(finalPositions)
-
-  await io.write(outPath, doc)
-  unlinkSync(tmpGlb)
-
-  return {
-    slug: slugify(name),
-    name: displayName(name),
-    triangles: countTriangles(doc),
-    bounds: {
-      min: [b.min[0], b.min[1], b.min[2]],
-      max: [b.max[0], b.max[1], b.max[2]],
-    },
-    muzzleConfidence: Number(confidence.toFixed(3)),
-    upAxisConfidence: Number(upAxisConfidence.toFixed(3)),
-    needsManualReview:
-      confidence < MUZZLE_CONFIDENCE_THRESHOLD || upAxisConfidence < UP_AXIS_CONFIDENCE_THRESHOLD,
+  try {
+    const raw: unknown = JSON.parse(readFileSync(indexPath, 'utf8'))
+    return Array.isArray(raw) ? (raw as IndexEntry[]) : []
+  } catch {
+    console.error(`no se pudo leer ${indexPath}, se lo trata como vacío`)
+    return []
   }
+}
+
+/** Slugs con un .glb presente en el directorio de salida ahora mismo. */
+function glbSlugsOnDisk(outDir: string): Set<string> {
+  return new Set(
+    readdirSync(outDir)
+      .filter((f) => f.endsWith('.glb') && !f.endsWith('.raw.glb'))
+      .map((f) => basename(f, '.glb')),
+  )
 }
 
 async function main(): Promise<void> {
@@ -260,8 +334,13 @@ async function main(): Promise<void> {
     console.error(`el directorio de entrada no existe: ${inDir}`)
     process.exit(2)
   }
-  if (!existsSync(FBX2GLTF_BIN)) {
-    console.error(`falta el binario de FBX2glTF en ${FBX2GLTF_BIN}`)
+
+  const fbx2gltfBin = resolveFbx2GltfBin()
+  if (!fbx2gltfBin || !existsSync(fbx2gltfBin)) {
+    console.error(
+      `falta el binario de FBX2glTF: no se pudo resolver el paquete "fbx2gltf" o no tiene ` +
+        `binario empaquetado para ${process.platform}`,
+    )
     console.error('correr: pnpm add -D fbx2gltf')
     process.exit(2)
   }
@@ -298,7 +377,7 @@ async function main(): Promise<void> {
     }
 
     try {
-      const entry = await convertOne(io, fbxPath, outPath)
+      const entry = await convertOne(io, fbxPath, outPath, fbx2gltfBin)
       entries.push(entry)
       const flag = entry.needsManualReview ? '  REVISAR ORIENTACIÓN' : ''
       console.log(`ok    ${entry.slug.padEnd(28)} ${String(entry.triangles).padStart(6)} tris${flag}`)
@@ -309,15 +388,33 @@ async function main(): Promise<void> {
     }
   }
 
-  if (entries.length > 0) {
-    entries.sort((a, b) => a.slug.localeCompare(b.slug))
-    writeFileSync(join(outDir, 'index.json'), `${JSON.stringify(entries, null, 2)}\n`)
+  // El índice se fusiona con lo que ya había en outDir: entries sólo trae lo
+  // convertido en esta corrida (nada para lo salteado, nada para lo
+  // fallido), así que escribirlo tal cual perdería del índice cualquier
+  // arma salteada o cualquier corrida previa. glbsOnDisk decide qué
+  // entradas viejas siguen siendo válidas: una entrada cuyo .glb ya no está
+  // ahí queda huérfana y se descarta (ver política en lib/merge-index.ts).
+  const existingIndex = readExistingIndex(outDir)
+  const glbsOnDisk = glbSlugsOnDisk(outDir)
+  const droppedSlugs = existingIndex
+    .map((e) => e.slug)
+    .filter((slug) => !glbsOnDisk.has(slug))
+  const mergedIndex = mergeIndex(existingIndex, entries, glbsOnDisk)
+
+  if (mergedIndex.length > 0) {
+    writeFileSync(join(outDir, 'index.json'), `${JSON.stringify(mergedIndex, null, 2)}\n`)
   }
 
   console.log('')
   console.log(`convertidas: ${entries.length}`)
   console.log(`saltadas:    ${skipped}`)
   console.log(`fallidas:    ${failures.length}`)
+  console.log(`índice:      ${mergedIndex.length} entradas (antes ${existingIndex.length})`)
+
+  if (droppedSlugs.length > 0) {
+    console.log('')
+    console.log(`descartadas del índice (.glb ya no existe en ${outDir}): ${droppedSlugs.join(', ')}`)
+  }
 
   const review = entries.filter((e) => e.needsManualReview)
   if (review.length > 0) {
