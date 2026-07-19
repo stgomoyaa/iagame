@@ -9,21 +9,27 @@
  *
  * Política de autoplay del navegador: `AudioContext` no se crea hasta
  * `unlock()`, y `unlock()` sólo tiene efecto real si corre dentro de un
- * gesto de usuario (game.ts la cuelga del primer click sobre el canvas).
- * Cualquier fallo -- contexto bloqueado, extensión inexistente, un throw
- * de la API -- degrada en silencio: `playHitmarker` nunca tira, sólo no
- * suena. Esto no se puede testear con Vitest (entorno 'node', sin Web
- * Audio real, ver vitest.config.ts) — por eso este archivo es puramente
- * imperativo, sin funciones puras que valga la pena separar aparte.
+ * gesto de usuario (game.ts la cuelga de CADA click sobre el canvas, no
+ * sólo el primero -- ver el comentario de `unlock()` más abajo sobre por
+ * qué). Cualquier fallo -- contexto bloqueado, extensión inexistente, un
+ * throw de la API -- degrada en silencio: `playHitmarker` nunca tira, sólo
+ * no suena. La construcción del `AudioContext` sí se testea con Vitest
+ * (mockeando `window.AudioContext`, ver audio.test.ts); los nodos reales
+ * (oscilador/ganancia) no, porque el entorno es 'node' sin Web Audio real
+ * (ver vitest.config.ts).
  */
 
 import type { HitmarkerTier } from '@/game/feedback/hitmarkers'
 import { FEEDBACK } from '@/game/feedback/tuning'
 
 export interface FeedbackAudio {
-  /** Crea (si hace falta) y reanuda el AudioContext. Llamar sólo desde
-   *  dentro de un handler de gesto de usuario (click, keydown). No-op si ya
-   *  está desbloqueado o si Web Audio no está disponible. */
+  /** Crea (sólo la primera vez) y reanuda el AudioContext. Llamar desde
+   *  dentro de un handler de gesto de usuario (click, keydown) -- y en
+   *  CADA gesto, no sólo el primero: el navegador puede suspender un
+   *  AudioContext ya desbloqueado en cualquier momento (tab en segundo
+   *  plano, ahorro de energía) y sin un resume() posterior no hay forma de
+   *  recuperarlo, así que playHitmarker() se queda mudo hasta que algo lo
+   *  reintente. No-op si Web Audio no está disponible. */
   unlock(): void
   /** Reproduce el click del nivel pedido. No-op silencioso si el contexto
    *  no está listo (bloqueado por autoplay, no soportado, no desbloqueado
@@ -46,13 +52,18 @@ function resolveAudioContextCtor(): AudioContextCtor | null {
 
 export function createFeedbackAudio(): FeedbackAudio {
   let ctx: AudioContext | null = null
-  let unlocked = false
 
   return {
     unlock(): void {
-      if (unlocked) return
-      unlocked = true
-
+      // Antes había un flag `unlocked` que hacía este método un no-op
+      // después del primer click: eso construye el AudioContext una sola
+      // vez (correcto), pero también bloqueaba el resume() de más abajo
+      // para siempre -- si el navegador suspendía el contexto en CUALQUIER
+      // momento posterior (tab en segundo plano, throttling de energía),
+      // playHitmarker() quedaba mudo el resto de la partida sin ningún
+      // camino de vuelta, porque nada más vuelve a llamar resume(). El
+      // `if (!ctx)` de abajo ya deja la construcción como una sola vez;
+      // el resume() ahora se reintenta en cada gesto del jugador.
       try {
         if (!ctx) {
           const Ctor = resolveAudioContextCtor()
