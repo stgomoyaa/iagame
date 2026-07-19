@@ -6,8 +6,48 @@
  * sin depender de un FBX real ni del binario de FBX2glTF.
  */
 
-/** Largo objetivo del arma en metros, medido sobre su dimensión mayor. */
-export const TARGET_LENGTH_M = 0.6
+/**
+ * Largo objetivo por clase de arma, en metros, medido sobre la dimensión
+ * mayor tras normalizar. Valores aproximados al largo real de cada clase:
+ * una pistola no puede terminar del mismo largo que un fusil de asalto, o
+ * se pierde la sensación de escala entre el arsenal en el viewmodel.
+ *
+ * Las claves son substrings en minúscula que se buscan en el nombre del
+ * archivo de origen (ver `targetLengthFor`). Ninguna clave es substring de
+ * otra, así que el orden de este objeto no importa: no hay forma de que,
+ * por ejemplo, "submachinegun" matchee por accidente la entrada de
+ * "shotgun" (ambas contienen "gun", pero ninguna contiene a la otra
+ * completa), ni que "assaultrifle" y "sniperrifle" se confundan entre sí
+ * (ambas contienen "rifle", pero tampoco una es substring de la otra).
+ */
+export const WEAPON_CLASS_LENGTHS_M = {
+  pistol: 0.22,
+  revolver: 0.22,
+  submachinegun: 0.45,
+  bullpup: 0.65,
+  assaultrifle: 0.85,
+  shotgun: 0.95,
+  sniperrifle: 1.15,
+} as const
+
+/** Largo objetivo cuando el nombre del archivo no matchea ninguna clase conocida. */
+export const DEFAULT_TARGET_LENGTH_M = 0.75
+
+/**
+ * Largo objetivo en metros para un arma, a partir del nombre de su archivo
+ * de origen (p.ej. "AssaultRifle2_1"). El matcheo es por substring, sin
+ * distinguir mayúsculas de minúsculas, así "AssaultRifle2_1" matchea
+ * "assaultrifle" (es una variante del fusil de asalto, no una clase aparte)
+ * igual que "AssaultRifle_4". Si no matchea nada, cae a
+ * `DEFAULT_TARGET_LENGTH_M`.
+ */
+export function targetLengthFor(name: string): number {
+  const normalized = name.toLowerCase()
+  for (const [key, length] of Object.entries(WEAPON_CLASS_LENGTHS_M)) {
+    if (normalized.includes(key)) return length
+  }
+  return DEFAULT_TARGET_LENGTH_M
+}
 
 /** Matriz 4x4 column-major, igual al tipo `mat4` de @gltf-transform/core. */
 export type Mat4 = [
@@ -107,18 +147,52 @@ export function detectMuzzle(positions: Float32Array): {
 }
 
 /**
- * Matriz que lleva el eje del cañón a -Z conservando +Y arriba, escala al
- * largo objetivo y centra en el origen. Column-major, como espera glTF.
+ * Determina cuál de los dos ejes perpendiculares al cañón es el eje
+ * "arriba" real del arma.
+ *
+ * No se puede asumir Y-up: los packs de Quaternius vienen exportados desde
+ * Blender, que es Z-up, así que asumir Y a secas deja el arma acostada de
+ * lado. En vez de asumir, se mide: de los dos ejes que no son el del cañón,
+ * el de mayor extensión en la caja envolvente es "arriba", porque la
+ * silueta de un arma es más alta (mira, cargador, culata) que ancha
+ * (grosor del cuerpo).
+ *
+ * La confianza se calcula igual que en `detectMuzzle`: la diferencia
+ * relativa entre las dos extensiones candidatas. Una sección transversal
+ * casi cuadrada da confianza baja y hay que revisarla a mano.
+ */
+export function detectUpAxis(
+  positions: Float32Array,
+  barrelAxis: 0 | 1 | 2,
+): { axis: 0 | 1 | 2; confidence: number } {
+  const { min, max } = boundsOf(positions)
+  const size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]]
+  const candidates = ([0, 1, 2] as const).filter((a) => a !== barrelAxis)
+  const [a, b] = candidates
+
+  const axis = size[a] >= size[b] ? a : b
+  const denom = Math.max(size[a], size[b])
+  const confidence = denom > 0 ? Math.abs(size[a] - size[b]) / denom : 0
+
+  return { axis, confidence }
+}
+
+/**
+ * Matriz que lleva el eje del cañón a -Z conservando el eje "arriba" como
+ * +Y, escala al largo objetivo y centra en el origen. Column-major, como
+ * espera glTF.
  */
 export function buildNormalizeMatrix(
   positions: Float32Array,
   axis: 0 | 1 | 2,
   sign: 1 | -1,
+  upAxis: 0 | 1 | 2,
+  targetLengthM: number,
 ): Mat4 {
   const { min, max } = boundsOf(positions)
   const size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]]
   const center = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2]
-  const scale = size[axis] > 0 ? TARGET_LENGTH_M / size[axis] : 1
+  const scale = size[axis] > 0 ? targetLengthM / size[axis] : 1
 
   // Filas de la rotación: a dónde va cada eje de origen.
   // El eje del cañón va a -Z, con el signo detectado.
@@ -129,8 +203,8 @@ export function buildNormalizeMatrix(
   ]
   rot[2][axis] = -sign
 
-  // El eje vertical de origen se mantiene como +Y, salvo que sea el del cañón.
-  const upAxis = axis === 1 ? 2 : 1
+  // El eje "arriba", detectado por `detectUpAxis` y no asumido, se mantiene
+  // como +Y.
   rot[1][upAxis] = 1
 
   // El tercero sale del producto cruz para conservar la orientación.

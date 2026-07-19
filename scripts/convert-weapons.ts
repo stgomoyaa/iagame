@@ -14,20 +14,28 @@
  *      todos los materiales a uno solo, para volver a fusionar en 1 sólo
  *      primitivo por arma.
  *   4. Detecta el eje del cañón y hacia dónde apunta la boca.
- *   5. Rota para dejar la boca hacia -Z y el arma con +Y arriba.
- *   6. Escala uniformemente al largo objetivo en metros.
- *   7. Centra en el origen.
- *   8. Marca el material único como unlit: el spec prohíbe el costo de PBR.
- *   9. Limpia con dedup y prune.
+ *   5. Detecta cuál de los dos ejes restantes es "arriba": el pack de
+ *      Quaternius viene exportado de Blender (Z-up), así que no se puede
+ *      asumir Y como en un motor de juego; se mide cuál eje tiene mayor
+ *      extensión en la caja envolvente, porque un arma es más alta que
+ *      ancha.
+ *   6. Rota para dejar la boca hacia -Z y el eje "arriba" detectado hacia +Y.
+ *   7. Escala uniformemente al largo objetivo de la clase del arma (una
+ *      pistola no puede terminar del mismo largo que un fusil de asalto).
+ *   8. Centra en el origen.
+ *   9. Marca el material único como unlit: el spec prohíbe el costo de PBR.
+ *   10. Limpia con dedup y prune.
  *
  * Falla por archivo sin cortar el lote, e imprime una tabla al final.
  * Es idempotente: salta lo ya convertido salvo que se pase --force.
  *
- * LIMITACIÓN CONOCIDA: la detección de la boca es una heurística sobre la
- * distribución de masa. Acierta en la mayoría de las siluetas y falla en las
- * atípicas (escopetas, revólveres, cualquier cosa con bípode). Por eso el
- * índice registra `muzzleConfidence` y el panel de tuning necesita sliders de
- * rotación, no sólo de posición.
+ * LIMITACIÓN CONOCIDA: tanto la detección de la boca como la del eje
+ * "arriba" son heurísticas sobre la geometría (distribución de masa y
+ * extensión de la caja envolvente). Aciertan en la mayoría de las siluetas
+ * y fallan en las atípicas (escopetas, revólveres, cualquier cosa con
+ * bípode, o un arma de sección casi cuadrada). Por eso el índice registra
+ * `muzzleConfidence` y `upAxisConfidence`, y el panel de tuning necesita
+ * sliders de rotación, no sólo de posición.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -38,10 +46,21 @@ import { KHRMaterialsUnlit } from '@gltf-transform/extensions'
 import { dedup, flatten, join as joinMeshes, prune, transformMesh, unlit, weld } from '@gltf-transform/functions'
 // Extensión explícita: Node resuelve ESM nativo y la exige. Vitest resuelve
 // sin ella, así que omitirla deja los tests en verde y el script roto.
-import { boundsOf, buildNormalizeMatrix, detectMuzzle, displayName, slugify } from './lib/geometry.ts'
+import {
+  boundsOf,
+  buildNormalizeMatrix,
+  detectMuzzle,
+  detectUpAxis,
+  displayName,
+  slugify,
+  targetLengthFor,
+} from './lib/geometry.ts'
 
-/** Bajo esta confianza, la orientación se marca para revisión manual. */
+/** Bajo esta confianza, la orientación del cañón se marca para revisión manual. */
 const MUZZLE_CONFIDENCE_THRESHOLD = 0.15
+
+/** Bajo esta confianza, el eje "arriba" elegido se marca para revisión manual. */
+const UP_AXIS_CONFIDENCE_THRESHOLD = 0.15
 
 const FBX2GLTF_BIN = resolve(
   'node_modules/.pnpm/fbx2gltf@0.9.7-p1/node_modules/fbx2gltf/bin/Darwin/FBX2glTF',
@@ -58,6 +77,12 @@ interface IndexEntry {
    * arma es casi simétrica y la orientación probablemente esté mal.
    */
   muzzleConfidence: number
+  /**
+   * Qué tan clara fue la detección del eje "arriba". Cerca de 0 significa
+   * que la sección transversal es casi cuadrada y no queda claro cuál lado
+   * es el ancho y cuál el alto.
+   */
+  upAxisConfidence: number
   needsManualReview: boolean
 }
 
@@ -165,8 +190,12 @@ async function convertOne(
   const positions = collectPositions(doc)
   if (positions.length === 0) throw new Error('el modelo no tiene vértices')
 
+  const name = basename(fbxPath, extname(fbxPath))
+
   const { axis, sign, confidence } = detectMuzzle(positions)
-  const matrix = buildNormalizeMatrix(positions, axis, sign)
+  const { axis: upAxis, confidence: upAxisConfidence } = detectUpAxis(positions, axis)
+  const targetLengthM = targetLengthFor(name)
+  const matrix = buildNormalizeMatrix(positions, axis, sign, upAxis, targetLengthM)
 
   for (const mesh of doc.getRoot().listMeshes()) {
     transformMesh(mesh, matrix)
@@ -182,7 +211,6 @@ async function convertOne(
   await io.write(outPath, doc)
   unlinkSync(tmpGlb)
 
-  const name = basename(fbxPath, extname(fbxPath))
   return {
     slug: slugify(name),
     name: displayName(name),
@@ -192,7 +220,9 @@ async function convertOne(
       max: [b.max[0], b.max[1], b.max[2]],
     },
     muzzleConfidence: Number(confidence.toFixed(3)),
-    needsManualReview: confidence < MUZZLE_CONFIDENCE_THRESHOLD,
+    upAxisConfidence: Number(upAxisConfidence.toFixed(3)),
+    needsManualReview:
+      confidence < MUZZLE_CONFIDENCE_THRESHOLD || upAxisConfidence < UP_AXIS_CONFIDENCE_THRESHOLD,
   }
 }
 
@@ -274,7 +304,9 @@ async function main(): Promise<void> {
   if (review.length > 0) {
     console.log('')
     console.log(`orientación dudosa en ${review.length}, revisar a mano en el panel de tuning:`)
-    for (const e of review) console.log(`  ${e.slug}  (confianza ${e.muzzleConfidence})`)
+    for (const e of review) {
+      console.log(`  ${e.slug}  (cañón ${e.muzzleConfidence}, arriba ${e.upAxisConfidence})`)
+    }
   }
 
   if (failures.length > 0) {
