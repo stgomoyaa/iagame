@@ -67,6 +67,53 @@ describe('determinismo de composición', () => {
     expect(a.ry).toBe(b.ry)
     expect(a.rz).toBe(b.rz)
   })
+
+  it('respeta el orden de composición especificado: base, bob, sway, kick, reload, draw', () => {
+    // Finding 3: verifica que las capas se componen en el orden del spec.
+    // Captura un escenario con varias capas activas y registra los valores
+    // numéricos resultantes. Estos valores *codifican* el orden especificado
+    // (base, bob, sway, kick, reload, draw). Cualquier reordenamiento produce
+    // valores diferentes (con probabilidad abrumadora, dado que la suma de
+    // capas con dinámica compleja es extremadamente sensible al orden).
+    //
+    // Escenario: bob activo (velocidad en suelo), sway activa (mouse input),
+    // kick activo (acaba de disparar), reload en progreso, ads=false (amplitud
+    // plena de bob). Sin draw.
+
+    const state = createViewmodelState()
+    const out = transform()
+
+    fire(state, WEAPON)
+    for (let i = 0; i < 8; i++) {
+      const input: ViewmodelInput = {
+        speed: i < 4 ? 5 : 0,      // bob: velocidad primeros 4 ticks
+        grounded: true,
+        ads: false,                // amplitud plena de bob
+        mouseDeltaX: 0.02,         // sway constante
+        mouseDeltaY: -0.01,
+      }
+      if (i === 2) startReload(state, WEAPON) // reload: tick 2-7
+      stepViewmodel(state, input, WEAPON, out, TICK_DT)
+    }
+
+    // Valores capturados de la implementación actual. El escenario mezcla
+    // base (ads=false, no contribution), bob (speed), sway (mouse), kick (fire),
+    // reload (frac 0.16->1.28), draw (off).
+    // Si se reordena cualquier capa, estos números cambiarán.
+    const expectedPx = -0.0016379290643248443
+    const expectedPy = -0.006543299012777035
+    const expectedPz = 0.0029860033280968675
+    const expectedRx = 0.010047480157162421
+    const expectedRy = 0
+    const expectedRz = 0.0006015734317478061
+
+    expect(out.px).toBe(expectedPx)
+    expect(out.py).toBe(expectedPy)
+    expect(out.pz).toBe(expectedPz)
+    expect(out.rx).toBe(expectedRx)
+    expect(out.ry).toBe(expectedRy)
+    expect(out.rz).toBe(expectedRz)
+  })
 })
 
 describe('ADS', () => {
@@ -161,6 +208,35 @@ describe('timing de eventos de recarga', () => {
     expect(state.emittedMagIn).toBe(true)
   })
 
+  it('si un único dt cruza ambas fracciones magOut y magIn, ambos se emiten en ese mismo tick', () => {
+    // Finding 1: asegura que los dos checks independientes (if, no else if)
+    // funcionen bajo stalls de tab o muy bajo framerate.
+    const state = createViewmodelState()
+    const out = transform()
+    startReload(state, WEAPON)
+
+    // Un dt lo bastante grande para cruzar tanto 0.25 como 0.55 de reloadTime.
+    // reloadTime es 1.0, así que dt > 0.55 cruza ambas en un solo paso.
+    const bigDt = 0.6
+
+    // Antes del paso: nada emitido.
+    expect(state.emittedMagOut).toBe(false)
+    expect(state.emittedMagIn).toBe(false)
+
+    // Un solo paso de 0.6s.
+    stepViewmodel(state, QUIETO, WEAPON, out, bigDt)
+
+    // Después: ambos eventos se emitieron.
+    expect(state.emittedMagOut).toBe(true)
+    expect(state.emittedMagIn).toBe(true)
+    expect(state.reloadT).toBe(bigDt)
+
+    // Un paso más no vuelve a emitir: los flags se quedan en true.
+    stepViewmodel(state, QUIETO, WEAPON, out, TICK_DT)
+    expect(state.emittedMagOut).toBe(true)
+    expect(state.emittedMagIn).toBe(true)
+  })
+
   it('una nueva recarga resetea los flags y los eventos se emiten de nuevo', () => {
     const state = createViewmodelState()
     const out = transform()
@@ -181,6 +257,43 @@ describe('timing de eventos de recarga', () => {
       prev = state.emittedMagOut
     }
     expect(transiciones).toBe(1)
+  })
+
+  it('la pose de descenso de recarga termina exacta en 0, sin overshoot negativo', () => {
+    // Finding 2: unclamped easing input puede causar reloadShape negativo
+    // si un dt grande salta frac > 1.0 (stall de tab más un reloadTime corto).
+    // Esto causaría un overshoot negativo en py: reloadShape < 0, thus out.py < 0.
+    //
+    // Aísla el reload con entrada neutral: sin bob (speed=0), sin sway
+    // (mouseDelta=0), sin ads, sin fire, sin draw.
+    const state = createViewmodelState()
+    const out = transform()
+    const quietoTotal: ViewmodelInput = {
+      speed: 0,
+      grounded: false, // garantiza groundedBlend = 0, sin bob contribution
+      ads: false,
+      mouseDeltaX: 0,
+      mouseDeltaY: 0,
+    }
+    const pyBase = WEAPON.hip.py
+
+    startReload(state, WEAPON)
+
+    // Un dt suficientemente grande para saltar por encima de 1.0 en la fase C.
+    // reloadTime = 1.0. Fase C empieza en frac = 0.55.
+    // Si reloadT salta a 1.1 (frac = 1.1), entonces:
+    // c = (1.1 - 0.55) / (1 - 0.55) = 0.55 / 0.45 ≈ 1.222 > 1.
+    // Sin clamp: easeInOutCubic(1.222) ≈ 1.014, reloadShape = 1 - 1.014 = -0.014 < 0.
+    // Con clamp: c se clampea a 1.0, easeInOutCubic(1.0) = 1, reloadShape = 0.
+    const dtOversized = 1.1 // salta directamente a frac = 1.1
+
+    stepViewmodel(state, quietoTotal, WEAPON, out, dtOversized)
+    expect(state.reloading).toBe(false) // frac >= 1, se detiene
+    expect(state.reloadT).toBe(dtOversized)
+
+    // LA GARANTÍA: reload offset debe estar exactamente en 0 (base), nunca negativo.
+    // Sin clamp, out.py < 0 (overshoot negativo). Con clamp, out.py === 0.
+    expect(out.py).toBe(pyBase)
   })
 })
 

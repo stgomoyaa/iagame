@@ -289,7 +289,7 @@ export function stepViewmodel(
       reloadShape = 1
     } else {
       // Fase C: vuelve a la posición.
-      const c = (frac - VIEWMODEL.reloadMagInAt) / (1 - VIEWMODEL.reloadMagInAt)
+      const c = clamp01((frac - VIEWMODEL.reloadMagInAt) / (1 - VIEWMODEL.reloadMagInAt))
       reloadShape = 1 - easeInOutCubic(c)
     }
     out.py -= VIEWMODEL.reloadDrop * reloadShape
