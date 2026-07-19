@@ -10,15 +10,14 @@ import { createTuningPanel } from '@/game/engine/tuning-panel'
 import { ARENA } from '@/game/map/arena'
 import { createPlayerState, stepPlayer } from '@/game/movement/step'
 import {
-  createBotSquad,
   createBotWorld,
   damageBot,
   registerGunshot,
   stepAllBotsMotor,
-  stepAllBotsThink,
   stepBotCombat,
   type BotState,
 } from '@/game/bots/bot'
+import { applyDamageToBot, createBotHealthState, stepBotRespawn } from '@/game/bots/health'
 import { buildNavGrid } from '@/game/bots/navgrid'
 import { createBotsRenderer } from '@/game/bots/renderer'
 import { BOTS } from '@/game/bots/tuning'
@@ -53,7 +52,7 @@ import {
   type CombatInput,
 } from '@/game/combat/combat'
 import { computeForward, createShotResult } from '@/game/combat/shot'
-import { vec3 } from '@/game/math/vec3'
+import { vec3, type Vec3 } from '@/game/math/vec3'
 import type { ScreenPoint } from '@/game/engine/renderer'
 import { applyHit, createDefaultTargetDefs, createTargets, stepTargets } from '@/game/targets/targets'
 import { createTargetsRenderer } from '@/game/targets/renderer'
@@ -69,6 +68,14 @@ import {
 import { directionYaw, vignetteBearing } from '@/game/feedback/vignette'
 import { resetPlayerHealth } from '@/game/feedback/health-vfx'
 import { FEEDBACK } from '@/game/feedback/tuning'
+import { assignBotArchetypes, weaponLabel } from '@/game/match/loadouts'
+import { createMatchState, recordDamage, recordKill, stepMatch, type MatchState } from '@/game/match/match'
+import { invulnerabilityExpiresAt, isInvulnerable, pickFarthestSpawn } from '@/game/match/respawn'
+import { createMatchBots, stepMatchBotsThink } from '@/game/match/squad'
+import { createMatchTargets, type MatchTargets } from '@/game/match/targeting'
+import { MATCH } from '@/game/match/tuning'
+import { createMatchTuningPanel } from '@/game/match/tuning-panel'
+import { isEnemy, PLAYER_ID, type MatchMode } from '@/game/match/types'
 
 export interface Game {
   start(): void
@@ -80,37 +87,86 @@ export interface Game {
    */
   benchmark(passes?: number): number
   readonly stats: FrameStats
+  /** Estado de partida en vivo (sección "Build" de la tarea): killfeed,
+   *  puntaje y fase, para que el HUD de React (src/ui/) lo sondee a baja
+   *  frecuencia -- referencia mutable, no una copia; quien la lee no debe
+   *  escribirla. */
+  readonly matchState: MatchState
 }
 
 const SENSITIVITY = 0.0022
 
 /** Cuántos bots poblar la arena, vía `?bots=N` (mismo patrón que
- *  `?debug=1` en weapons/viewmodel/tuning-panel.ts). Default 6: suficiente
- *  para ver el comportamiento en grupo sin saturar la arena en el uso
- *  normal; `?bots=10` es lo que pide la verificación de presupuesto de la
- *  sección 8 del spec. Clampeado a [0,20] contra un valor absurdo en la URL. */
-const DEFAULT_BOT_COUNT = 6
+ *  `?debug=1` en weapons/viewmodel/tuning-panel.ts). Default MATCH.botCount
+ *  (match/tuning.ts) -- vive ahí, no acá, para que el panel de tuning de
+ *  partida (match/tuning-panel.ts) pueda ajustarlo sin recompilar.
+ *  Clampeado a [0,20] contra un valor absurdo en la URL. */
 const MAX_BOT_COUNT = 20
 
 function getBotCount(): number {
   const raw = new URLSearchParams(window.location.search).get('bots')
-  if (raw === null) return DEFAULT_BOT_COUNT
+  if (raw === null) return MATCH.botCount
   const n = Number.parseInt(raw, 10)
-  if (!Number.isFinite(n)) return DEFAULT_BOT_COUNT
+  if (!Number.isFinite(n)) return MATCH.botCount
   return Math.max(0, Math.min(MAX_BOT_COUNT, n))
 }
 
-/** Rango de dificultad 0..1 (bots/difficulty.ts), vía `?difficulty=`.
- *  Default 0.5: punto medio entre Hierro y Radiante -- no hay todavía un
- *  rango de jugador real del que derivarlo (sección 9 del spec, fase 4). */
-const DEFAULT_DIFFICULTY_RANK = 0.5
-
-function getDifficultyRank(): number {
+/** Override explícito de dificultad 0..1 (bots/difficulty.ts) vía
+ *  `?difficulty=`, para todos los bots por igual -- gana sobre
+ *  MATCH.difficultyMode ('uniform'/'mixed', ver resolveDifficultyRanks más
+ *  abajo). `null` si no vino en la URL: no hay todavía un rango de jugador
+ *  real del que derivarlo (sección 9 del spec, fase 4), así que el punto
+ *  medio por defecto vive en MATCH.uniformDifficultyRank, no acá. */
+function getDifficultyOverride(): number | null {
   const raw = new URLSearchParams(window.location.search).get('difficulty')
-  if (raw === null) return DEFAULT_DIFFICULTY_RANK
+  if (raw === null) return null
   const n = Number.parseFloat(raw)
-  if (!Number.isFinite(n)) return DEFAULT_DIFFICULTY_RANK
+  if (!Number.isFinite(n)) return null
   return Math.max(0, Math.min(1, n))
+}
+
+/** Un rango de dificultad por bot: el override explícito de la URL gana
+ *  sobre MATCH.difficultyMode si está presente. 'uniform': todos el mismo
+ *  MATCH.uniformDifficultyRank. 'mixed': reparte cíclicamente
+ *  MATCH.mixedDifficultyRanks (sección "Pacing" de la tarea: variar la
+ *  dificultad dentro de la misma partida, no sólo entre partidas). */
+function resolveDifficultyRanks(count: number): number[] {
+  const override = getDifficultyOverride()
+  if (override !== null) return new Array(count).fill(override) as number[]
+  if (MATCH.difficultyMode === 'uniform') return new Array(count).fill(MATCH.uniformDifficultyRank) as number[]
+  const pool = MATCH.mixedDifficultyRanks.length > 0 ? MATCH.mixedDifficultyRanks : [MATCH.uniformDifficultyRank]
+  const ranks: number[] = []
+  for (let i = 0; i < count; i++) ranks.push(pool[i % pool.length])
+  return ranks
+}
+
+/** Modo de partida vía `?mode=tdm|ffa`, default MATCH.defaultMode. */
+function getMatchMode(): MatchMode {
+  const raw = new URLSearchParams(window.location.search).get('mode')
+  return raw === 'tdm' || raw === 'ffa' ? raw : MATCH.defaultMode
+}
+
+/** Overrides de verificación rápida (sección "Verify" de la tarea: una
+ *  partida real dura ~6 minutos, demasiado para iterar en cada corrida de
+ *  QA) -- `?timeLimit=SEGUNDOS` y `?scoreLimit=N` pisan MATCH antes de
+ *  arrancar la partida. Mutan el objeto MATCH compartido a propósito (no
+ *  una copia local): así el panel de tuning en vivo sigue leyendo/editando
+ *  la misma fuente de verdad sea cual sea el origen del valor inicial. */
+function applyQuickMatchOverrides(): void {
+  const params = new URLSearchParams(window.location.search)
+  const timeLimitRaw = params.get('timeLimit')
+  if (timeLimitRaw !== null) {
+    const n = Number.parseFloat(timeLimitRaw)
+    if (Number.isFinite(n) && n > 0) MATCH.timeLimitS = n
+  }
+  const scoreLimitRaw = params.get('scoreLimit')
+  if (scoreLimitRaw !== null) {
+    const n = Number.parseInt(scoreLimitRaw, 10)
+    if (Number.isFinite(n) && n > 0) {
+      MATCH.scoreLimitFfa = n
+      MATCH.scoreLimitTdm = n
+    }
+  }
 }
 
 export function createGame(canvas: HTMLCanvasElement): Game {
@@ -119,61 +175,121 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   const stats = createStatsTracker()
   const gpuTimer = createGpuTimer(gfx.gl)
   const tuning = createTuningPanel()
+  const matchTuningPanel = createMatchTuningPanel()
   const loop = createFixedLoop()
   const player = createPlayerState(ARENA.spawns[0])
+
+  applyQuickMatchOverrides()
 
   // Dianas de la arena (sección 6 del spec de fase 1): hitboxes reales,
   // estáticas y móviles, que stepCombat() consume tal cual consumía la
   // lista vacía que había acá antes -- el sistema de combate no cambia,
-  // sólo deja de recibir un array vacío.
+  // sólo deja de recibir un array vacío. No participan del puntaje de
+  // partida -- son sólo para plinkear fuera del combate real.
   const targetsState = createTargets(createDefaultTargetDefs())
   const targetsRenderer = createTargetsRenderer(gfx.scene, targetsState)
 
-  // Bots (sección 8 del spec de fase 2): cerebro real (FSM, percepción,
-  // apuntado, navegación) sobre cuerpos placeholder (bots/renderer.ts).
-  // Navgrid horneado UNA vez desde la arena real -- nunca se recalcula en
-  // frame(). El rango de dificultad queda fijo en 0.5 (punto medio entre
-  // Hierro y Radiante, bots/difficulty.ts): el sistema de rangos que lo
-  // debería derivar del rango del jugador es fase 4, todavía no existe.
-  // `?bots=N` y `?difficulty=0..1` en la URL lo overridean para verificar a
-  // mano (ver getBotCount/getDifficultyRank más abajo).
-  const botGrid = buildNavGrid(ARENA)
-  const botWorld = createBotWorld(ARENA.boxes, raycastMap, botGrid)
-  const botArchetype = ARCHETYPES['ar-1']
+  // Partida (sección "Build" de la tarea, segunda mitad de la fase 2): TDM
+  // o FFA, elegido por `?mode=` (default MATCH.defaultMode). Loadout y
+  // dificultad por bot en vez de un único arquetipo/rango compartido (ver
+  // match/loadouts.ts y resolveDifficultyRanks más arriba) -- "todos con el
+  // mismo rifle" es justo lo que pide evitar la tarea.
+  const matchMode = getMatchMode()
+  const botCount = getBotCount()
+  const botArchetypes = assignBotArchetypes(botCount)
+  const botDifficultyRanks = resolveDifficultyRanks(botCount)
   // spawns.slice(1): el jugador ya ocupa spawns[0] (arriba). No es
   // obligatorio (la física resuelve cualquier superposición inicial), pero
   // evita que todo el escuadrón aparezca encima del jugador al arrancar.
-  const bots: BotState[] = createBotSquad(
-    ARENA.spawns.slice(1),
-    getBotCount(),
-    getDifficultyRank(),
-    botArchetype,
-  )
+  const bots: BotState[] = createMatchBots(ARENA.spawns.slice(1), botArchetypes, botDifficultyRanks)
+
+  // Navgrid horneado UNA vez desde la arena real -- nunca se recalcula en
+  // frame().
+  const botGrid = buildNavGrid(ARENA)
+  const botWorld = createBotWorld(ARENA.boxes, raycastMap, botGrid)
   const botsRenderer = createBotsRenderer(gfx.scene, bots)
 
-  // Hitboxes del JUGADOR (torso + cabeza, mismo tamaño que los bots -- misma
-  // cápsula, PLAYER_CAPSULE): lo que los bots apuntan y disparan con su
-  // propio stepCombat. El torso comparte el mismo Vec3 que player.position
-  // (se mueve solo, igual que targets/targets.ts y bots/bot.ts); la cabeza
-  // es un Vec3 propio que frame() resincroniza cada frame más abajo.
+  // Participantes de la partida: 0 = jugador (PLAYER_ID), 1..N = bots por
+  // índice+1 (match/types.ts). El jugador reusa bots/health.ts tal cual --
+  // es matemática de vida/respawn genérica, no específica de bots, pese al
+  // nombre del módulo (ver el comentario de MATCH.respawnDelayS sobre por
+  // qué no se tocó ese archivo para renombrarlo). Se mantiene SEPARADO de
+  // feedbackState.health (feedback/health-vfx.ts, sólo visual: latido y
+  // desaturación) a propósito -- ese módulo no tiene noción de muerte, y no
+  // hace falta tocarlo para dársela: cada golpe resta a ambos por el mismo
+  // monto, y el respawn resetea ambos, así que quedan sincronizados sin
+  // fusionarlos.
+  const participantCount = 1 + bots.length
+  const playerHealth = createBotHealthState(BOTS.maxHealth)
+  const matchState: MatchState = createMatchState(matchMode, participantCount, MATCH)
+  const matchTargets: MatchTargets = createMatchTargets(matchMode, participantCount)
+  const invulnerableUntilS: number[] = new Array(participantCount).fill(-Infinity) as number[]
+  const botWasAlive: boolean[] = new Array(bots.length).fill(true) as boolean[]
+  // Scratch de posiciones enemigas para pickFarthestSpawn (match/respawn.ts):
+  // tamaño máximo (participantCount - 1), reusado cada tick sin reasignar
+  // -- ver fillEnemyPositions más abajo.
+  const enemyPositionsScratch: Vec3[] = []
+  for (let i = 0; i < participantCount; i++) enemyPositionsScratch.push(vec3())
+
+  /** Llena enemyPositionsScratch con las posiciones vivas y enemigas de
+   *  `selfId`, devuelve cuántas entradas son válidas. Cero asignaciones. */
+  function fillEnemyPositions(selfId: number): number {
+    let count = 0
+    for (let id = 0; id < participantCount; id++) {
+      if (id === selfId) continue
+      if (!matchTargets.alive[id]) continue
+      if (!isEnemy(matchMode, selfId, id)) continue
+      const p = matchTargets.positions[id]
+      const slot = enemyPositionsScratch[count]
+      slot.x = p.x
+      slot.y = p.y
+      slot.z = p.z
+      count++
+    }
+    return count
+  }
+
+  // Hitboxes del JUGADOR (torso + cabeza, mismo tamaño y misma altura que
+  // los bots -- misma cápsula, PLAYER_CAPSULE, y mismos offsets
+  // BOTS.torsoOffsetY/headOffsetY -- "mismas reglas para todos", sección 8
+  // del spec). Ninguna de las dos comparte Vec3 con player.position
+  // directamente (que es la BASE de la cápsula, no el torso): ambas son
+  // puntos propios que frame() resincroniza cada frame más abajo, mismo
+  // patrón que bots/bot.ts syncBotHitboxes.
+  const playerTorsoHitboxPos = vec3()
   const playerHeadHitboxPos = vec3()
   const playerHitboxes: Hitbox[] = [
-    { center: player.position, radius: BOTS.torsoRadius, part: 'torso', owner: 0 },
+    { center: playerTorsoHitboxPos, radius: BOTS.torsoRadius, part: 'torso', owner: 0 },
     { center: playerHeadHitboxPos, radius: BOTS.headRadius, part: 'head', owner: 0 },
   ]
 
-  // Hitboxes combinadas para el disparo del JUGADOR: dianas + bots, en un
-  // solo array construido UNA vez (referencias, nunca reconstruido en
-  // frame()). `owner` de cada hitbox de bot se corre por `targetCount` para
-  // poder distinguir "pegó una diana" de "pegó un bot" al resolver el
-  // impacto -- ver el bloque de abajo que llama a applyHit/damageBot.
+  // Owners de combatientes: targetCount + participantId (match/types.ts),
+  // mismo truco de offset que ya separaba dianas de bots antes de esta
+  // tarea, extendido para separar también al jugador de las dianas.
   const targetCount = targetsState.targets.length
+  playerHitboxes[0].owner = targetCount + PLAYER_ID
+  playerHitboxes[1].owner = targetCount + PLAYER_ID
   bots.forEach((bot, i) => {
-    bot.hitboxes[0].owner = targetCount + i
-    bot.hitboxes[1].owner = targetCount + i
+    bot.hitboxes[0].owner = targetCount + (i + 1)
+    bot.hitboxes[1].owner = targetCount + (i + 1)
   })
-  const combinedHitboxes: Hitbox[] = [...targetsState.hitboxes]
-  for (const bot of bots) combinedHitboxes.push(bot.hitboxes[0], bot.hitboxes[1])
+
+  const allCombatantHitboxes: Hitbox[] = [playerHitboxes[0], playerHitboxes[1]]
+  for (const bot of bots) allCombatantHitboxes.push(bot.hitboxes[0], bot.hitboxes[1])
+
+  // Lista de hitboxes ENEMIGAS por participante, construida UNA vez acá
+  // (referencias reusadas cada frame, cero asignaciones en frame()): en TDM
+  // un disparo nunca puede resolver contra un compañero de equipo porque
+  // sus hitboxes ni siquiera están en la lista que ese participante usa
+  // para disparar (ver stepBotCombat/stepCombat más abajo).
+  const enemyHitboxesFor: Hitbox[][] = []
+  for (let id = 0; id < participantCount; id++) {
+    enemyHitboxesFor.push(allCombatantHitboxes.filter((hb) => isEnemy(matchMode, id, hb.owner - targetCount)))
+  }
+
+  // El jugador además puede pegarle a las dianas de práctica (targets/,
+  // fase 1) -- no participan del puntaje, sólo están para plinkear.
+  const playerShotHitboxes: Hitbox[] = [...targetsState.hitboxes, ...enemyHitboxesFor[PLAYER_ID]]
 
   // Sistema de feedback (sección 5 del spec de fase 1): un solo estado
   // preasignado, una capa de DOM imperativo para pintarlo y un controlador
@@ -417,19 +533,101 @@ export function createGame(canvas: HTMLCanvasElement): Game {
 
     const ticks = loop.advance(frameDt)
     for (let i = 0; i < ticks; i++) {
-      stepPlayer(player, input.player, ARENA.boxes)
+      if (playerHealth.alive) {
+        stepPlayer(player, input.player, ARENA.boxes)
+      } else {
+        // Congelado mientras está muerto -- sin input, sin física nueva
+        // (mismo patrón que stepBotMotor con bot.health.alive=false,
+        // bots/bot.ts, reusado tal cual para los bots más abajo). Recalcula
+        // el spawn elegido en CADA tick mientras sigue muerto: cuando
+        // stepBotRespawn revive, usa la posición más fresca posible
+        // respecto a dónde están los enemigos AHORA, no a dónde estaban
+        // cuando murió (sección "Build" de la tarea: "elegí por distancia a
+        // enemigos vivos, no al azar").
+        const enemyCount = fillEnemyPositions(PLAYER_ID)
+        const spawnIndex = pickFarthestSpawn(ARENA.spawns, enemyPositionsScratch, enemyCount)
+        const revived = stepBotRespawn(playerHealth, TICK_DT, MATCH.respawnDelayS)
+        if (revived) {
+          const spawn = ARENA.spawns[spawnIndex]
+          player.position.x = spawn.x
+          player.position.y = spawn.y
+          player.position.z = spawn.z
+          player.prevPosition.x = spawn.x
+          player.prevPosition.y = spawn.y
+          player.prevPosition.z = spawn.z
+          player.velocity.x = 0
+          player.velocity.y = 0
+          player.velocity.z = 0
+          resetPlayerHealth(feedbackState.health)
+          invulnerableUntilS[PLAYER_ID] = invulnerabilityExpiresAt(matchState.elapsedS, MATCH.respawnInvulnerabilityS)
+        }
+      }
+
+      matchTargets.positions[PLAYER_ID].x = player.position.x
+      matchTargets.positions[PLAYER_ID].y = player.position.y + player.eyeHeight
+      matchTargets.positions[PLAYER_ID].z = player.position.z
+      matchTargets.alive[PLAYER_ID] = playerHealth.alive
+
+      // Bots muertos eligen spawn fresco ANTES de que stepAllBotsMotor
+      // pueda revivirlos este mismo tick: bot.spawn (bots/bot.ts) es el
+      // punto que su respawn interno lee recién en el instante en que
+      // revive, así que sobreescribirlo acá alcanza sin tocar ese archivo
+      // (ver el comentario de cabecera de match/squad.ts).
+      for (let b = 0; b < bots.length; b++) {
+        const bot = bots[b]
+        botWasAlive[b] = bot.health.alive
+        if (!bot.health.alive) {
+          const enemyCount = fillEnemyPositions(b + 1)
+          const spawnIndex = pickFarthestSpawn(ARENA.spawns, enemyPositionsScratch, enemyCount)
+          const spawn = ARENA.spawns[spawnIndex]
+          bot.spawn.x = spawn.x
+          bot.spawn.y = spawn.y
+          bot.spawn.z = spawn.z
+        }
+      }
 
       // Bots: piensan y se mueven en el mismo tick fijo que el jugador
       // (sección 8 del spec: "movimiento y colisión siguen corriendo cada
-      // tick de simulación"), no atados al framerate de render. El objetivo
-      // que perciben es la posición del jugador DE ESTE MISMO tick, recién
-      // actualizada arriba -- no la del frame anterior.
+      // tick de simulación"), no atados al framerate de render. Cada bot
+      // piensa contra el enemigo vivo más cercano a SÍ MISMO
+      // (match/squad.ts stepMatchBotsThink), no contra un único objetivo
+      // fijo -- lo que hace que TDM y FFA sean partidas de verdad en vez de
+      // "todos los bots contra el jugador nada más".
       botWorld.simTimeS += TICK_DT
-      botWorld.targetEye.x = player.position.x
-      botWorld.targetEye.y = player.position.y + player.eyeHeight
-      botWorld.targetEye.z = player.position.z
-      stepAllBotsThink(bots, botWorld, TICK_DT)
+      stepMatchBotsThink(bots, botWorld, matchTargets, TICK_DT)
       stepAllBotsMotor(bots, botWorld, TICK_DT)
+
+      for (let b = 0; b < bots.length; b++) {
+        const bot = bots[b]
+        matchTargets.positions[b + 1].x = bot.player.position.x
+        matchTargets.positions[b + 1].y = bot.player.position.y + bot.player.eyeHeight
+        matchTargets.positions[b + 1].z = bot.player.position.z
+        matchTargets.alive[b + 1] = bot.health.alive
+        if (!botWasAlive[b] && bot.health.alive) {
+          invulnerableUntilS[b + 1] = invulnerabilityExpiresAt(matchState.elapsedS, MATCH.respawnInvulnerabilityS)
+        }
+      }
+    }
+
+    // Radio de hitbox = 0 mientras estás muerto O invulnerable (mismo truco
+    // que bots/bot.ts ya usaba para cadáveres -- syncBotHitboxes, dentro de
+    // stepBotMotor, ya deja a un bot muerto en radio 0 -- extendido acá a
+    // la ventana de invulnerabilidad post-respawn de match/respawn.ts): un
+    // disparo no puede intersectar una hitbox de radio 0, así que no hace
+    // falta un chequeo de invulnerabilidad aparte en cada resolución de
+    // impacto más abajo -- el participante es literalmente intocable
+    // mientras dure.
+    const playerTouchable =
+      playerHealth.alive && !isInvulnerable(invulnerableUntilS[PLAYER_ID], matchState.elapsedS)
+    playerHitboxes[0].radius = playerTouchable ? BOTS.torsoRadius : 0
+    playerHitboxes[1].radius = playerTouchable ? BOTS.headRadius : 0
+    for (let b = 0; b < bots.length; b++) {
+      const bot = bots[b]
+      if (!bot.health.alive) continue // ya en radio 0 vía syncBotHitboxes
+      if (isInvulnerable(invulnerableUntilS[b + 1], matchState.elapsedS)) {
+        bot.hitboxes[0].radius = 0
+        bot.hitboxes[1].radius = 0
+      }
     }
 
     // Interpolar la posición de la cámara entre el tick anterior y el actual.
@@ -477,11 +675,15 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       // completó, antes de que combat/fire-control.ts llegara a ver la
       // transición true -> false — y la munición nunca se rellenaría
       // (bug real, no de test: ver syncReloadState en fire-control.ts).
-      combatInput.triggerHeld = input.fireHeld || debugFireHeld
+      // Muerto no dispara -- congelado igual que en el loop de ticks de
+      // arriba (bot.combatInput.triggerHeld = false en la rama muerta de
+      // bots/bot.ts es el mismo criterio, acá aplicado a mano porque el
+      // combate del jugador no pasa por ese archivo).
+      combatInput.triggerHeld = (input.fireHeld || debugFireHeld) && playerHealth.alive
       combatInput.reloading = vmState.reloading
       combatInput.pitch = input.pitch
       combatInput.yaw = input.player.yaw
-      shotsFired = stepCombat(combatState, archetype, combatInput, combinedHitboxes, dt, shotResult)
+      shotsFired = stepCombat(combatState, archetype, combatInput, playerShotHitboxes, dt, shotResult)
 
       // Culatazo del arma (weapons/viewmodel/rig.ts: fire(), sección "qué
       // existe" del spec) + punch de cámara (feedback/camera-punch.ts,
@@ -512,37 +714,61 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       sensMultiplier = adsSensitivityMultiplier(archetype.ads, easedAdsT)
     }
 
-    // Resincroniza la hitbox de cabeza del jugador (el torso ya comparte el
-    // mismo Vec3 que player.position, se mueve solo -- ver playerHitboxes
-    // arriba). Tiene que correr ANTES del combate de bots de abajo, que es
-    // quien realmente lee playerHitboxes.
+    // Resincroniza las hitboxes de torso y cabeza del jugador (ver
+    // playerHitboxes arriba: ninguna comparte Vec3 con player.position).
+    // Tiene que correr ANTES del combate de bots de abajo, que es quien
+    // realmente lee playerHitboxes.
+    playerTorsoHitboxPos.x = player.position.x
+    playerTorsoHitboxPos.y = player.position.y + BOTS.torsoOffsetY
+    playerTorsoHitboxPos.z = player.position.z
     playerHeadHitboxPos.x = player.position.x
-    playerHeadHitboxPos.y = player.position.y + player.eyeHeight
+    playerHeadHitboxPos.y = player.position.y + BOTS.headOffsetY
     playerHeadHitboxPos.z = player.position.z
 
-    // Bots: cadencia + retroceso + dispersión + hitscan contra el jugador,
-    // el MISMO stepCombat que acaba de correr arriba para el jugador
-    // (sección 8 del spec: "reusa el mismo movement y combat que el
-    // jugador"). Una vez por frame, no por tick fijo -- mismo modelo de
-    // cadencia que el combate del jugador, así ambos avanzan fire-control
-    // con el mismo dt real.
+    // Bots: cadencia + retroceso + dispersión + hitscan contra el enemigo
+    // vivo más cercano de CADA bot (match/squad.ts ya resolvió a quién le
+    // apunta cada uno, sección "Build" de la tarea), el MISMO stepCombat
+    // que acaba de correr arriba para el jugador (sección 8 del spec:
+    // "reusa el mismo movement y combat que el jugador"). Una vez por
+    // frame, no por tick fijo -- mismo modelo de cadencia que el combate
+    // del jugador, así todos avanzan fire-control con el mismo dt real.
+    // `enemyHitboxesFor[i+1]` excluye estructuralmente a los compañeros de
+    // equipo (armado una sola vez al arrancar la partida, arriba): TDM
+    // nunca puede resolver fuego amigo porque esas hitboxes ni están en la
+    // lista.
     for (let i = 0; i < bots.length; i++) {
       const bot = bots[i]
-      const botShots = stepBotCombat(bot, playerHitboxes, dt)
+      const botShots = stepBotCombat(bot, enemyHitboxesFor[i + 1], dt)
       if (botShots > 0) {
         registerGunshot(botWorld.shots, bot.combatInput.origin, botWorld.simTimeS)
       }
-      // Impacto confirmado contra el jugador: reusa el mismo pipeline de
-      // feedback que el hook de debug ya ejercitaba (viñeta direccional +
-      // shake + resta de vida, feedback/feedback.ts onDamageTaken) -- acá
-      // deja de ser un juguete de debug y pasa a ser el camino real.
-      if (botShots > 0 && bot.shotResult.hit && bot.shotResult.part !== 'none' && bot.shotResult.owner >= 0) {
-        const sourceYaw = directionYaw(
-          bot.player.position.x - player.position.x,
-          bot.player.position.z - player.position.z,
-        )
-        const bearing = vignetteBearing(input.player.yaw, sourceYaw)
-        onDamageTaken(feedbackState, bearing, bot.shotResult.damage)
+      if (botShots > 0 && bot.shotResult.hit && bot.shotResult.part !== 'none' && bot.shotResult.owner >= targetCount) {
+        const shooterId = i + 1
+        const victimId = bot.shotResult.owner - targetCount
+        const damage = bot.shotResult.damage
+        const headshot = bot.shotResult.part === 'head'
+
+        let killed: boolean
+        if (victimId === PLAYER_ID) {
+          killed = applyDamageToBot(playerHealth, damage)
+          // Feedback visual/sonoro (viñeta direccional + shake + resta de
+          // vida en pantalla) -- reusa el mismo pipeline que el hook de
+          // debug ya ejercitaba, feedback/feedback.ts onDamageTaken. Sólo
+          // tiene sentido cuando la víctima es el JUGADOR: es su pantalla,
+          // no la de nadie más -- un bot golpeando a otro bot no le debe
+          // nada a feedbackState.
+          const sourceYaw = directionYaw(
+            bot.player.position.x - player.position.x,
+            bot.player.position.z - player.position.z,
+          )
+          const bearing = vignetteBearing(input.player.yaw, sourceYaw)
+          onDamageTaken(feedbackState, bearing, damage)
+        } else {
+          killed = damageBot(bots[victimId - 1], damage)
+        }
+
+        recordDamage(matchState, shooterId, damage)
+        if (killed) recordKill(matchState, shooterId, victimId, weaponLabel(bot.archetype.id), headshot)
       }
     }
 
@@ -559,17 +785,28 @@ export function createGame(canvas: HTMLCanvasElement): Game {
 
     // Impacto confirmado contra una diana o un bot real (owner >= 0: golpear
     // el mapa da owner -1, ver combat/shot.ts) -- hitmarker + número de daño
-    // + sonido + resta de vida (sección 5 y 6 del spec, más bots sección 8).
-    // `owner` viene de combinedHitboxes (armado arriba): índices por debajo
-    // de targetCount son dianas, el resto son bots (owner - targetCount).
-    // Corre DESPUÉS de fijar la rotación de cámara de arriba: worldToScreen()
-    // necesita la orientación de ESTE frame para proyectar bien el punto de
-    // impacto, no la del frame anterior.
+    // + sonido + resta de vida (sección 5 y 6 del spec, más bots sección 8)
+    // + puntaje/killfeed de partida (sección "Build" de la tarea). `owner`
+    // viene de playerShotHitboxes (armado arriba): índices por debajo de
+    // targetCount son dianas (no participan del puntaje), el resto son
+    // combatientes enemigos -- nunca el jugador mismo (playerShotHitboxes
+    // excluye sus propias hitboxes por construcción) y nunca un compañero
+    // de equipo (enemyHitboxesFor ya los excluyó). Corre DESPUÉS de fijar
+    // la rotación de cámara de arriba: worldToScreen() necesita la
+    // orientación de ESTE frame para proyectar bien el punto de impacto,
+    // no la del frame anterior.
     if (shotsFired > 0 && shotResult.hit && shotResult.part !== 'none' && shotResult.owner >= 0) {
-      const killed =
-        shotResult.owner < targetCount
-          ? applyHit(targetsState, shotResult.owner, shotResult.damage)
-          : damageBot(bots[shotResult.owner - targetCount], shotResult.damage)
+      let killed: boolean
+      if (shotResult.owner < targetCount) {
+        killed = applyHit(targetsState, shotResult.owner, shotResult.damage)
+      } else {
+        const victimId = shotResult.owner - targetCount
+        killed = damageBot(bots[victimId - 1], shotResult.damage)
+        recordDamage(matchState, PLAYER_ID, shotResult.damage)
+        if (killed) {
+          recordKill(matchState, PLAYER_ID, victimId, weaponLabel(combatArchetypeId ?? 'ar-1'), shotResult.part === 'head')
+        }
+      }
 
       // Punto de impacto reconstruido: cámara + forward(pitch,yaw) * distancia.
       // No es EXACTO -- ignora la dispersión de este disparo en particular
@@ -595,6 +832,13 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       )
       feedbackAudio.playHitmarker(tier)
     }
+
+    // Reloj de partida + killfeed + condición de cierre (sección "Build" de
+    // la tarea): corre DESPUÉS de resolver todo el combate de este frame,
+    // para que la última tanda de kills/daño de un frame que agota el
+    // reloj o el límite de kills todavía cuente -- ver el comentario de
+    // cabecera de match/match.ts sobre la garantía de terminación.
+    stepMatch(matchState, dt, MATCH)
 
     targetsRenderer.sync(targetsState)
     botsRenderer.sync(bots)
@@ -664,6 +908,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       if (canvas.parentElement) {
         stats.mount(canvas.parentElement)
         tuning.mount(canvas.parentElement)
+        matchTuningPanel.mount(canvas.parentElement)
         weaponTuning?.mount(canvas.parentElement)
         feedbackOverlay.mount(canvas.parentElement, canvas)
       }
@@ -697,6 +942,11 @@ export function createGame(canvas: HTMLCanvasElement): Game {
           archetypeId: combatArchetypeId,
           reloading: vmState.reloading,
           reloadHeld: input.reloadHeld,
+          // Último disparo del JUGADOR resuelto (sección "Build" de la
+          // tarea): a qué le pegó de verdad, para verificar el combate
+          // contra participantes de partida sin depender sólo de lo visual
+          // -- mismo espíritu que `bots[].lastShot` más abajo.
+          shotResult: { ...shotResult },
           // Sección 5/6 del spec: estado del feedback y las dianas, para
           // verificar en el navegador sin depender sólo de lo visual (mismo
           // espíritu que el resto de este hook de sólo lectura).
@@ -718,8 +968,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
           // verificar en el navegador que la FSM/percepción/navegación
           // hacen lo que dicen sin depender sólo de lo visual -- mismo
           // espíritu que `targets` arriba.
-          bots: bots.map((b) => ({
+          bots: bots.map((b, i) => ({
             id: b.id,
+            participantId: i + 1,
             state: b.fsm.current,
             alive: b.health.alive,
             health: b.health.health,
@@ -728,7 +979,31 @@ export function createGame(canvas: HTMLCanvasElement): Game {
             z: b.player.position.z,
             aimYaw: b.aimMotor.yaw,
             hasPath: b.pathIndex < b.path.length,
+            archetypeId: b.archetype.id,
+            invulnerable: isInvulnerable(invulnerableUntilS[i + 1], matchState.elapsedS),
+            triggerHeld: b.combatInput.triggerHeld,
+            ammo: b.combat.fireControl.ammo,
+            // Último disparo de ESTE bot resuelto -- mismo espíritu que
+            // `shotResult` del jugador más arriba.
+            lastShot: { hit: b.shotResult.hit, part: b.shotResult.part, owner: b.shotResult.owner },
           })),
+          // Sección "Build" de la tarea (segunda mitad de la fase 2): la
+          // partida en sí -- modo, reloj, puntaje por participante y
+          // killfeed -- para verificar en el navegador sin depender sólo de
+          // leer el HUD de React.
+          match: {
+            mode: matchState.mode,
+            phase: matchState.phase,
+            elapsedS: matchState.elapsedS,
+            timeRemainingS: matchState.timeRemainingS,
+            participants: matchState.participants.map((p) => ({ ...p })),
+            killfeed: matchState.killfeed.pool.items
+              .filter((e) => e.active)
+              .map((e) => ({ ...e })),
+            playerAlive: playerHealth.alive,
+            playerHealth: playerHealth.health,
+            playerInvulnerable: isInvulnerable(invulnerableUntilS[PLAYER_ID], matchState.elapsedS),
+          },
         })
 
         // Hook de control para verificación en navegador sin pointer lock
@@ -762,6 +1037,11 @@ export function createGame(canvas: HTMLCanvasElement): Game {
         // ajustar valores en vivo desde la consola al verificar en el
         // navegador.
         ;(window as unknown as { __feedbackTuning?: typeof FEEDBACK }).__feedbackTuning = FEEDBACK
+
+        // Objeto de tuning de partida (sección "Pacing" de la tarea): mismo
+        // motivo que __feedbackTuning arriba -- ajustar en vivo desde la
+        // consola al verificar, además del panel visual (tecla M).
+        ;(window as unknown as { __matchTuning?: typeof MATCH }).__matchTuning = MATCH
       }
     },
     stop(): void {
@@ -775,6 +1055,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       input.detach()
       stats.unmount()
       tuning.unmount()
+      matchTuningPanel.unmount()
       weaponTuning?.unmount()
       feedbackOverlay.unmount()
       targetsRenderer.dispose()
@@ -791,6 +1072,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     },
     get stats() {
       return stats.stats
+    },
+    get matchState() {
+      return matchState
     },
   }
 }

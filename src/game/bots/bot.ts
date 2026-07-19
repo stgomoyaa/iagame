@@ -24,7 +24,7 @@ import { MOVEMENT } from '@/game/movement/tuning'
 import type { Hitbox } from '@/game/combat/hitboxes'
 import { createCombatState, resetCombatState, stepCombat, type CombatInput, type CombatState } from '@/game/combat/combat'
 import { createShotResult, type ShotResult } from '@/game/combat/shot'
-import type { WeaponArchetype } from '@/game/weapons/archetypes'
+import { radToDeg, type WeaponArchetype } from '@/game/weapons/archetypes'
 import { BOTS } from '@/game/bots/tuning'
 import {
   cellCenterX,
@@ -140,15 +140,28 @@ export interface BotState {
   input: PlayerInput
 
   health: BotHealthState
-  /** [torso, cabeza]. `center` de cada uno referencia bot.player.position
-   *  (torso) o un Vec3 propio desplazado en Y (cabeza) -- mismo patrón que
-   *  targets/targets.ts. */
+  /** [torso, cabeza]. `center` de cada uno es un Vec3 propio desplazado en Y
+   *  (BOTS.torsoOffsetY/headOffsetY) desde bot.player.position (que es la
+   *  BASE de la cápsula, no su centro -- physics/capsule.ts) -- mismo
+   *  patrón que targets/targets.ts. Ninguno de los dos alias directamente
+   *  player.position: torsoCenter/headCenter (más abajo) son los Vec3 que
+   *  syncBotHitboxes() resincroniza cada tick. */
   hitboxes: [Hitbox, Hitbox]
+  torsoCenter: Vec3
+  headCenter: Vec3
 
   archetype: WeaponArchetype
   combat: CombatState
   combatInput: CombatInput
   shotResult: ShotResult
+  /** Segundos restantes de la recarga en curso -- ver stepBotCombat. Los
+   *  bots no tienen viewmodel que anime una recarga (a diferencia del
+   *  jugador, cuya recarga la maneja weapons/viewmodel/rig.ts), así que
+   *  este temporizador simple hace ese trabajo: sin él, un bot que vacía el
+   *  cargador queda desarmado para el resto de la partida (combatInput.reloading
+   *  nunca vuelve a false, stepFireControl nunca vuelve a disparar). 0
+   *  cuando no está recargando. */
+  reloadTimerS: number
 
   fsm: FsmState
   difficultyRank: number
@@ -204,6 +217,7 @@ export function createBotState(
   seed: number,
 ): BotState {
   const player = createPlayerState(spawn)
+  const torso = vec3(spawn.x, spawn.y + BOTS.torsoOffsetY, spawn.z)
   const head = vec3(spawn.x, spawn.y + BOTS.headOffsetY, spawn.z)
 
   const combat = createCombatState(archetype)
@@ -221,13 +235,16 @@ export function createBotState(
 
     health: createBotHealthState(BOTS.maxHealth),
     hitboxes: [
-      { center: player.position, radius: BOTS.torsoRadius, part: 'torso', owner: -1 },
+      { center: torso, radius: BOTS.torsoRadius, part: 'torso', owner: -1 },
       { center: head, radius: BOTS.headRadius, part: 'head', owner: -1 },
     ],
+    torsoCenter: torso,
+    headCenter: head,
 
     archetype,
     combat,
     combatInput: { triggerHeld: false, reloading: false, origin: vec3(), pitch: 0, yaw: 0 },
+    reloadTimerS: 0,
     shotResult: createShotResult(),
 
     fsm: createFsmState('idle'),
@@ -439,7 +456,16 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
   )
   const justEntered = state !== prevState
 
-  bot.combatInput.triggerHeld = state === 'engage' && visible
+  // Disciplina de ráfaga (BOTS.recoilDisciplineDeg, ver su comentario en
+  // bots/tuning.ts): suelta el gatillo si el retroceso vertical YA
+  // acumulado pasó el umbral, en vez de sostenerlo hasta vaciar el
+  // cargador. `pitchOffset` es el mismo offset que combat/recoil.ts ya
+  // aplica a la cámara -- 0 al empezar una ráfaga, crece con cada disparo,
+  // y sólo se recupera (stepRecoilRecovery) mientras el gatillo está
+  // suelto, así que este chequeo por sí solo ya produce ráfagas cortas con
+  // pausas, sin ningún temporizador nuevo.
+  const recoilTooHigh = radToDeg(bot.combat.recoil.pitchOffset) >= BOTS.recoilDisciplineDeg
+  bot.combatInput.triggerHeld = state === 'engage' && visible && !recoilTooHigh
 
   const errorRadius = currentErrorConeRadius(
     bot.difficulty.errorConeRad,
@@ -633,18 +659,21 @@ function worldToLocalAxes(worldX: number, worldZ: number, yaw: number): { forwar
 
 /**
  * Sincroniza las hitboxes del bot con su posición y estado de vida actuales.
- * El torso ya comparte el mismo Vec3 que bot.player.position (ver
- * createBotState) así que se mueve solo; la cabeza es un Vec3 propio,
- * desplazado en Y, que sí hay que resincronizar a mano cada tick -- mismo
+ * Torso y cabeza son Vec3 propios (bot.torsoCenter/headCenter), desplazados
+ * en Y desde bot.player.position (la BASE de la cápsula, no su centro --
+ * physics/capsule.ts), que hay que resincronizar a mano cada tick -- mismo
  * patrón que targets/targets.ts stepTargets(). Radio 0 en vez de sacar la
  * hitbox del array cuando está muerto (mismo motivo que las dianas: el
  * array de hitboxes combinado que arma game.ts tiene longitud fija).
  */
 function syncBotHitboxes(bot: BotState): void {
   const [torso, head] = bot.hitboxes
-  head.center.x = bot.player.position.x
-  head.center.y = bot.player.position.y + BOTS.headOffsetY
-  head.center.z = bot.player.position.z
+  bot.torsoCenter.x = bot.player.position.x
+  bot.torsoCenter.y = bot.player.position.y + BOTS.torsoOffsetY
+  bot.torsoCenter.z = bot.player.position.z
+  bot.headCenter.x = bot.player.position.x
+  bot.headCenter.y = bot.player.position.y + BOTS.headOffsetY
+  bot.headCenter.z = bot.player.position.z
 
   torso.radius = bot.health.alive ? BOTS.torsoRadius : 0
   head.radius = bot.health.alive ? BOTS.headRadius : 0
@@ -675,6 +704,11 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
     bot.input.jump = false
     bot.input.sprint = false
     bot.combatInput.triggerHeld = false
+    // Si murió a mitad de una recarga, no debe reaparecer todavía
+    // "recargando" -- resetCombatState (damageBot, más abajo) ya rellenó el
+    // cargador al morir, así que el temporizador quedaría sin sentido.
+    bot.combatInput.reloading = false
+    bot.reloadTimerS = 0
     syncBotHitboxes(bot)
     return
   }
@@ -743,9 +777,34 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
  * necesita el array de hitboxes del objetivo, que vive en game.ts, no en
  * BotWorld (BotWorld es sobre el MUNDO -- mapa, navgrid --, no sobre a quién
  * le puede pegar un disparo).
+ *
+ * Recarga automática: el jugador dispara la suya apretando R, ligada a la
+ * animación del viewmodel (weapons/viewmodel/rig.ts); un bot no tiene
+ * viewmodel ni tecla, así que dispara la suya sola apenas se queda sin
+ * munición, con un temporizador simple (`reloadTimerS`, archetype.reload.empty
+ * segundos) en vez de una animación. Bug real encontrado jugando una
+ * partida de 6 minutos completa (tarea de partida): sin esto, cualquier bot
+ * que vacía su cargador en un tiroteo sostenido queda desarmado el resto de
+ * la partida entera -- combatInput.reloading nunca se pone en `true`,
+ * stepFireControl nunca vuelve a disparar, y el bot sigue "Enfrentar"
+ * apuntando sin poder hacer nada. Con partidas largas y varios bots
+ * disparando en simultáneo, esto vacía la partida de acción con el correr
+ * de los minutos según más bots se quedan sin balas. `syncReloadState`
+ * (adentro de `stepCombat`, más abajo) es quien detecta el flanco
+ * `reloading` true->false y rellena el cargador -- mismo mecanismo que ya
+ * usa el jugador, no uno nuevo.
  */
 export function stepBotCombat(bot: BotState, targetHitboxes: Hitbox[], dt: number): number {
   if (!bot.health.alive) return 0
+
+  if (bot.combatInput.reloading) {
+    bot.reloadTimerS -= dt
+    if (bot.reloadTimerS <= 0) bot.combatInput.reloading = false
+  } else if (bot.combat.fireControl.ammo <= 0) {
+    bot.combatInput.reloading = true
+    bot.reloadTimerS = bot.archetype.reload.empty
+  }
+
   return stepCombat(bot.combat, bot.archetype, bot.combatInput, targetHitboxes, dt, bot.shotResult)
 }
 

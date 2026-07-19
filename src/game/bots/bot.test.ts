@@ -228,6 +228,50 @@ describe('combate integrado: el bot dispara por el mismo camino que el jugador',
     const shots = stepBotCombat(bot, [], TICK_DT)
     expect(shots).toBe(0)
   })
+
+  it('un bot que se queda sin munición se recarga solo y vuelve a disparar (no queda desarmado el resto de la partida)', () => {
+    const bot = createBotState(vec3(-10, 0, 5), 1, ARCHETYPE, 1)
+    bot.combatInput.triggerHeld = true
+    bot.combat.fireControl.ammo = 0
+
+    // Un tick alcanza para detectar el cargador vacío y arrancar la recarga sola.
+    stepBotCombat(bot, [], TICK_DT)
+    expect(bot.combatInput.reloading).toBe(true)
+    expect(bot.reloadTimerS).toBeGreaterThan(0)
+
+    // Mientras el temporizador no termina, sigue sin poder disparar.
+    const shotsMidReload = stepBotCombat(bot, [], TICK_DT)
+    expect(shotsMidReload).toBe(0)
+    expect(bot.combat.fireControl.ammo).toBe(0)
+
+    // Agota el temporizador completo (archetype.reload.empty).
+    const ticks = Math.ceil(ARCHETYPE.reload.empty / TICK_DT) + 2
+    for (let i = 0; i < ticks; i++) stepBotCombat(bot, [], TICK_DT)
+
+    // El cargador se rellena al terminar la recarga. Puede haber gastado ya
+    // el primer disparo en el mismo tick en que terminó (el gatillo sigue
+    // sostenido) -- lo que importa es que NO se quedó en 0 para siempre.
+    expect(bot.combatInput.reloading).toBe(false)
+    expect(bot.combat.fireControl.ammo).toBeGreaterThan(0)
+    expect(bot.combat.fireControl.ammo).toBeLessThanOrEqual(ARCHETYPE.magazine)
+  })
+
+  it('morir a mitad de una recarga no deja al bot "recargando" para siempre tras reaparecer', () => {
+    const { world } = makeWalledWorld()
+    const bot = createBotState(vec3(-10, 0, 5), 1, ARCHETYPE, 1)
+    bot.combatInput.triggerHeld = true
+    bot.combat.fireControl.ammo = 0
+    stepBotCombat(bot, [], TICK_DT) // arranca la recarga
+    expect(bot.combatInput.reloading).toBe(true)
+
+    damageBot(bot, 10000) // muere a mitad de la recarga
+    expect(bot.health.alive).toBe(false)
+
+    stepBotMotor(bot, world, TICK_DT)
+
+    expect(bot.combatInput.reloading).toBe(false)
+    expect(bot.reloadTimerS).toBe(0)
+  })
 })
 
 describe('respawn de bots', () => {
