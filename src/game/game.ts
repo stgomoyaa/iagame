@@ -1,4 +1,5 @@
 import { sanitizeDt } from '@/game/engine/dt'
+import { TICK_DT } from '@/game/engine/constants'
 import { createFixedLoop } from '@/game/engine/fixed-loop'
 import { createGpuTimer } from '@/game/engine/gpu-timer'
 import { createInputSystem } from '@/game/engine/input'
@@ -8,6 +9,21 @@ import type { FrameStats } from '@/game/engine/stats'
 import { createTuningPanel } from '@/game/engine/tuning-panel'
 import { ARENA } from '@/game/map/arena'
 import { createPlayerState, stepPlayer } from '@/game/movement/step'
+import {
+  createBotSquad,
+  createBotWorld,
+  damageBot,
+  registerGunshot,
+  stepAllBotsMotor,
+  stepAllBotsThink,
+  stepBotCombat,
+  type BotState,
+} from '@/game/bots/bot'
+import { buildNavGrid } from '@/game/bots/navgrid'
+import { createBotsRenderer } from '@/game/bots/renderer'
+import { BOTS } from '@/game/bots/tuning'
+import { raycastMap } from '@/game/combat/hitscan'
+import type { Hitbox } from '@/game/combat/hitboxes'
 import { ARCHETYPES, type ArchetypeId } from '@/game/weapons/archetypes'
 import { getWeaponVisual, weaponIndex } from '@/game/weapons/registry'
 import { createRigWeapon, syncRigWeapon } from '@/game/weapons/viewmodel/adapt'
@@ -68,6 +84,35 @@ export interface Game {
 
 const SENSITIVITY = 0.0022
 
+/** Cuántos bots poblar la arena, vía `?bots=N` (mismo patrón que
+ *  `?debug=1` en weapons/viewmodel/tuning-panel.ts). Default 6: suficiente
+ *  para ver el comportamiento en grupo sin saturar la arena en el uso
+ *  normal; `?bots=10` es lo que pide la verificación de presupuesto de la
+ *  sección 8 del spec. Clampeado a [0,20] contra un valor absurdo en la URL. */
+const DEFAULT_BOT_COUNT = 6
+const MAX_BOT_COUNT = 20
+
+function getBotCount(): number {
+  const raw = new URLSearchParams(window.location.search).get('bots')
+  if (raw === null) return DEFAULT_BOT_COUNT
+  const n = Number.parseInt(raw, 10)
+  if (!Number.isFinite(n)) return DEFAULT_BOT_COUNT
+  return Math.max(0, Math.min(MAX_BOT_COUNT, n))
+}
+
+/** Rango de dificultad 0..1 (bots/difficulty.ts), vía `?difficulty=`.
+ *  Default 0.5: punto medio entre Hierro y Radiante -- no hay todavía un
+ *  rango de jugador real del que derivarlo (sección 9 del spec, fase 4). */
+const DEFAULT_DIFFICULTY_RANK = 0.5
+
+function getDifficultyRank(): number {
+  const raw = new URLSearchParams(window.location.search).get('difficulty')
+  if (raw === null) return DEFAULT_DIFFICULTY_RANK
+  const n = Number.parseFloat(raw)
+  if (!Number.isFinite(n)) return DEFAULT_DIFFICULTY_RANK
+  return Math.max(0, Math.min(1, n))
+}
+
 export function createGame(canvas: HTMLCanvasElement): Game {
   const gfx = createRenderer(canvas)
   const viewmodel = createViewmodelRenderer(gfx.renderer)
@@ -83,6 +128,52 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   // sólo deja de recibir un array vacío.
   const targetsState = createTargets(createDefaultTargetDefs())
   const targetsRenderer = createTargetsRenderer(gfx.scene, targetsState)
+
+  // Bots (sección 8 del spec de fase 2): cerebro real (FSM, percepción,
+  // apuntado, navegación) sobre cuerpos placeholder (bots/renderer.ts).
+  // Navgrid horneado UNA vez desde la arena real -- nunca se recalcula en
+  // frame(). El rango de dificultad queda fijo en 0.5 (punto medio entre
+  // Hierro y Radiante, bots/difficulty.ts): el sistema de rangos que lo
+  // debería derivar del rango del jugador es fase 4, todavía no existe.
+  // `?bots=N` y `?difficulty=0..1` en la URL lo overridean para verificar a
+  // mano (ver getBotCount/getDifficultyRank más abajo).
+  const botGrid = buildNavGrid(ARENA)
+  const botWorld = createBotWorld(ARENA.boxes, raycastMap, botGrid)
+  const botArchetype = ARCHETYPES['ar-1']
+  // spawns.slice(1): el jugador ya ocupa spawns[0] (arriba). No es
+  // obligatorio (la física resuelve cualquier superposición inicial), pero
+  // evita que todo el escuadrón aparezca encima del jugador al arrancar.
+  const bots: BotState[] = createBotSquad(
+    ARENA.spawns.slice(1),
+    getBotCount(),
+    getDifficultyRank(),
+    botArchetype,
+  )
+  const botsRenderer = createBotsRenderer(gfx.scene, bots)
+
+  // Hitboxes del JUGADOR (torso + cabeza, mismo tamaño que los bots -- misma
+  // cápsula, PLAYER_CAPSULE): lo que los bots apuntan y disparan con su
+  // propio stepCombat. El torso comparte el mismo Vec3 que player.position
+  // (se mueve solo, igual que targets/targets.ts y bots/bot.ts); la cabeza
+  // es un Vec3 propio que frame() resincroniza cada frame más abajo.
+  const playerHeadHitboxPos = vec3()
+  const playerHitboxes: Hitbox[] = [
+    { center: player.position, radius: BOTS.torsoRadius, part: 'torso', owner: 0 },
+    { center: playerHeadHitboxPos, radius: BOTS.headRadius, part: 'head', owner: 0 },
+  ]
+
+  // Hitboxes combinadas para el disparo del JUGADOR: dianas + bots, en un
+  // solo array construido UNA vez (referencias, nunca reconstruido en
+  // frame()). `owner` de cada hitbox de bot se corre por `targetCount` para
+  // poder distinguir "pegó una diana" de "pegó un bot" al resolver el
+  // impacto -- ver el bloque de abajo que llama a applyHit/damageBot.
+  const targetCount = targetsState.targets.length
+  bots.forEach((bot, i) => {
+    bot.hitboxes[0].owner = targetCount + i
+    bot.hitboxes[1].owner = targetCount + i
+  })
+  const combinedHitboxes: Hitbox[] = [...targetsState.hitboxes]
+  for (const bot of bots) combinedHitboxes.push(bot.hitboxes[0], bot.hitboxes[1])
 
   // Sistema de feedback (sección 5 del spec de fase 1): un solo estado
   // preasignado, una capa de DOM imperativo para pintarlo y un controlador
@@ -327,6 +418,18 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     const ticks = loop.advance(frameDt)
     for (let i = 0; i < ticks; i++) {
       stepPlayer(player, input.player, ARENA.boxes)
+
+      // Bots: piensan y se mueven en el mismo tick fijo que el jugador
+      // (sección 8 del spec: "movimiento y colisión siguen corriendo cada
+      // tick de simulación"), no atados al framerate de render. El objetivo
+      // que perciben es la posición del jugador DE ESTE MISMO tick, recién
+      // actualizada arriba -- no la del frame anterior.
+      botWorld.simTimeS += TICK_DT
+      botWorld.targetEye.x = player.position.x
+      botWorld.targetEye.y = player.position.y + player.eyeHeight
+      botWorld.targetEye.z = player.position.z
+      stepAllBotsThink(bots, botWorld, TICK_DT)
+      stepAllBotsMotor(bots, botWorld, TICK_DT)
     }
 
     // Interpolar la posición de la cámara entre el tick anterior y el actual.
@@ -378,7 +481,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       combatInput.reloading = vmState.reloading
       combatInput.pitch = input.pitch
       combatInput.yaw = input.player.yaw
-      shotsFired = stepCombat(combatState, archetype, combatInput, targetsState.hitboxes, dt, shotResult)
+      shotsFired = stepCombat(combatState, archetype, combatInput, combinedHitboxes, dt, shotResult)
 
       // Culatazo del arma (weapons/viewmodel/rig.ts: fire(), sección "qué
       // existe" del spec) + punch de cámara (feedback/camera-punch.ts,
@@ -409,6 +512,40 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       sensMultiplier = adsSensitivityMultiplier(archetype.ads, easedAdsT)
     }
 
+    // Resincroniza la hitbox de cabeza del jugador (el torso ya comparte el
+    // mismo Vec3 que player.position, se mueve solo -- ver playerHitboxes
+    // arriba). Tiene que correr ANTES del combate de bots de abajo, que es
+    // quien realmente lee playerHitboxes.
+    playerHeadHitboxPos.x = player.position.x
+    playerHeadHitboxPos.y = player.position.y + player.eyeHeight
+    playerHeadHitboxPos.z = player.position.z
+
+    // Bots: cadencia + retroceso + dispersión + hitscan contra el jugador,
+    // el MISMO stepCombat que acaba de correr arriba para el jugador
+    // (sección 8 del spec: "reusa el mismo movement y combat que el
+    // jugador"). Una vez por frame, no por tick fijo -- mismo modelo de
+    // cadencia que el combate del jugador, así ambos avanzan fire-control
+    // con el mismo dt real.
+    for (let i = 0; i < bots.length; i++) {
+      const bot = bots[i]
+      const botShots = stepBotCombat(bot, playerHitboxes, dt)
+      if (botShots > 0) {
+        registerGunshot(botWorld.shots, bot.combatInput.origin, botWorld.simTimeS)
+      }
+      // Impacto confirmado contra el jugador: reusa el mismo pipeline de
+      // feedback que el hook de debug ya ejercitaba (viñeta direccional +
+      // shake + resta de vida, feedback/feedback.ts onDamageTaken) -- acá
+      // deja de ser un juguete de debug y pasa a ser el camino real.
+      if (botShots > 0 && bot.shotResult.hit && bot.shotResult.part !== 'none' && bot.shotResult.owner >= 0) {
+        const sourceYaw = directionYaw(
+          bot.player.position.x - player.position.x,
+          bot.player.position.z - player.position.z,
+        )
+        const bearing = vignetteBearing(input.player.yaw, sourceYaw)
+        onDamageTaken(feedbackState, bearing, bot.shotResult.damage)
+      }
+    }
+
     // Envejece hitmarkers/números de daño/viñetas/shake e integra el
     // impulso de punch que onShotFired() acaba de sumar arriba (si hubo
     // disparo este frame): tiene que correr ANTES de leer
@@ -420,14 +557,19 @@ export function createGame(canvas: HTMLCanvasElement): Game {
 
     gfx.camera.rotation.set(finalPitch, finalYaw, feedbackState.cameraPunch.roll, 'YXZ')
 
-    // Impacto confirmado contra una diana real (owner >= 0: golpear el
-    // mapa da owner -1, ver combat/shot.ts) -- hitmarker + número de daño +
-    // sonido + resta de vida a la diana (sección 5 y 6 del spec). Corre
-    // DESPUÉS de fijar la rotación de cámara de arriba: worldToScreen()
+    // Impacto confirmado contra una diana o un bot real (owner >= 0: golpear
+    // el mapa da owner -1, ver combat/shot.ts) -- hitmarker + número de daño
+    // + sonido + resta de vida (sección 5 y 6 del spec, más bots sección 8).
+    // `owner` viene de combinedHitboxes (armado arriba): índices por debajo
+    // de targetCount son dianas, el resto son bots (owner - targetCount).
+    // Corre DESPUÉS de fijar la rotación de cámara de arriba: worldToScreen()
     // necesita la orientación de ESTE frame para proyectar bien el punto de
     // impacto, no la del frame anterior.
     if (shotsFired > 0 && shotResult.hit && shotResult.part !== 'none' && shotResult.owner >= 0) {
-      const killed = applyHit(targetsState, shotResult.owner, shotResult.damage)
+      const killed =
+        shotResult.owner < targetCount
+          ? applyHit(targetsState, shotResult.owner, shotResult.damage)
+          : damageBot(bots[shotResult.owner - targetCount], shotResult.damage)
 
       // Punto de impacto reconstruido: cámara + forward(pitch,yaw) * distancia.
       // No es EXACTO -- ignora la dispersión de este disparo en particular
@@ -455,6 +597,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     }
 
     targetsRenderer.sync(targetsState)
+    botsRenderer.sync(bots)
 
     // El timer de GPU bracketea desde acá (antes del clear + render del
     // mundo) hasta después de la pasada del viewmodel, más abajo: esas dos
@@ -571,6 +714,21 @@ export function createGame(canvas: HTMLCanvasElement): Game {
             health: t.health,
             x: t.position.x,
           })),
+          // Sección 8 del spec (bots): estado real de cada bot, para
+          // verificar en el navegador que la FSM/percepción/navegación
+          // hacen lo que dicen sin depender sólo de lo visual -- mismo
+          // espíritu que `targets` arriba.
+          bots: bots.map((b) => ({
+            id: b.id,
+            state: b.fsm.current,
+            alive: b.health.alive,
+            health: b.health.health,
+            x: b.player.position.x,
+            y: b.player.position.y,
+            z: b.player.position.z,
+            aimYaw: b.aimMotor.yaw,
+            hasPath: b.pathIndex < b.path.length,
+          })),
         })
 
         // Hook de control para verificación en navegador sin pointer lock
@@ -620,6 +778,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       weaponTuning?.unmount()
       feedbackOverlay.unmount()
       targetsRenderer.dispose()
+      botsRenderer.dispose()
       weaponErrorBanner?.remove()
       weaponErrorBanner = null
       shownLoadError = null
