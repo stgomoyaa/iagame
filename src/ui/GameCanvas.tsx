@@ -111,7 +111,12 @@ export function GameCanvas() {
             mode={matchState.mode}
             visible={scoreboardHeld}
           />
-          {matchState.phase === 'ended' && <MatchSummary summary={buildSummary(matchState, MATCH)} />}
+          {matchState.phase === 'ended' && (
+            <MatchSummary
+              summary={buildSummary(matchState, MATCH)}
+              progress={game?.matchProgress ?? null}
+            />
+          )}
         </>
       )}
     </>

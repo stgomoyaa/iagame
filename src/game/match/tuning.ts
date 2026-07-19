@@ -32,7 +32,18 @@ export interface MatchTuning {
    *  desafío parejo de punta a punta. */
   difficultyMode: 'uniform' | 'mixed'
   uniformDifficultyRank: number
-  mixedDifficultyRanks: number[]
+  /**
+   * Cuánto se abren los bots de 'mixed' a cada lado del rango del jugador,
+   * en unidades de la escala 0..1 de bots/difficulty.ts. Reemplaza a la
+   * lista de rangos absolutos que usaba la fase 3: desde la fase 4 el
+   * centro lo pone el rango del jugador (game.ts resolveDifficultyRanks),
+   * así que lo único que hace falta tunear es la apertura.
+   *
+   * 0.15 sobre 25 rangos son unas 3.5 divisiones a cada lado: se nota la
+   * diferencia entre el bot más blando y el más duro de la partida sin que
+   * ninguno quede fuera del nivel al que el jugador está jugando.
+   */
+  mixedDifficultySpread: number
 
   /** Segundos entre que el JUGADOR muere y reaparece. Sólo gobierna al
    *  jugador -- los bots reusan su propio temporizador ya tuneado en
@@ -96,7 +107,7 @@ export const MATCH: MatchTuning = {
   // consistente con dificultad mixta, no con un nivel de desafío parejo.
   difficultyMode: 'mixed',
   uniformDifficultyRank: 0.5,
-  mixedDifficultyRanks: [0.2, 0.45, 0.7, 0.9],
+  mixedDifficultySpread: 0.15,
 
   respawnDelayS: 3.0,
   // Ni tan corto que morir no cueste nada (spawn-camping trivial) ni tan

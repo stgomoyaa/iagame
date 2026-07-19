@@ -16,7 +16,7 @@ const TUNING: MatchTuning = {
   botCount: 4,
   difficultyMode: 'uniform',
   uniformDifficultyRank: 0.5,
-  mixedDifficultyRanks: [0.5],
+  mixedDifficultySpread: 0.15,
   respawnDelayS: 3,
   respawnInvulnerabilityS: 1.5,
   scoreLimitFfa: 5,

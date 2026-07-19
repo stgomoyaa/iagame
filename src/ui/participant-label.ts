@@ -8,5 +8,7 @@
 import { PLAYER_ID } from '@/game/match/types'
 
 export function participantLabel(id: number): string {
-  return id === PLAYER_ID ? 'Vos' : `Bot ${id}`
+  // "Tú" y no "Vos": el juego habla en español neutro con tuteo, y el
+  // voseo se coló acá cuando esta etiqueta era sólo del killfeed.
+  return id === PLAYER_ID ? 'Tú' : `Bot ${id}`
 }

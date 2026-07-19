@@ -21,12 +21,21 @@
 
 import { defaultLoadout, normalizeLoadout, type Loadout } from '@/game/progression/loadout'
 import { levelForXp, NIVEL_INICIAL } from '@/game/progression/unlocks'
+import { createDefaultCareer, type CareerData } from '@/game/progression/career'
+import { createPlacementState, PLACEMENT, type PlacementState } from '@/game/progression/placement'
+import { RANK_MAX, RANK_MIN, RR_MAXIMO } from '@/game/progression/ranks'
+import { RR, type RankState } from '@/game/progression/rr'
 
 /**
  * Versión del formato guardado. Si cambia la forma de `ProgressData`, sube
  * este número y `load()` descarta lo viejo en vez de intentar interpretarlo.
+ *
+ * v2 (fase 4): suma rango, RR, colocaciones y contadores de partidas. Se
+ * descarta el guardado v1 en vez de migrarlo: lo único que se pierde son
+ * unas skins de arranque y un loadout que se rearma solo, y no vale la pena
+ * mantener un camino de migración para eso.
  */
-export const PROGRESS_VERSION = 1
+export const PROGRESS_VERSION = 2
 
 export const PROGRESS_STORAGE_KEY = 'iagame:progreso'
 
@@ -37,6 +46,14 @@ export interface ProgressData {
   /** Seeds de las skins del inventario. */
   skins: string[]
   loadout: Loadout
+  /** Posición en la escalera, o null si el jugador todavía está en
+   *  colocaciones (progression/ranks.ts y rr.ts). */
+  rank: RankState | null
+  placement: PlacementState
+  /** Partidas terminadas, colocaciones incluidas. */
+  partidasJugadas: number
+  victorias: number
+  derrotas: number
 }
 
 /**
@@ -61,11 +78,17 @@ export const SKINS_INICIALES: readonly string[] = [
 ]
 
 export function createDefaultProgress(): ProgressData {
+  const carrera = createDefaultCareer()
   return {
     version: PROGRESS_VERSION,
     xp: 0,
     skins: [...SKINS_INICIALES],
     loadout: defaultLoadout(NIVEL_INICIAL),
+    rank: carrera.rank,
+    placement: carrera.placement,
+    partidasJugadas: 0,
+    victorias: 0,
+    derrotas: 0,
   }
 }
 
@@ -85,6 +108,38 @@ function leerEntrada(raw: unknown): { slug: string | null; skinSeed: string | nu
   return {
     slug: typeof obj.slug === 'string' ? obj.slug : null,
     skinSeed: typeof obj.skinSeed === 'string' ? obj.skinSeed : null,
+  }
+}
+
+function numeroSeguro(v: unknown, fallback: number): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : fallback
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, v))
+}
+
+/** Lee un `RankState` de un blob desconocido. Devuelve null (= todavía en
+ *  colocaciones) ante cualquier cosa que no sea un rango entendible, que es
+ *  el estado seguro: un rango inventado por un guardado corrupto pondría al
+ *  jugador contra bots que no le corresponden. */
+function leerRank(raw: unknown): RankState | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const obj = raw as Record<string, unknown>
+  if (typeof obj.rank !== 'number' || !Number.isFinite(obj.rank)) return null
+  return {
+    rank: clamp(Math.floor(obj.rank), RANK_MIN, RANK_MAX),
+    rr: clamp(Math.floor(numeroSeguro(obj.rr, 0)), 0, RR_MAXIMO),
+    cushion: clamp(numeroSeguro(obj.cushion, RR.colchon), 0, RR.colchon),
+  }
+}
+
+function leerPlacement(raw: unknown): PlacementState {
+  if (typeof raw !== 'object' || raw === null) return createPlacementState()
+  const obj = raw as Record<string, unknown>
+  return {
+    played: clamp(Math.floor(numeroSeguro(obj.played, 0)), 0, PLACEMENT.partidas),
+    skill: clamp(numeroSeguro(obj.skill, PLACEMENT.skillInicial), 0, 1),
   }
 }
 
@@ -118,6 +173,48 @@ export function parseProgress(raw: unknown): ProgressData {
     xp,
     skins,
     loadout: normalizeLoadout(loadout, levelForXp(xp), skins),
+    rank: leerRank(obj.rank),
+    placement: leerPlacement(obj.placement),
+    partidasJugadas: Math.max(0, Math.floor(numeroSeguro(obj.partidasJugadas, 0))),
+    victorias: Math.max(0, Math.floor(numeroSeguro(obj.victorias, 0))),
+    derrotas: Math.max(0, Math.floor(numeroSeguro(obj.derrotas, 0))),
+  }
+}
+
+/**
+ * Vista de carrera del guardado. `career.ts` trabaja con `CareerData`, un
+ * subconjunto sin loadout ni versión, para no arrastrar el blob entero a la
+ * matemática de rangos ni a la simulación.
+ */
+export function careerFromProgress(data: ProgressData): CareerData {
+  return {
+    rank: data.rank,
+    placement: data.placement,
+    partidasJugadas: data.partidasJugadas,
+    victorias: data.victorias,
+    derrotas: data.derrotas,
+    xp: data.xp,
+    skins: data.skins,
+  }
+}
+
+/**
+ * Devuelve un guardado nuevo con la carrera actualizada. El loadout se
+ * renormaliza porque subir de nivel puede haber desbloqueado armas y el drop
+ * agrega una skin al inventario: los dos cambian qué es un loadout válido.
+ */
+export function progressWithCareer(data: ProgressData, career: CareerData): ProgressData {
+  return {
+    ...data,
+    version: PROGRESS_VERSION,
+    xp: career.xp,
+    skins: career.skins,
+    rank: career.rank,
+    placement: career.placement,
+    partidasJugadas: career.partidasJugadas,
+    victorias: career.victorias,
+    derrotas: career.derrotas,
+    loadout: normalizeLoadout(data.loadout, levelForXp(career.xp), career.skins),
   }
 }
 

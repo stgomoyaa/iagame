@@ -257,3 +257,236 @@ body {
     transition: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Rangos y drop de skin (fase 4). Overlay de fin de partida.
+
+   Hereda el lenguaje de la armería a propósito (mismo chaflán, mismos grises
+   tinteados en OKLCH, mismo acento, misma curva de easing): la pantalla de
+   recompensa y la de loadout son el mismo juego, y un segundo sistema visual
+   sólo para el resumen se leería como otra aplicación pegada encima.
+
+   La firma de esta pantalla es la CAJA: un panel sellado que se parte por su
+   propio chaflán en dos mitades que se apartan. No es un modal genérico con
+   fade, es un objeto que se abre.
+   ------------------------------------------------------------------------ */
+.rng {
+  --rng-panel: oklch(0.168 0.014 255);
+  --rng-panel-alto: oklch(0.205 0.016 255);
+  --rng-linea: oklch(0.30 0.015 255);
+  --rng-linea-tenue: oklch(0.235 0.013 255);
+  --rng-texto: oklch(0.925 0.006 255);
+  --rng-tenue: oklch(0.66 0.012 255);
+  --rng-apagado: oklch(0.48 0.012 255);
+  --rng-acento: oklch(0.82 0.145 195);
+  --rng-gana: oklch(0.80 0.155 150);
+  --rng-pierde: oklch(0.68 0.155 25);
+  --rng-chaflan: 12px;
+  --rng-curva: cubic-bezier(0.32, 0.72, 0, 1);
+
+  font-family: var(--font-mono), ui-monospace, monospace;
+  color: var(--rng-texto);
+}
+
+.rng-chaflan {
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--rng-chaflan)) 0,
+    100% var(--rng-chaflan),
+    100% 100%,
+    var(--rng-chaflan) 100%,
+    0 calc(100% - var(--rng-chaflan))
+  );
+}
+
+.rng-mono {
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.rng-panel {
+  background: var(--rng-panel);
+  border: 1px solid var(--rng-linea-tenue);
+}
+
+/* Barra de RR segmentada: veinte muescas, mismo instrumento que la barra de
+   estadísticas de la armería. Las muescas ya ganadas antes de esta partida
+   van en acento pleno; las que sumó ESTA partida van marcadas aparte, así el
+   jugador ve de dónde salió el cambio sin leer el número. */
+.rng-barra {
+  display: grid;
+  grid-template-columns: repeat(20, minmax(0, 1fr));
+  gap: 2px;
+  height: 0.625rem;
+}
+
+.rng-muesca {
+  background: var(--rng-linea-tenue);
+}
+
+.rng-muesca[data-estado='previo'] {
+  background: color-mix(in oklch, var(--rng-acento), transparent 55%);
+}
+
+.rng-muesca[data-estado='ganado'] {
+  background: var(--rng-acento);
+}
+
+.rng-muesca[data-estado='perdido'] {
+  background: color-mix(in oklch, var(--rng-pierde), transparent 35%);
+}
+
+/* Insignia de rango: rombo cortado, no un círculo con gradiente. El color lo
+   inyecta React desde progression/ranks.ts (--rng-tier). */
+.rng-insignia {
+  width: 2.75rem;
+  height: 2.75rem;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklch, var(--rng-tier, var(--rng-acento)), transparent 82%);
+  border: 1px solid var(--rng-tier, var(--rng-acento));
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+/* La caja del drop. Cerrada es un botón; abierta muestra la skin. */
+.rng-caja {
+  position: relative;
+  width: 100%;
+  min-height: 7.5rem;
+  display: grid;
+  place-items: center;
+  background: var(--rng-panel-alto);
+  border: 1px solid var(--rng-linea);
+  color: inherit;
+  cursor: pointer;
+  overflow: hidden;
+  transition:
+    border-color 160ms var(--rng-curva),
+    background-color 160ms var(--rng-curva);
+}
+
+.rng-caja:hover,
+.rng-caja:focus-visible {
+  border-color: var(--rng-acento);
+  background: color-mix(in oklch, var(--rng-panel-alto), var(--rng-acento) 6%);
+}
+
+.rng-caja:focus-visible {
+  outline: 1px solid var(--rng-acento);
+  outline-offset: 2px;
+}
+
+.rng-caja:active {
+  background: color-mix(in oklch, var(--rng-panel-alto), var(--rng-acento) 12%);
+}
+
+/* Las dos mitades selladas. Se apartan al abrir. Son decorativas: el
+   contenido de la skin vive debajo y ya está renderizado, así que si la
+   animación no corre igual se ve la skin (nunca contenido escondido detrás
+   de un reveal). */
+.rng-mitad {
+  position: absolute;
+  inset: 0;
+  background: var(--rng-panel-alto);
+  border: 1px solid var(--rng-linea);
+  transition:
+    transform 420ms var(--rng-curva),
+    opacity 420ms var(--rng-curva);
+}
+
+.rng-mitad[data-lado='izq'] {
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+.rng-mitad[data-lado='der'] {
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+
+.rng-caja[data-abierta='1'] .rng-mitad {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.rng-caja[data-abierta='1'] .rng-mitad[data-lado='izq'] {
+  transform: translate3d(-55%, -55%, 0);
+}
+
+.rng-caja[data-abierta='1'] .rng-mitad[data-lado='der'] {
+  transform: translate3d(55%, 55%, 0);
+}
+
+/* Entrada de la skin revelada. El estado natural del elemento es VISIBLE:
+   la animación sólo agrega el gesto de entrada. Si no corre (motion
+   reducido, animación deshabilitada), la skin igual se ve. */
+@keyframes rng-revelar {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rng-revelado {
+  animation: rng-revelar 340ms var(--rng-curva) both;
+}
+
+/* Ceremonia de ascenso: un riel que barre una sola vez. Sin orbe, sin glow
+   flotante, sin confeti. */
+@keyframes rng-barrido {
+  from {
+    transform: translate3d(-100%, 0, 0);
+  }
+  to {
+    transform: translate3d(100%, 0, 0);
+  }
+}
+
+.rng-ceremonia {
+  position: relative;
+  overflow: hidden;
+  border-left: 2px solid var(--rng-tier, var(--rng-acento));
+}
+
+.rng-ceremonia::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklch, var(--rng-tier, var(--rng-acento)), transparent 78%),
+    transparent
+  );
+  animation: rng-barrido 1100ms var(--rng-curva) 180ms both;
+  pointer-events: none;
+}
+
+.rng-tabla th,
+.rng-tabla td {
+  padding: 0.25rem 0.5rem 0.25rem 0;
+}
+
+.rng-tabla tbody tr {
+  border-top: 1px solid var(--rng-linea-tenue);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rng-caja,
+  .rng-mitad {
+    transition: none;
+  }
+
+  .rng-revelado,
+  .rng-ceremonia::after {
+    animation: none;
+  }
+
+  /* Sin animación las mitades tienen que desaparecer igual, o taparían la
+     skin para siempre. */
+  .rng-caja[data-abierta='1'] .rng-mitad {
+    display: none;
+  }
+}

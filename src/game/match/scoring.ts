@@ -12,10 +12,19 @@ export interface ParticipantStats {
   kills: number
   deaths: number
   damageDealt: number
+  /** Kills que fueron headshot. Alimenta el % de headshots del combatScore
+   *  (progression/combat-score.ts) y la columna del scoreboard. */
+  headshots: number
+  /** Kills encadenados sin morir. Se reinicia al morir. */
+  streak: number
+  /** La racha más larga de la partida. Es la que puntúa: la racha actual
+   *  vale 0 apenas te matan, pero haber llegado a 8 seguidos fue real y
+   *  tiene que contar en el resumen. */
+  bestStreak: number
 }
 
 export function createParticipantStats(id: number): ParticipantStats {
-  return { id, kills: 0, deaths: 0, damageDealt: 0 }
+  return { id, kills: 0, deaths: 0, damageDealt: 0, headshots: 0, streak: 0, bestStreak: 0 }
 }
 
 /** Daño negativo o NaN no debería llegar nunca desde combat/, pero clampear
@@ -33,9 +42,23 @@ export function addDamage(stats: ParticipantStats, amount: number): void {
  *  (killer === victim) no está modelado -- no hay ninguna fuente de daño
  *  propio en este juego (sin explosivos, sin caída) -- así que no hace
  *  falta un caso especial. */
-export function addKill(killer: ParticipantStats, victim: ParticipantStats): void {
+export function addKill(
+  killer: ParticipantStats,
+  victim: ParticipantStats,
+  headshot = false,
+): void {
   killer.kills += 1
+  if (headshot) killer.headshots += 1
+
+  // La racha vive acá y no en un contador aparte de game.ts porque este es
+  // el único punto que ve LOS DOS LADOS de cada muerte: sumarle la racha al
+  // que mató y cortársela al que murió. Con un tracker externo habría que
+  // duplicar el reinicio por muerte, que es justo la mitad que se olvida.
+  killer.streak += 1
+  if (killer.streak > killer.bestStreak) killer.bestStreak = killer.streak
+
   victim.deaths += 1
+  victim.streak = 0
 }
 
 /** Suma de kills de todos los participantes de `team` (mismo criterio de
