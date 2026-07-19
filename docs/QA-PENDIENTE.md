@@ -45,4 +45,6 @@ Los sliders que más mueven la aguja, en orden: `groundAccel`, `airAccel`, `grav
 ## Seguridad
 
 - [ ] **Regenerar la API key de Steam** en https://steamcommunity.com/dev/apikey. La que
-      pegaste quedó en un transcript persistente. Toma 30 segundos e invalida la anterior.
+      está en `.env.local` volvió a quedar expuesta en un transcript persistente (esta vez
+      al probar `process.loadEnvFile` mientras se construía el catalogador del Workshop).
+      Ya van dos veces. Toma 30 segundos e invalida la anterior.

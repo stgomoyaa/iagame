@@ -48,5 +48,23 @@ next-env.d.ts
 # sólo los GLB convertidos que produce scripts/convert-weapons.ts.
 assets-src/
 
+# Política de dos niveles para modelos de armas (ver docs/WORKSHOP.md):
+#   - public/assets/weapons/  -> CC0, SÍ se commitea, se puede publicar.
+#   - workshop-assets/        -> derivado del Steam Workshop (mods de CS/CoD
+#     no autorizados en su mayoría), uso local y personal, NUNCA se commitea
+#     ni se publica. Guardia real (no sólo esta línea) en
+#     scripts/workshop-guard.test.ts, que chequea el índice de git, no este
+#     archivo: `git add -f` ignora .gitignore y es exactamente lo que ese
+#     test existe para detectar.
+workshop-assets/
+
+# Salida del catalogador del Workshop (scripts/workshop-catalog.ts): son
+# datos de trabajo que se regeneran corriendo el script, no código ni
+# assets. No tienen contenido con copyright (sólo metadata pública del
+# listado del Workshop), pero igual quedan fuera del repo porque el catálogo
+# entero es parte del flujo "uso local, nunca publicado".
+/workshop-catalog.csv
+/workshop-catalog.json
+
 # permitir el ejemplo de env aunque .env* esté ignorado arriba
 !.env.example
