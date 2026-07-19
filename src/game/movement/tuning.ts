@@ -87,8 +87,17 @@ export const MOVEMENT: MovementTuning = {
   // airAccel * dt * airWishSpeedCap = 100 * (1/128) * 0.5 = 0.39 m/s por tick.
   // El equilibrio del decay exponencial es gain / (1 - exp(-decay * dt)).
   // Con decay 3 el equilibrio queda en +16.8 m/s sobre el tope (31 m/s reales),
-  // o sea el tope no toparía nada. Con 12 queda en +4.4, que sostiene ~18.8 m/s:
-  // el bhop premia, pero no se descontrola.
+  // o sea el tope no toparía nada. Con 12 ese mismo cálculo teórico da +4.4
+  // (18.8 m/s reales) — pero asume ganancia en TODOS los ticks aéreos, y no
+  // es lo que pasa. Medido de verdad (20k ticks de strafe perfecto, mismo
+  // patrón que bhop.test.ts): converge a ~14.45 m/s sostenido (el piso de
+  // la oscilación en régimen) con picos de ~15.01, bastante por debajo del
+  // 18.8 teórico. La causa: con incrementos de yaw fijos, la proyección de
+  // la velocidad actual sobre el wishDir de ese tick a veces ya supera
+  // airWishSpeedCap (addSpeed <= 0 en accelerate.ts) y ese tick no suma
+  // nada — cerca de un 28% de los ticks aéreos, en esta medición. La
+  // ganancia promedio real por tick queda por debajo de la máxima teórica,
+  // así que el equilibrio también.
   bhopSoftCapDecay: 12.0,
 
   slideBoost: 1.35,
