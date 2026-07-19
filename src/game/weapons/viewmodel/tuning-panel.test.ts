@@ -1,0 +1,208 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { loadWeaponTuningOverrides } from '@/game/weapons/viewmodel/tuning-panel'
+import { WEAPON_REGISTRY } from '@/game/weapons/registry'
+
+/**
+ * Defecto 5: loadWeaponTuningOverrides valida sólo Number.isFinite, sin
+ * rango, y no tenía ni un test. weapons_tuning.json es editable a mano (y lo
+ * escribe el panel de tuning), así que un valor corrupto o absurdo tiene que
+ * rechazarse en vez de colarse silenciosamente al registro que game.ts lee
+ * cada frame.
+ *
+ * `pistol-1` es un slug real de index.json (ver registry.test.ts).
+ * WEAPON_REGISTRY es un singleton de módulo: cada test snapshotea el arma
+ * antes de mutarla y la restaura después, para no contaminar otros tests de
+ * este archivo.
+ */
+const SLUG = 'pistol-1'
+
+interface Snapshot {
+  hipOffset: { x: number; y: number; z: number; rx: number; ry: number; rz: number }
+  adsOffset: { x: number; y: number; z: number; rx: number; ry: number; rz: number }
+  rotationOffset: { rx: number; ry: number; rz: number }
+  scaleAdjust: number
+  adsTime: number
+  kickMagnitude: number
+}
+
+function snapshot(): Snapshot {
+  const v = WEAPON_REGISTRY[SLUG]
+  return {
+    hipOffset: { ...v.hipOffset },
+    adsOffset: { ...v.adsOffset },
+    rotationOffset: { ...v.rotationOffset },
+    scaleAdjust: v.scaleAdjust,
+    adsTime: v.adsTime,
+    kickMagnitude: v.kickMagnitude,
+  }
+}
+
+function restore(snap: Snapshot): void {
+  const v = WEAPON_REGISTRY[SLUG]
+  Object.assign(v.hipOffset, snap.hipOffset)
+  Object.assign(v.adsOffset, snap.adsOffset)
+  Object.assign(v.rotationOffset, snap.rotationOffset)
+  v.scaleAdjust = snap.scaleAdjust
+  v.adsTime = snap.adsTime
+  v.kickMagnitude = snap.kickMagnitude
+}
+
+/** fetch falso que resuelve con la respuesta dada, sin pegarle a la red. */
+function fakeFetch(ok: boolean, body: unknown): typeof fetch {
+  return (async () => ({
+    ok,
+    json: async () => body,
+  })) as unknown as typeof fetch
+}
+
+/** fetch falso cuyo .json() rechaza, como un archivo presente pero con JSON roto. */
+function fakeFetchInvalidJson(): typeof fetch {
+  return (async () => ({
+    ok: true,
+    json: async () => {
+      throw new SyntaxError('Unexpected token')
+    },
+  })) as unknown as typeof fetch
+}
+
+/** fetch falso que rechaza directamente, como una red caída o el server abajo. */
+function fakeFetchNetworkError(): typeof fetch {
+  return (async () => {
+    throw new TypeError('failed to fetch')
+  }) as unknown as typeof fetch
+}
+
+describe('loadWeaponTuningOverrides', () => {
+  let snap: Snapshot
+  let originalFetch: typeof fetch
+  let warnSpy: ReturnType<typeof vi.spyOn>
+  let errorSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    snap = snapshot()
+    originalFetch = globalThis.fetch
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    restore(snap)
+    globalThis.fetch = originalFetch
+    warnSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+
+  it('archivo válido pisa los valores del registry', async () => {
+    globalThis.fetch = fakeFetch(true, {
+      [SLUG]: {
+        hipOffset: { x: 0.12 },
+        adsOffset: { z: 0.2 },
+        rotationOffset: { ry: 0.5 },
+        scaleAdjust: 1.4,
+        adsTime: 0.3,
+        kickMagnitude: 2.1,
+      },
+    })
+
+    await loadWeaponTuningOverrides()
+
+    const v = WEAPON_REGISTRY[SLUG]
+    expect(v.hipOffset.x).toBe(0.12)
+    expect(v.adsOffset.z).toBe(0.2)
+    expect(v.rotationOffset.ry).toBe(0.5)
+    expect(v.scaleAdjust).toBe(1.4)
+    expect(v.adsTime).toBe(0.3)
+    expect(v.kickMagnitude).toBe(2.1)
+  })
+
+  it('un 404 (archivo inexistente) no lanza y no cambia nada', async () => {
+    globalThis.fetch = fakeFetch(false, null)
+    await expect(loadWeaponTuningOverrides()).resolves.toBeUndefined()
+    expect(WEAPON_REGISTRY[SLUG].adsTime).toBe(snap.adsTime)
+    expect(WEAPON_REGISTRY[SLUG].scaleAdjust).toBe(snap.scaleAdjust)
+  })
+
+  it('la red caída (fetch rechaza) no lanza', async () => {
+    globalThis.fetch = fakeFetchNetworkError()
+    await expect(loadWeaponTuningOverrides()).resolves.toBeUndefined()
+    expect(WEAPON_REGISTRY[SLUG].adsTime).toBe(snap.adsTime)
+  })
+
+  it('JSON malformado no lanza, no cambia nada y se loguea', async () => {
+    globalThis.fetch = fakeFetchInvalidJson()
+    await expect(loadWeaponTuningOverrides()).resolves.toBeUndefined()
+    expect(WEAPON_REGISTRY[SLUG].adsTime).toBe(snap.adsTime)
+    expect(errorSpy).toHaveBeenCalled()
+  })
+
+  it('un slug desconocido no crea una entrada nueva ni lanza', async () => {
+    globalThis.fetch = fakeFetch(true, { 'arma-que-no-existe': { adsTime: 0.5 } })
+    await expect(loadWeaponTuningOverrides()).resolves.toBeUndefined()
+    expect(WEAPON_REGISTRY['arma-que-no-existe']).toBeUndefined()
+  })
+
+  it('campos de tipo incorrecto se ignoran, el resto del arma sigue procesándose', async () => {
+    globalThis.fetch = fakeFetch(true, {
+      [SLUG]: {
+        adsTime: 'rapido',
+        scaleAdjust: null,
+        hipOffset: 'no es un objeto',
+        kickMagnitude: 2.5,
+      },
+    })
+    await loadWeaponTuningOverrides()
+    const v = WEAPON_REGISTRY[SLUG]
+    expect(v.adsTime).toBe(snap.adsTime)
+    expect(v.scaleAdjust).toBe(snap.scaleAdjust)
+    expect(v.hipOffset).toEqual(snap.hipOffset)
+    expect(v.kickMagnitude).toBe(2.5)
+  })
+
+  it('campos extra desconocidos no rompen la carga', async () => {
+    globalThis.fetch = fakeFetch(true, {
+      [SLUG]: { mysteryField: 123, scaleAdjust: 1.2 },
+    })
+    await expect(loadWeaponTuningOverrides()).resolves.toBeUndefined()
+    expect(WEAPON_REGISTRY[SLUG].scaleAdjust).toBe(1.2)
+  })
+
+  describe('rango, no sólo finitud (Defecto 5)', () => {
+    it('adsTime=0 se rechaza: no puede dividir por cero dentro de stepViewmodel', async () => {
+      globalThis.fetch = fakeFetch(true, { [SLUG]: { adsTime: 0 } })
+      await loadWeaponTuningOverrides()
+      expect(WEAPON_REGISTRY[SLUG].adsTime).toBe(snap.adsTime)
+      expect(warnSpy).toHaveBeenCalled()
+      const mensaje = warnSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n')
+      expect(mensaje).toContain(SLUG)
+      expect(mensaje).toContain('adsTime')
+    })
+
+    it('adsTime negativo se rechaza', async () => {
+      globalThis.fetch = fakeFetch(true, { [SLUG]: { adsTime: -0.5 } })
+      await loadWeaponTuningOverrides()
+      expect(WEAPON_REGISTRY[SLUG].adsTime).toBe(snap.adsTime)
+    })
+
+    it('scaleAdjust=0 se rechaza: el arma no puede quedar invisible por un hand-edit', async () => {
+      globalThis.fetch = fakeFetch(true, { [SLUG]: { scaleAdjust: 0 } })
+      await loadWeaponTuningOverrides()
+      expect(WEAPON_REGISTRY[SLUG].scaleAdjust).toBe(snap.scaleAdjust)
+      const mensaje = warnSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n')
+      expect(mensaje).toContain(SLUG)
+      expect(mensaje).toContain('scaleAdjust')
+    })
+
+    it('scaleAdjust negativo se rechaza: el arma no puede quedar invertida', async () => {
+      globalThis.fetch = fakeFetch(true, { [SLUG]: { scaleAdjust: -2 } })
+      await loadWeaponTuningOverrides()
+      expect(WEAPON_REGISTRY[SLUG].scaleAdjust).toBe(snap.scaleAdjust)
+    })
+
+    it('valores dentro de rango sí se aplican', async () => {
+      globalThis.fetch = fakeFetch(true, { [SLUG]: { adsTime: 0.5, scaleAdjust: 1.8 } })
+      await loadWeaponTuningOverrides()
+      expect(WEAPON_REGISTRY[SLUG].adsTime).toBe(0.5)
+      expect(WEAPON_REGISTRY[SLUG].scaleAdjust).toBe(1.8)
+    })
+  })
+})

@@ -273,19 +273,67 @@ export function createWeaponTuningPanel(controls: WeaponTuningControls): WeaponT
   }
 }
 
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+interface FieldRange {
+  min: number
+  max: number
 }
 
-function applyTransformOverride(target: Transform, raw: unknown): void {
+// Mismos límites que ya exponen los sliders de SLIDERS más arriba: el
+// archivo cargado no debería poder expresar un estado que la propia UI en
+// vivo nunca produciría. positionOffset en metros, rotación en radianes.
+const POSITION_RANGE: FieldRange = { min: -1, max: 1 }
+const ROTATION_RANGE: FieldRange = { min: -Math.PI, max: Math.PI }
+const SCALE_ADJUST_RANGE: FieldRange = { min: 0.1, max: 3 }
+const ADS_TIME_RANGE: FieldRange = { min: 0.02, max: 1 }
+const KICK_MAGNITUDE_RANGE: FieldRange = { min: 0, max: 5 }
+
+/**
+ * Lee un campo numérico validando tipo, finitud Y rango. `weapons_tuning.json`
+ * es editable a mano y también lo escribe el panel (exportTuning), así que
+ * un valor corrupto o fuera de rango tiene que rechazarse en vez de
+ * colarse: un adsTime de 0 divide por cero dentro de stepViewmodel (ver
+ * rig.ts, `frac / weapon.adsTime`) y un scaleAdjust de 0 o negativo deja el
+ * arma invisible o invertida. Se loguea slug + campo + valor rechazado
+ * (nunca sólo "valor inválido") para que un hand-edit malo sea
+ * diagnosticable en vez de un misterio. Un campo ausente (`undefined`) es
+ * el caso normal — nadie tuneó ese campo — y no se loguea.
+ */
+function readNumber(
+  slug: string,
+  field: string,
+  raw: unknown,
+  range: FieldRange,
+): number | undefined {
+  if (raw === undefined) return undefined
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    console.warn(
+      `weapons_tuning.json: "${slug}".${field} no es un número finito (recibido: ${JSON.stringify(raw)}), se ignora`,
+    )
+    return undefined
+  }
+  if (raw < range.min || raw > range.max) {
+    console.warn(
+      `weapons_tuning.json: "${slug}".${field} = ${raw} fuera de rango [${range.min}, ${range.max}], se ignora`,
+    )
+    return undefined
+  }
+  return raw
+}
+
+function applyTransformOverride(
+  slug: string,
+  fieldPrefix: string,
+  target: Transform,
+  raw: unknown,
+): void {
   if (typeof raw !== 'object' || raw === null) return
   const src = raw as Record<string, unknown>
-  const x = num(src.x)
-  const y = num(src.y)
-  const z = num(src.z)
-  const rx = num(src.rx)
-  const ry = num(src.ry)
-  const rz = num(src.rz)
+  const x = readNumber(slug, `${fieldPrefix}.x`, src.x, POSITION_RANGE)
+  const y = readNumber(slug, `${fieldPrefix}.y`, src.y, POSITION_RANGE)
+  const z = readNumber(slug, `${fieldPrefix}.z`, src.z, POSITION_RANGE)
+  const rx = readNumber(slug, `${fieldPrefix}.rx`, src.rx, ROTATION_RANGE)
+  const ry = readNumber(slug, `${fieldPrefix}.ry`, src.ry, ROTATION_RANGE)
+  const rz = readNumber(slug, `${fieldPrefix}.rz`, src.rz, ROTATION_RANGE)
   if (x !== undefined) target.x = x
   if (y !== undefined) target.y = y
   if (z !== undefined) target.z = z
@@ -295,14 +343,15 @@ function applyTransformOverride(target: Transform, raw: unknown): void {
 }
 
 function applyRotationOffsetOverride(
+  slug: string,
   target: { rx: number; ry: number; rz: number },
   raw: unknown,
 ): void {
   if (typeof raw !== 'object' || raw === null) return
   const src = raw as Record<string, unknown>
-  const rx = num(src.rx)
-  const ry = num(src.ry)
-  const rz = num(src.rz)
+  const rx = readNumber(slug, 'rotationOffset.rx', src.rx, ROTATION_RANGE)
+  const ry = readNumber(slug, 'rotationOffset.ry', src.ry, ROTATION_RANGE)
+  const rz = readNumber(slug, 'rotationOffset.rz', src.rz, ROTATION_RANGE)
   if (rx !== undefined) target.rx = rx
   if (ry !== undefined) target.ry = ry
   if (rz !== undefined) target.rz = rz
@@ -339,15 +388,17 @@ export async function loadWeaponTuningOverrides(): Promise<void> {
     if (typeof override !== 'object' || override === null) continue
     const o = override as Record<string, unknown>
 
-    if ('hipOffset' in o) applyTransformOverride(visual.hipOffset, o.hipOffset)
-    if ('adsOffset' in o) applyTransformOverride(visual.adsOffset, o.adsOffset)
-    if ('rotationOffset' in o) applyRotationOffsetOverride(visual.rotationOffset, o.rotationOffset)
+    if ('hipOffset' in o) applyTransformOverride(slug, 'hipOffset', visual.hipOffset, o.hipOffset)
+    if ('adsOffset' in o) applyTransformOverride(slug, 'adsOffset', visual.adsOffset, o.adsOffset)
+    if ('rotationOffset' in o) {
+      applyRotationOffsetOverride(slug, visual.rotationOffset, o.rotationOffset)
+    }
 
-    const scaleAdjust = num(o.scaleAdjust)
+    const scaleAdjust = readNumber(slug, 'scaleAdjust', o.scaleAdjust, SCALE_ADJUST_RANGE)
     if (scaleAdjust !== undefined) visual.scaleAdjust = scaleAdjust
-    const adsTime = num(o.adsTime)
+    const adsTime = readNumber(slug, 'adsTime', o.adsTime, ADS_TIME_RANGE)
     if (adsTime !== undefined) visual.adsTime = adsTime
-    const kickMagnitude = num(o.kickMagnitude)
+    const kickMagnitude = readNumber(slug, 'kickMagnitude', o.kickMagnitude, KICK_MAGNITUDE_RANGE)
     if (kickMagnitude !== undefined) visual.kickMagnitude = kickMagnitude
   }
 }

@@ -1,3 +1,4 @@
+import { sanitizeDt } from '@/game/engine/dt'
 import { MOVEMENT } from '@/game/movement/tuning'
 import type { VmTransform, WeaponVisual } from '@/game/weapons/viewmodel/types'
 import { VIEWMODEL } from '@/game/weapons/viewmodel/tuning'
@@ -91,8 +92,16 @@ export function fire(state: ViewmodelState, weapon: WeaponVisual): void {
   state.kickSide = -state.kickSide
 }
 
-/** Arranca (o reinicia) la secuencia de recarga. Resetea los flags de evento. */
+/**
+ * Arranca la secuencia de recarga. No-op si ya hay una en curso: sin este
+ * guard, llamar startReload() en cada frame (p.ej. R modelada como estado
+ * sostenido, la convención de TODO el resto de engine/input.ts) resetea
+ * reloadT a 0 en cada tick y la recarga nunca cruza su primera fracción.
+ * Queda congelada en frame cero para siempre y ni magOut ni magIn se
+ * emiten jamás: un deadlock silencioso, no un error.
+ */
 export function startReload(state: ViewmodelState, weapon: WeaponVisual): void {
+  if (state.reloading) return
   state.reloading = true
   state.reloadT = 0
   state.reloadTime = weapon.reloadTime
@@ -100,8 +109,22 @@ export function startReload(state: ViewmodelState, weapon: WeaponVisual): void {
   state.emittedMagIn = false
 }
 
-/** Arranca la subida desde DRAW_DROP al cambiar de arma. */
+/**
+ * Arranca la subida desde DRAW_DROP al cambiar de arma. Cancela cualquier
+ * recarga en curso: sin esto, el arma nueva hereda la animación y el
+ * reloadTime del arma anterior (memoria fantasma en `state`, que es
+ * compartido entre armas), y una vez que exista munición real de por medio
+ * esto es el exploit clásico de cancelar la recarga cambiando de arma y
+ * quedarse con el cargador lleno. Los flags de evento también se limpian:
+ * dejan `state` en el mismo reposo que createViewmodelState(), listo para
+ * un startReload() futuro sin arrastrar nada de este intento cancelado.
+ */
 export function startDraw(state: ViewmodelState, weapon: WeaponVisual): void {
+  state.reloading = false
+  state.reloadT = 0
+  state.emittedMagOut = false
+  state.emittedMagIn = false
+
   state.drawing = true
   state.drawT = 0
   state.drawTime = weapon.drawTime
@@ -150,6 +173,18 @@ export function stepViewmodel(
   out: VmTransform,
   dt: number,
 ): void {
+  // Ver engine/dt.ts. game.ts ya sanea frameDt antes de llamar acá, pero el
+  // guard vive también en el propio state machine: sanitizeDt es una
+  // función pura sobre primitivos (cero asignaciones), así que endurecerse
+  // acá adentro no cuesta nada y protege a cualquier llamador futuro, no
+  // sólo al de hoy. Sin tope superior (a diferencia de step.ts o el fixed
+  // loop): este rig corre por frame, no por tick fijo, y sus propios tests
+  // le pasan dt grandes a propósito (stall de tab, ver 'si un único dt
+  // cruza ambas fracciones...' y 'sin overshoot negativo' más abajo) para
+  // ejercitar los clamps de dominio (frac, easeInOutCubic) que ya manejan
+  // cualquier dt finito por grande que sea. Sólo NaN y negativos son el bug.
+  dt = sanitizeDt(dt, Infinity)
+
   // 1. base: interpolación hip -> ads según adsT.
   //
   // Integración lineal, no exponencial: el spec pide que adsT alcance

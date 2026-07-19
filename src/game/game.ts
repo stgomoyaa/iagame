@@ -1,4 +1,4 @@
-import { MAX_FRAME_DT } from '@/game/engine/constants'
+import { sanitizeDt } from '@/game/engine/dt'
 import { createFixedLoop } from '@/game/engine/fixed-loop'
 import { createGpuTimer } from '@/game/engine/gpu-timer'
 import { createInputSystem } from '@/game/engine/input'
@@ -146,7 +146,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       vmInput.mouseDeltaY = input.mouseDeltaY
       input.clearMouseDelta()
 
-      const vmDt = Math.min(Math.max(frameDt, 0), MAX_FRAME_DT)
+      const vmDt = sanitizeDt(frameDt)
       stepViewmodel(vmState, vmInput, rigWeapon, vmOut, vmDt)
 
       // El pz del rig usa "+ hacia el jugador" (ver seed.ts); la cámara del

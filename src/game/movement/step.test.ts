@@ -132,4 +132,54 @@ describe('paso del jugador', () => {
     }
     expect(s.eyeHeight).toBeCloseTo(MOVEMENT.eyeHeight, 3)
   })
+
+  describe('robustez ante dt hostil (Defecto 4)', () => {
+    // resolveMove (physics/capsule.ts) ya guarda POSITION contra un delta no
+    // finito, pero la VELOCITY se calcula antes de llegar ahí (accelerate,
+    // gravedad) y nada la protegía. Hoy game.ts siempre llama a stepPlayer
+    // con el dt por defecto (TICK_DT), así que esto está latente, no activo:
+    // el fix igual va adentro de stepPlayer, para que cualquier llamador
+    // futuro quede protegido por construcción.
+
+    it('dt=NaN no corrompe la velocidad ni la posición: el jugador se recupera con ticks normales', () => {
+      const s = createPlayerState(vec3(0, 5, 0))
+      simular(s, input(), 30)
+
+      stepPlayer(s, input({ forward: 1 }), piso, NaN)
+      expect(Number.isFinite(s.velocity.x)).toBe(true)
+      expect(Number.isFinite(s.velocity.y)).toBe(true)
+      expect(Number.isFinite(s.velocity.z)).toBe(true)
+      expect(Number.isFinite(s.position.x)).toBe(true)
+      expect(Number.isFinite(s.position.y)).toBe(true)
+      expect(Number.isFinite(s.position.z)).toBe(true)
+
+      simular(s, input(), 300)
+      expect(s.grounded).toBe(true)
+      expect(Number.isFinite(s.position.y)).toBe(true)
+    })
+
+    it('dt=Infinity no manda velocity.y a -Infinity: el jugador no queda congelado en el aire', () => {
+      const s = createPlayerState(vec3(0, 5, 0))
+      simular(s, input(), 30)
+
+      stepPlayer(s, input(), piso, Infinity)
+      expect(Number.isFinite(s.velocity.y)).toBe(true)
+
+      simular(s, input(), 300)
+      expect(s.grounded).toBe(true)
+    })
+
+    it('un dt absurdamente grande (1e9) no manda position.y a un valor astronómico', () => {
+      const s = createPlayerState(vec3(0, 5, 0))
+      simular(s, input(), 30)
+
+      stepPlayer(s, input(), piso, 1e9)
+      // Cota generosa: el dt de un solo tick queda saturado a MAX_FRAME_DT
+      // (0.25s), así que ni con gravedad a tope se acerca a los 1e19 del bug.
+      expect(Math.abs(s.position.y)).toBeLessThan(1000)
+
+      simular(s, input(), 300)
+      expect(s.grounded).toBe(true)
+    })
+  })
 })

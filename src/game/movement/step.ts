@@ -1,4 +1,5 @@
 import { TICK_DT } from '@/game/engine/constants'
+import { sanitizeDt } from '@/game/engine/dt'
 import type { Box } from '@/game/map/types'
 import { copy, vec3, type Vec3 } from '@/game/math/vec3'
 import { accelerate, applyFriction } from '@/game/movement/accelerate'
@@ -62,6 +63,14 @@ export function stepPlayer(
   boxes: Box[],
   dt: number = TICK_DT,
 ): void {
+  // resolveMove (physics/capsule.ts) ya guarda `position` contra un delta no
+  // finito, pero eso corre al final del tick: velocity se integra ANTES
+  // (accelerate, gravedad) con este mismo dt, sin protección. Un dt=NaN deja
+  // velocity en (NaN,NaN,NaN) para siempre (nada más adelante lo saca de
+  // ahí); un dt=Infinity manda velocity.y a -Infinity; ninguno de los dos se
+  // recupera con ticks normales después. Ver engine/dt.ts.
+  dt = sanitizeDt(dt)
+
   copy(state.prevPosition, state.position)
 
   // Temporizadores de input

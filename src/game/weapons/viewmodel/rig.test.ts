@@ -550,6 +550,101 @@ describe('bob', () => {
   })
 })
 
+describe('spam de recarga (Defecto 1: input sostenido, no de flanco)', () => {
+  it('llamar startReload en cada frame mientras ya recarga no reinicia el temporizador: avanza y emite ambos eventos', () => {
+    // engine/input.ts modela TODAS las teclas como estado sostenido (p.ej.
+    // player.jump = keys.has('Space')), no de flanco. El día que R se cablee
+    // igual que el resto, mantenerla apretada llama startReload() en cada
+    // frame. Hoy el único llamador es un botón de debug edge-triggered, así
+    // que este defecto está latente, no activo; el fix tiene que sostenerse
+    // sin importar quién llame.
+    const state = createViewmodelState()
+    const out = transform()
+
+    // reloadTime = 1.0s = 128 ticks. 100 ticks < 128 a propósito: cruza de
+    // sobra ambas fracciones (magOut a 0.25 = tick 32, magIn a 0.55 = tick
+    // ~71) sin llegar a completar el ciclo, así que no hay una segunda
+    // recarga natural (legítima) de por medio que complique la aserción.
+    for (let i = 0; i < 100; i++) {
+      startReload(state, WEAPON)
+      stepViewmodel(state, QUIETO, WEAPON, out, TICK_DT)
+    }
+
+    expect(state.emittedMagOut).toBe(true)
+    expect(state.emittedMagIn).toBe(true)
+    expect(state.reloading).toBe(true)
+    // La garantía central: reloadT avanzó de verdad, no quedó congelado en
+    // el primer tick (el síntoma exacto del deadlock: reloadT ~= TICK_DT
+    // para siempre porque cada frame lo resetea a 0 antes de sumar dt).
+    expect(state.reloadT).toBeGreaterThan(50 * TICK_DT)
+  })
+})
+
+describe('cambio de arma cancela recarga en curso (Defecto 2)', () => {
+  it('startDraw cancela una recarga en curso: no completa ni emite sus eventos después', () => {
+    const state = createViewmodelState()
+    const out = transform()
+
+    startReload(state, WEAPON)
+    for (let i = 0; i < 20; i++) stepViewmodel(state, QUIETO, WEAPON, out, TICK_DT)
+
+    // Todavía en curso: reloadTime=1.0s=128 ticks, van 20.
+    expect(state.reloading).toBe(true)
+
+    startDraw(state, WEAPON)
+    expect(state.reloading).toBe(false)
+    expect(state.emittedMagOut).toBe(false)
+    expect(state.emittedMagIn).toBe(false)
+
+    // Sin la cancelación, reloadT seguiría acumulando y ambos eventos
+    // terminarían emitiéndose igual (memoria fantasma del arma anterior).
+    for (let i = 0; i < 200; i++) stepViewmodel(state, QUIETO, WEAPON, out, TICK_DT)
+    expect(state.emittedMagOut).toBe(false)
+    expect(state.emittedMagIn).toBe(false)
+    expect(state.reloading).toBe(false)
+  })
+})
+
+describe('robustez ante dt hostil (Defecto 3)', () => {
+  it('un único frame con dt=NaN no corrompe el estado permanentemente: se recupera con frames sanos', () => {
+    const state = createViewmodelState()
+    const out = transform()
+
+    // Estado no trivial antes del frame hostil: ads a mitad de camino,
+    // sway con velocidad, kick en curso, recarga arrancada.
+    fire(state, WEAPON)
+    startReload(state, WEAPON)
+    const activo: ViewmodelInput = {
+      speed: 5, grounded: true, ads: true, mouseDeltaX: 0.02, mouseDeltaY: -0.01,
+    }
+    for (let i = 0; i < 5; i++) stepViewmodel(state, activo, WEAPON, out, TICK_DT)
+
+    // Frame hostil: un dt=NaN, como el que produciría un frameDt corrupto
+    // llegando sin filtrar hasta stepViewmodel.
+    stepViewmodel(state, QUIETO, WEAPON, out, NaN)
+
+    // 200 frames sanos después: todo el estado transitorio y el output
+    // tienen que seguir siendo números finitos, no arrastrar el NaN.
+    for (let i = 0; i < 200; i++) stepViewmodel(state, QUIETO, WEAPON, out, TICK_DT)
+
+    expect(Number.isFinite(out.px)).toBe(true)
+    expect(Number.isFinite(out.py)).toBe(true)
+    expect(Number.isFinite(out.pz)).toBe(true)
+    expect(Number.isFinite(out.rx)).toBe(true)
+    expect(Number.isFinite(out.ry)).toBe(true)
+    expect(Number.isFinite(out.rz)).toBe(true)
+    expect(Number.isFinite(state.adsT)).toBe(true)
+    expect(Number.isFinite(state.bobPhase)).toBe(true)
+    expect(Number.isFinite(state.swayX)).toBe(true)
+    expect(Number.isFinite(state.swayVelX)).toBe(true)
+    expect(Number.isFinite(state.swayY)).toBe(true)
+    expect(Number.isFinite(state.swayVelY)).toBe(true)
+    expect(Number.isFinite(state.kickPz)).toBe(true)
+    expect(Number.isFinite(state.kickPy)).toBe(true)
+    expect(Number.isFinite(state.kickRz)).toBe(true)
+  })
+})
+
 describe('disparo', () => {
   it('el roll del culatazo alterna de signo entre disparos', () => {
     const state = createViewmodelState()
