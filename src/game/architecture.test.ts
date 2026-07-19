@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 const GAME_DIR = join(process.cwd(), 'src/game')
 
 /** Únicos archivos de src/game autorizados a importar Three. */
-const PUEDEN_USAR_THREE = ['engine/renderer.ts', 'map/mesh.ts']
+const PUEDEN_USAR_THREE = ['engine/renderer.ts', 'map/mesh.ts', 'weapons/viewmodel/renderer.ts']
 
 function archivosTs(dir: string, base = ''): string[] {
   const out: string[] = []

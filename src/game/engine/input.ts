@@ -20,8 +20,16 @@ export interface InputSystem {
   readonly player: PlayerInput
   pitch: number
   readonly locked: boolean
+  /** Delta de mouse acumulado desde el último clearMouseDelta(), sin consumir.
+   *  Sólo avanza con el puntero bloqueado, igual que yaw/pitch. Lo consume el
+   *  viewmodel para el sway (rig.ts, capa 3): se expone crudo en vez de ya
+   *  aplicado a yaw/pitch para que el rig pueda usarlo con su propia escala. */
+  readonly mouseDeltaX: number
+  readonly mouseDeltaY: number
   attach(canvas: HTMLCanvasElement): void
   detach(): void
+  /** Resetea el delta acumulado a 0. Se llama una vez por frame, después de leerlo. */
+  clearMouseDelta(): void
 }
 
 export function createInputSystem(getSensitivity: () => number): InputSystem {
@@ -32,6 +40,8 @@ export function createInputSystem(getSensitivity: () => number): InputSystem {
   let pitch = 0
   let locked = false
   let canvas: HTMLCanvasElement | null = null
+  let mouseDeltaX = 0
+  let mouseDeltaY = 0
 
   const keys = new Set<string>()
 
@@ -58,6 +68,8 @@ export function createInputSystem(getSensitivity: () => number): InputSystem {
     if (!locked) return
     player.yaw = applyYaw(player.yaw, e.movementX, getSensitivity())
     pitch = applyPitch(pitch, e.movementY, getSensitivity())
+    mouseDeltaX += e.movementX
+    mouseDeltaY += e.movementY
   }
 
   function onPointerLockChange(): void {
@@ -93,6 +105,13 @@ export function createInputSystem(getSensitivity: () => number): InputSystem {
     get pitch() { return pitch },
     set pitch(v: number) { pitch = clampPitch(v) },
     get locked() { return locked },
+    get mouseDeltaX() { return mouseDeltaX },
+    get mouseDeltaY() { return mouseDeltaY },
+
+    clearMouseDelta(): void {
+      mouseDeltaX = 0
+      mouseDeltaY = 0
+    },
 
     attach(target: HTMLCanvasElement): void {
       if (canvas) teardown()

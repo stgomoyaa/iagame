@@ -19,6 +19,13 @@ export function createRenderer(canvas: HTMLCanvasElement): GameRenderer {
     stencil: false,
   })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  // autoClear apagado a propósito: el viewmodel (weapons/viewmodel/renderer.ts)
+  // dibuja una segunda pasada sobre este mismo WebGLRenderer, después del
+  // mundo, limpiando sólo profundidad (renderer.clearDepth()) para que el
+  // arma nunca se recorte contra la geometría del mundo. render() de acá
+  // abajo compensa con un clear() explícito y completo, así que el
+  // comportamiento visual de esta pasada por sí sola no cambia.
+  renderer.autoClear = false
 
   const scene = new Scene()
   const camera = new PerspectiveCamera(90, 1, 0.1, 200)
@@ -35,6 +42,7 @@ export function createRenderer(canvas: HTMLCanvasElement): GameRenderer {
     camera,
     renderer,
     render(): void {
+      renderer.clear()
       renderer.render(scene, camera)
     },
     resize(width: number, height: number): void {
