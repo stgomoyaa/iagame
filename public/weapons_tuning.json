@@ -1,5 +1,5 @@
 {
-  "_comment": "Generado automaticamente desde los seeds heuristicos de src/game/weapons/seed.ts (ver seedWeaponOffsets y scripts/convert-weapons.ts), con dos excepciones QA a mano: assaultrifle-1 (hipOffset/adsOffset/rotationOffset tuneados por Santiago mirando la pantalla, ground truth, no generado) y pistol-2 (rotationOffset.ry = pi: el cañon apuntaba al jugador, confirmado en el navegador con ?debug=1). No se edita a mano el resto: el boton EXPORT del panel de tuning sobreescribe este archivo completo la proxima vez que alguien ajuste algo.",
+  "_comment": "Generado automaticamente desde los seeds heuristicos de src/game/weapons/seed.ts (ver seedWeaponOffsets y scripts/convert-weapons.ts), mas correcciones de orientacion hechas a mano mirando la pantalla con ?debug=1. A mano: assaultrifle-1 (hipOffset/adsOffset/rotationOffset tuneados por Santiago, ground truth) y 22 armas con rotationOffset.ry = pi porque el cañon apuntaba al jugador (pistol-2 mas las 21 del pack CC0 verificadas una por una en el navegador). OJO: la heuristica de deteccion de boca del pipeline se equivoca en la mayoria de este pack, asi que estas correcciones son la regla y no la excepcion; ver el reporte de armas-restantes. No se edita a mano el resto: el boton EXPORT del panel de tuning sobreescribe este archivo completo la proxima vez que alguien ajuste algo.",
   "assaultrifle-1": {
     "hipOffset": {
       "x": 0.23,
@@ -363,5 +363,152 @@
     "scaleAdjust": 1,
     "adsTime": 0.14,
     "kickMagnitude": 0.85
+  },
+  "pistol-5": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "pistol-6": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "revolver-1": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "revolver-2": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "revolver-3": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "revolver-4": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "revolver-5": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "shotgun-1": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "shotgun-2": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "shotgun-3": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "shotgun-4": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "shotgun-sawedoff": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "sniperrifle-1": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "sniperrifle-2": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "sniperrifle-4": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "sniperrifle-5": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "submachinegun-1": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "submachinegun-2": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "submachinegun-3": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "submachinegun-4": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
+  },
+  "submachinegun-5": {
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 3.141592653589793,
+      "rz": 0
+    }
   }
 }
