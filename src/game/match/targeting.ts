@@ -1,0 +1,89 @@
+/**
+ * Resolución de "a quién le apunta cada bot" cuando hay más de un hostil
+ * posible (jugador + otros bots, sección "Build" de la tarea: TDM y FFA
+ * necesitan que los bots se disparen entre ellos, no sólo al jugador).
+ *
+ * bots/bot.ts nunca se toca: sigue recibiendo un único `BotWorld.targetEye`
+ * (un Vec3 compartido) por diseño -- ver su comentario de cabecera. Esta
+ * función corre ANTES de cada llamada a `stepBotThink` (ver match/squad.ts)
+ * y reescribe ese Vec3 compartido con la posición del enemigo vivo más
+ * cercano a ESE bot en particular, así que cada bot "ve" un objetivo
+ * distinto en su propio tick de pensamiento aunque el campo sea uno solo.
+ * Es matemática pura sobre índices; no sabe nada de FSM ni de percepción --
+ * `canSee` (bots/perception.ts) sigue siendo quien decide si ese objetivo
+ * es realmente visible.
+ */
+
+import type { Vec3 } from '@/game/math/vec3'
+import type { MatchMode } from '@/game/match/types'
+import { isEnemy } from '@/game/match/types'
+
+/**
+ * Posiciones y estado de vida de todos los participantes (0 = jugador, 1..N
+ * = bots), indexados por id -- ver match/types.ts. `positions` se muta en
+ * el sitio por el llamador cada tick (mismo patrón que BotWorld.targetEye):
+ * nunca se reasigna ni se reemplaza el array.
+ */
+export interface MatchTargets {
+  mode: MatchMode
+  positions: Vec3[]
+  alive: boolean[]
+}
+
+export function createMatchTargets(mode: MatchMode, participantCount: number): MatchTargets {
+  const positions: Vec3[] = []
+  const alive: boolean[] = []
+  for (let i = 0; i < participantCount; i++) {
+    positions.push({ x: 0, y: 0, z: 0 })
+    alive.push(true)
+  }
+  return { mode, positions, alive }
+}
+
+/** Sentinela fuera de cualquier rango de visión real (BOTS.visionRangeM es
+ *  45m, el hearingRadius 30m): cuando no hay ningún enemigo vivo, `out`
+ *  queda escrito acá en vez de con la última posición conocida -- así
+ *  `inVisionCone` (bots/perception.ts) descarta la distancia sin que el bot
+ *  "vea" un fantasma en la última posición donde efectivamente había uno. */
+const FAR_AWAY = 1e6
+
+/**
+ * Escribe en `out` la posición del enemigo vivo más cercano a
+ * `targets.positions[selfId]` (excluyendo al propio `selfId` y a cualquier
+ * participante del mismo equipo). Devuelve `false` (y deja `out` en el
+ * sentinela FAR_AWAY) si no hay ningún enemigo vivo -- puede pasar en TDM
+ * si todo el equipo contrario está muerto reapareciendo a la vez. Cero
+ * asignaciones: `out` es siempre el mismo Vec3 preasignado por el llamador
+ * (BotWorld.targetEye).
+ */
+export function resolveNearestEnemy(targets: MatchTargets, selfId: number, out: Vec3): boolean {
+  const selfPos = targets.positions[selfId]
+  let bestDist = Infinity
+  let bestIndex = -1
+
+  for (let i = 0; i < targets.positions.length; i++) {
+    if (i === selfId) continue
+    if (!targets.alive[i]) continue
+    if (!isEnemy(targets.mode, selfId, i)) continue
+
+    const p = targets.positions[i]
+    const d = Math.hypot(p.x - selfPos.x, p.y - selfPos.y, p.z - selfPos.z)
+    if (d < bestDist) {
+      bestDist = d
+      bestIndex = i
+    }
+  }
+
+  if (bestIndex < 0) {
+    out.x = FAR_AWAY
+    out.y = FAR_AWAY
+    out.z = FAR_AWAY
+    return false
+  }
+
+  const p = targets.positions[bestIndex]
+  out.x = p.x
+  out.y = p.y
+  out.z = p.z
+  return true
+}

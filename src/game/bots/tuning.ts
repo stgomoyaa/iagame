@@ -35,6 +35,26 @@ export interface BotsTuning {
    *  de error, que sí varía por tier. */
   aimMaxAngularSpeedDegPerSec: number
 
+  /**
+   * Grados de retroceso vertical ya acumulado (combat/recoil.ts
+   * RecoilState.pitchOffset) por encima de los cuales un bot suelta el
+   * gatillo, en vez de sostenerlo mientras el objetivo siga visible. Un
+   * jugador humano corrige el retroceso instintivamente (tira el mouse
+   * hacia abajo); un bot no -- sin este freno, un bot en Enfrentar vacía el
+   * cargador entero contra un objetivo a más de ~10m sin conectar un solo
+   * disparo pasado el climb inicial, porque cada tiro sube la mira un poco
+   * más. Soltar el gatillo activa la recuperación normal de retroceso
+   * (combat/recoil.ts stepRecoilRecovery, que sólo corre sin el gatillo
+   * sostenido) hasta volver a bajar del umbral, dando ráfagas cortas en vez
+   * de un spray continuo -- más o menos lo que hace un jugador real contra
+   * un objetivo lejano. Encontrado jugando una partida real de
+   * bots-contra-bots (tarea de partida): 0 kills en 60s reales sin esto,
+   * pese a que los bots pasaban la mayoría del tiempo en Enfrentar con
+   * apuntado ya convergido -- no era un problema de percepción ni de
+   * apuntado, era que el propio retroceso arruinaba cada ráfaga larga.
+   */
+  recoilDisciplineDeg: number
+
   /** Segundos que un objetivo perdido de vista sigue "recordado" (Reposicionar
    *  sigue activo) antes de volver a Idle. */
   targetMemoryS: number
@@ -58,6 +78,23 @@ export interface BotsTuning {
 
   torsoRadius: number
   headRadius: number
+  /** Altura (Y, relativa a la base de la cápsula -- player.position.y es el
+   *  PIE, no el centro, ver physics/capsule.ts) del centro de la hitbox de
+   *  torso. Cápsula de 1.8m de alto (PLAYER_CAPSULE): pecho/torso cae más o
+   *  menos a mitad de altura. */
+  torsoOffsetY: number
+  /** Altura del centro de la hitbox de cabeza. Ancla deliberada: casi
+   *  idéntica a MOVEMENT.eyeHeight (1.65) -- el jugador y los bots APUNTAN a
+   *  la altura de ojos del objetivo (bots/bot.ts lookAt, game.ts
+   *  matchTargets), así que si la hitbox de cabeza no vive ahí, un disparo
+   *  perfectamente apuntado nunca la toca. Bug real encontrado jugando una
+   *  partida de bots-contra-bots (tarea de partida): con el valor viejo
+   *  (0.65, sin relación con la altura de ojos) NINGÚN disparo entre bots
+   *  conectaba nunca, aun con error de apuntado ~0 -- el rayo pasaba
+   *  siempre por encima de las dos hitboxes. Invisible en fases anteriores
+   *  porque los bots sólo le disparaban al jugador, cuya hitbox de cabeza
+   *  SÍ usaba player.eyeHeight directamente (asimetría entre cómo se armaba
+   *  la hitbox del jugador y la de los bots, ver game.ts). */
   headOffsetY: number
 
   /** Radio de búsqueda de candidatos al reposicionar/retirarse, metros. */
@@ -100,6 +137,13 @@ export const BOTS: BotsTuning = {
   // el tamaño del giro que el objetivo pida.
   aimMaxAngularSpeedDegPerSec: 600,
 
+  // Deja pasar el "climb inicial casi plano" de cualquier arma del arsenal
+  // (archetypes.ts: los primeros disparos apenas se mueven) sin cortar la
+  // ráfaga de entrada, pero corta bastante antes de que el climb total de
+  // cualquier arquetipo (7°-24°, ver AR_REFERENCE_CLIMB_DEG_MIN/MAX) la
+  // saque del todo del objetivo a rango medio.
+  recoilDisciplineDeg: 4.0,
+
   targetMemoryS: 3.0,
   suspicionMemoryS: 2.0,
 
@@ -111,7 +155,10 @@ export const BOTS: BotsTuning = {
 
   torsoRadius: 0.4,
   headRadius: 0.2,
-  headOffsetY: 0.65,
+  // Cápsula de 1.8m: torso a mitad de altura, cabeza cerca de la altura de
+  // ojos real (MOVEMENT.eyeHeight = 1.65) -- ver el comentario del campo.
+  torsoOffsetY: 0.95,
+  headOffsetY: 1.6,
 
   repositionSearchRadiusM: 12,
   repositionCandidateCount: 8,
