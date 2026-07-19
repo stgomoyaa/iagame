@@ -9,16 +9,36 @@ function entry(slug: string): WeaponIndexEntry {
 }
 
 describe('seed: offsets heurísticos desde el bounding box', () => {
-  it('el offset de cadera de un rifle es notablemente mayor que el de una pistola', () => {
+  it('el offset de cadera de un rifle es apenas mayor que el de una pistola, no proporcional al tamaño', () => {
     const pistola = seedHipOffset(entry('pistol-1'))
     const rifle = seedHipOffset(entry('assaultrifle-1'))
 
-    // El rifle mide ~0.85m de largo contra ~0.22m de la pistola: el offset
-    // escalado por tamaño característico tiene que reflejar esa diferencia,
-    // no quedar parecido "por las dudas".
-    expect(Math.abs(rifle.x)).toBeGreaterThan(Math.abs(pistola.x) * 2)
-    expect(Math.abs(rifle.y)).toBeGreaterThan(Math.abs(pistola.y) * 2)
-    expect(Math.abs(rifle.z)).toBeGreaterThan(Math.abs(pistola.z) * 2)
+    // Este test reemplaza uno que exigía rifle > pistola * 2: esa aserción
+    // encodeaba justo el bug que motivó el fix (offset escalado
+    // proporcional al tamaño del arma, HIP_BACK_FRAC * size, que ponía al
+    // rifle a más de un metro de la cámara). El rifle mide ~3.9x lo que
+    // mide la pistola (0.85m vs 0.22m); si el offset escalara con esa
+    // proporción, el rifle quedaría a ~3.9x la distancia de la pistola. La
+    // distancia real la fija el brazo del jugador, no el arma, así que la
+    // diferencia entre ambas tiene que quedar muy por debajo de esa
+    // proporción de tamaño.
+    const sizeRatio = 0.85 / 0.22
+    expect(Math.abs(rifle.x)).toBeLessThan(Math.abs(pistola.x) * sizeRatio)
+    expect(Math.abs(rifle.y)).toBeLessThan(Math.abs(pistola.y) * sizeRatio)
+    expect(Math.abs(rifle.z)).toBeLessThan(Math.abs(pistola.z) * sizeRatio)
+
+    // Pero tampoco es idéntico: la culata de un rifle vive más lejos de su
+    // propio centro que la de una pistola (ver el comentario de
+    // HIP_SIZE_BACK_FRAC en seed.ts), así que el rifle sigue un poco más
+    // atrás que la pistola en los tres ejes.
+    expect(Math.abs(rifle.x)).toBeGreaterThan(Math.abs(pistola.x))
+    expect(Math.abs(rifle.y)).toBeGreaterThan(Math.abs(pistola.y))
+    expect(Math.abs(rifle.z)).toBeGreaterThan(Math.abs(pistola.z))
+
+    // Y en términos absolutos, z queda a distancia de brazo extendido, no
+    // "más de un metro" como el bug original (0.85 * HIP_BACK_FRAC 1.25 =
+    // 1.0625).
+    expect(rifle.z).toBeLessThan(1.0)
   })
 
   it('la pose de cadera va abajo (y negativa) y a la derecha (x positiva) del centro', () => {

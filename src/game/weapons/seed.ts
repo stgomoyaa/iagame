@@ -35,41 +35,61 @@ export interface Transform {
   rz: number
 }
 
-// Fracciones expresadas como proporción del eje más largo del bounding box
-// (en la práctica, casi siempre Z: el pipeline normaliza todos los modelos
-// con el cañón apuntando a -Z, sección 6.3 del spec). Ese es el eje que más
-// varía entre una pistola (~0.22m de largo) y un rifle (~0.85m); escalar
-// por ancho o alto casi no cambiaría nada entre armas, porque esas dos
-// dimensiones son parecidas en toda la familia de modelos convertidos.
+// El offset de cadera ya NO escala linealmente con el tamaño del arma
+// (bug anterior: HIP_BACK_FRAC * size ponía a un rifle de 0.85m a más de un
+// metro de la cámara, literalmente flotando lejos en vez de leerse como
+// sostenido). Un viewmodel vive a la distancia del brazo del jugador —la
+// que fija el hombro/codo/muñeca, no el largo del cañón—, así que esa
+// distancia es CASI la misma para una pistola de 0.22m que para un rifle
+// de 0.85m. HIP_ARM_* es esa constante: el punto de partida "brazo
+// extendido", igual para cualquier arma.
 //
-// HIP_BACK_FRAC fija cuánto se aleja el arma de la cámara del viewmodel
-// (70° de FOV vertical, ver VIEWMODEL_FOV en viewmodel/renderer.ts). El
-// punto del modelo más cerca de esa cámara no es el centro del bounding box
-// sino la culata (el extremo +Z, del lado del jugador): con el modelo
-// centrado en el origen, esa culata queda a (HIP_BACK_FRAC - 0.5) * size de
-// la cámara. Si esa distancia es chica, el semiancho del frustum ahí
-// también lo es, y el offset lateral/vertical (constante en todo el largo
-// del arma, porque esto es sólo traslación: ver el test de seed.ts que
-// verifica rotación cero) saca la culata del cuadro. Las fracciones de acá
-// dejan a la culata de la pistola (la de peor proporción alto/largo de las
-// 14 armas actuales, ver public/assets/weapons/index.json) dentro de un
-// ~75% del frustum disponible en X e Y a las tres resoluciones de la
-// sección 5 del work order (16:9, 16:10, ultrawide 21:9): suficiente
-// margen para no rozar el borde, verificado en navegador, no sólo con esta
-// cuenta.
-const HIP_RIGHT_FRAC = 0.35
-const HIP_DOWN_FRAC = 0.07
-const HIP_BACK_FRAC = 1.25
+// Pero no es EXACTAMENTE la misma, y ahí entra la corrección de tamaño que
+// sí depende de `size` — con el signo opuesto al que tenía el código viejo.
+// Los modelos están centrados en el origen de su bounding box (ver
+// characteristicSize), pero la culata/empuñadura de un arma no vive en ese
+// centro: vive corrida hacia +Z (el lado del jugador, porque el cañón
+// normalizado apunta a -Z). En una pistola chica esa distancia
+// centro-a-culata es de pocos centímetros; en un rifle es varios
+// centímetros más. Si el offset fuera constante para todas las armas, la
+// culata del rifle (más lejos de su propio centro) quedaría más cerca de
+// la cámara que la de la pistola, no a la misma distancia de la mano. Para
+// mantener la culata —no el centro del modelo— a una distancia pareja de
+// la cámara, el offset del CENTRO tiene que crecer un poco con el tamaño:
+// HIP_SIZE_*_FRAC son fracciones chicas de `size` que compensan sólo ese
+// desfasaje centro-culata, no el largo completo del arma. Por eso el
+// coeficiente de HIP_SIZE_BACK_FRAC (~0.59) es la mitad del HIP_BACK_FRAC
+// viejo (1.25) y, a diferencia de aquel, no es la única fuente de la
+// distancia: HIP_ARM_BACK aporta la mayor parte incluso a size=0.
+//
+// Los cuatro números por eje (HIP_ARM_* y HIP_SIZE_*_FRAC) salen de dos
+// anclas verificadas a ojo en el navegador con `?debug=1` arrastrando los
+// sliders hasta que la pose se lee como sostenida (culata visible abajo a
+// la derecha, cañón apuntando hacia el centro de la pantalla, arma entera
+// en cuadro): pistol-1 (size 0.22) en x=0.15/y=-0.12/z=0.35 y
+// assaultrifle-2 (size 0.85, elegida por tener el perfil limpio de las dos
+// AR de referencia — ver rotationOffset más abajo) en x=0.22/y=-0.16/z=0.72,
+// más una tercera arma (bullpup-1, size 0.65) usada sólo para confirmar que
+// la recta que pasa por esos dos puntos generaliza al tercer tamaño de la
+// familia, no para ajustar los coeficientes. Ajuste lineal (offset = ARM +
+// size * SIZE_FRAC) resuelto por esos dos puntos:
+const HIP_ARM_RIGHT = 0.13
+const HIP_ARM_DOWN = 0.11
+const HIP_ARM_BACK = 0.22
+const HIP_SIZE_RIGHT_FRAC = 0.11
+const HIP_SIZE_DOWN_FRAC = 0.06
+const HIP_SIZE_BACK_FRAC = 0.59
 
 // ADS_FORWARD_FRAC tiene que superar 0.5: por debajo, la culata (el mismo
 // extremo +Z de arriba) queda más cerca de la cámara del viewmodel que su
-// propio centro, y con HIP_BACK_FRAC ya en 1.25 eso significa quedar
-// directamente detrás de la cámara (z positivo en espacio de cámara), no
-// sólo mal encuadrada. 0.8 deja a la culata de la pistola (la más chica,
-// ~0.22m) a una distancia positiva con margen (~6cm) de la cámara: se
-// recorta contra los bordes en ADS -el arma queda pegada al ojo, como en
-// cualquier shooter en primera persona apuntando- pero ya no se mete detrás
-// de la cámara.
+// propio centro, así que un ADS ya de por sí más cerca que la cadera
+// terminaría con la culata detrás de la cámara (z positivo en espacio de
+// cámara), no sólo mal encuadrada. 0.8 deja a la culata de la pistola (la
+// más chica, ~0.22m) a una distancia positiva con margen (~6cm) de la
+// cámara: se recorta contra los bordes en ADS -el arma queda pegada al
+// ojo, como en cualquier shooter en primera persona apuntando- pero ya no
+// se mete detrás de la cámara. Este offset no cambió con el fix del hip:
+// el bug de escalado vivía en HIP_BACK_FRAC (ver arriba), no acá.
 const ADS_RAISE_FRAC = 0.3
 const ADS_FORWARD_FRAC = 0.8
 
@@ -95,10 +115,11 @@ function characteristicSize(bounds: WeaponBounds): number {
  * de un shooter en primera persona: el arma no tapa el centro de la
  * pantalla y queda visible en el cuadrante inferior derecho.
  *
- * Todo se escala por el tamaño característico del arma para que una
- * pistola no termine en la misma posición que un rifle: un modelo grande
- * necesita más distancia para no invadir el centro de la pantalla, uno
- * chico puede quedar más cerca del eje de cámara.
+ * Cada eje es "distancia de brazo" (HIP_ARM_*, igual para toda arma) más
+ * una corrección chica proporcional al tamaño (HIP_SIZE_*_FRAC, ver el
+ * comentario de las constantes) — no un escalado puro por tamaño como
+ * antes, que alejaba un rifle grande de la cámara muy por encima de lo que
+ * el brazo del jugador podría sostener.
  */
 export function seedHipOffset(entry: WeaponIndexEntry): Transform {
   const { bounds } = entry
@@ -108,9 +129,9 @@ export function seedHipOffset(entry: WeaponIndexEntry): Transform {
   const size = characteristicSize(bounds)
 
   return {
-    x: centerX + size * HIP_RIGHT_FRAC,
-    y: centerY - size * HIP_DOWN_FRAC,
-    z: centerZ + size * HIP_BACK_FRAC,
+    x: centerX + HIP_ARM_RIGHT + size * HIP_SIZE_RIGHT_FRAC,
+    y: centerY - HIP_ARM_DOWN - size * HIP_SIZE_DOWN_FRAC,
+    z: centerZ + HIP_ARM_BACK + size * HIP_SIZE_BACK_FRAC,
     rx: 0,
     ry: 0,
     rz: 0,
@@ -124,7 +145,8 @@ export function seedHipOffset(entry: WeaponIndexEntry): Transform {
  * miras en casi cualquier arma: por encima del cañón, no en el centro
  * vertical del modelo), y empujada hacia adelante en relación a la pose de
  * cadera: en ADS el arma se acerca al ojo para alinear la mira, así que
- * usa una fracción bastante menor que HIP_BACK_FRAC en vez de una mayor.
+ * usa una fracción de `size` bastante menor que la que aporta la cadera
+ * en vez de una mayor.
  */
 export function seedAdsOffset(entry: WeaponIndexEntry): Transform {
   const { bounds } = entry
