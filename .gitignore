@@ -44,5 +44,9 @@ next-env.d.ts
 .ruff_cache/
 .superpowers/
 
+# FBX de origen del pipeline de armas (CC0 descargado): nunca se commitea,
+# sólo los GLB convertidos que produce scripts/convert-weapons.ts.
+assets-src/
+
 # permitir el ejemplo de env aunque .env* esté ignorado arriba
 !.env.example
