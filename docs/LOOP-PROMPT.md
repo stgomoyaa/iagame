@@ -76,14 +76,36 @@ se cumple con 10 bots. Medí CPU **y GPU** (el HUD ya muestra los dos).
 
 ### 4. Fase 3 — contenido
 
-- Bajar las 26 armas que faltan. La carpeta de Drive limita el acceso anónimo por cantidad
-  de archivos: bajá en tandas y cacheá. El pipeline ya fusiona `index.json` en vez de
-  pisarlo, así que correrlo de nuevo es seguro.
-- **Nombres de las armas: decisión de Santiago, no la tomes vos.** AK-47 y M4 son
-  designaciones reales y se usan sin problema. "Desert Eagle" es marca registrada de Magnum
-  Research, y los nombres y skins específicos de CS y COD son de Valve y Activision. Si vas
-  a inventar nombres evocativos en vez de copiar, escribí la lista y **dejala anotada para
-  que él la apruebe**, no la shippees.
+El arsenal sale de **dos fuentes con reglas distintas**. Confundirlas es el error más caro
+que podés cometer en esta fase, así que leé `docs/WORKSHOP.md` antes de tocar assets.
+
+**Fuente A, CC0 (Quaternius): se commitea y se puede publicar.**
+Faltan 26 de las 40. La carpeta de Drive limita el acceso anónimo por cantidad de archivos:
+bajá en tandas y cacheá. El pipeline ya fusiona `index.json` en vez de pisarlo, así que
+correrlo de nuevo es seguro.
+
+**Fuente B, Workshop de GMod: local, nunca se publica.**
+Santiago decidió usarla sabiendo que la mayoría de esos packs son ports no autorizados de CS
+y Call of Duty. La condición es que el juego **jamás se sirva con esos assets**: viven en
+`workshop-assets/`, que está gitignoreado, y hay un test (`scripts/workshop-guard.test.ts`)
+que falla si alguno aparece trackeado en git, incluso forzado con `git add -f`. **No
+debilites ese guard por ninguna razón.** Si algo no funciona por su culpa, el problema es lo
+que estás intentando hacer, no el guard.
+
+De esos modelos se usa **sólo la malla**. El esqueleto y las animaciones del `.mdl` se
+descartan: el viewmodel ya anima por código con seis capas, es independiente del framerate y
+está testeado. Meter un `AnimationMixer` por arma sería un segundo sistema de animación
+compitiendo con el que ya funciona, y costo de CPU que el presupuesto no tiene.
+
+`scripts/workshop-catalog.ts` ya cataloga por la API de Steam, filtrando por score, votos y
+suscriptores. **La cadena de ingesta no está construida ni verificada**: bajar necesita
+SteamCMD y convertir `.mdl` necesita Blender con SourceIO o Plumber, ninguno instalado.
+Blender son ~1GB, así que pedí permiso antes de instalarlo.
+
+**Nombres de las armas: decisión de Santiago, no la tomes vos.** AK-47 y M4 son designaciones
+reales y se usan sin problema. "Desert Eagle" es marca registrada de Magnum Research, y los
+nombres y skins específicos de CS y COD son de Valve y Activision. Escribí la lista que
+propongas y **dejala anotada para que él la apruebe**, no la shippees.
 - Generador de skins determinista, armería, loadout.
 - **Tres mapas.** El actual es una arena de 3 carriles. Los otros dos tienen que jugar
   distinto, no ser reskins: probá una planta más vertical y una más cerrada. Cada mapa
