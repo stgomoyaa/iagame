@@ -1,26 +1,26 @@
 {
-  "_comment": "Generado automáticamente desde los seeds heurísticos de src/game/weapons/seed.ts (ver seedWeaponOffsets y scripts/convert-weapons.ts). No se edita a mano: el botón EXPORT del panel de tuning (?debug=1) sobreescribe este archivo completo la primera vez que alguien ajuste algo.",
+  "_comment": "Generado automaticamente desde los seeds heuristicos de src/game/weapons/seed.ts (ver seedWeaponOffsets y scripts/convert-weapons.ts), con dos excepciones QA a mano: assaultrifle-1 (hipOffset/adsOffset/rotationOffset tuneados por Santiago mirando la pantalla, ground truth, no generado) y pistol-2 (rotationOffset.ry = pi: el cañon apuntaba al jugador, confirmado en el navegador con ?debug=1). No se edita a mano el resto: el boton EXPORT del panel de tuning sobreescribe este archivo completo la proxima vez que alguien ajuste algo.",
   "assaultrifle-1": {
     "hipOffset": {
-      "x": 0.2235000026226044,
-      "y": -0.16100000143051146,
-      "z": 0.7215000140666961,
+      "x": 0.23,
+      "y": -0.24,
+      "z": 0.665,
       "rx": 0,
       "ry": 0,
       "rz": 0
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.05174302607774734,
-      "z": 0.6800000190734864,
+      "y": -0.175,
+      "z": 0.495,
       "rx": 0,
       "ry": 0,
       "rz": 0
     },
     "rotationOffset": {
-      "rx": 0,
-      "ry": 0,
-      "rz": 0
+      "rx": 0.0698131700797733,
+      "ry": -3.07177948351002,
+      "rz": 0.0698131700797733
     },
     "scaleAdjust": 1,
     "adsTime": 0.22,
@@ -37,8 +37,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.03765889406204224,
-      "z": 0.6800000190734864,
+      "y": -0.12552964687347412,
+      "z": 0.551500014066696,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -63,8 +63,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.05950579941272735,
-      "z": 0.6800000190734864,
+      "y": -0.1983526647090912,
+      "z": 0.551500014066696,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -89,8 +89,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.03716514185070991,
-      "z": 0.6800000190734864,
+      "y": -0.12388380616903305,
+      "z": 0.551500014066696,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -115,8 +115,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.03765889406204224,
-      "z": 0.6800000190734864,
+      "y": -0.12552964687347412,
+      "z": 0.551500014066696,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -141,8 +141,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.04416611194610596,
-      "z": 0.6800000190734864,
+      "y": -0.14722037315368652,
+      "z": 0.551500014066696,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -167,8 +167,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.04729929864406585,
-      "z": 0.6800000190734864,
+      "y": -0.15766432881355286,
+      "z": 0.551500014066696,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -193,8 +193,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.04952404797077179,
-      "z": 0.6800000190734864,
+      "y": -0.16508015990257263,
+      "z": 0.551500014066696,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -219,8 +219,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.0670268028974533,
-      "z": 0.6800000190734864,
+      "y": -0.22342267632484436,
+      "z": 0.551500014066696,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -245,8 +245,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.028627091646194456,
-      "z": 0.5199999809265137,
+      "y": -0.0954236388206482,
+      "z": 0.43349998593330374,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -271,8 +271,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.03939194083213806,
-      "z": 0.5199999809265137,
+      "y": -0.1313064694404602,
+      "z": 0.43349998593330374,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -297,8 +297,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.036134326457977296,
-      "z": 0.5199999809265137,
+      "y": -0.12044775485992432,
+      "z": 0.43349998593330374,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -323,8 +323,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.021068108081817628,
-      "z": 0.17599999904632568,
+      "y": -0.07022702693939209,
+      "z": 0.17979999929666515,
       "rx": 0,
       "ry": 0,
       "rz": 0
@@ -349,8 +349,8 @@
     },
     "adsOffset": {
       "x": 0,
-      "y": 0.021068108081817628,
-      "z": 0.17599999904632568,
+      "y": -0.07022702693939209,
+      "z": 0.17979999929666515,
       "rx": 0,
       "ry": 0,
       "rz": 0

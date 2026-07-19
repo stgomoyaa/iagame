@@ -57,17 +57,39 @@ describe('seed: offsets heurísticos desde el bounding box', () => {
     }
   })
 
-  it('la pose de ADS está más arriba que el centro y menos atrás que la pose de cadera', () => {
+  it('la pose de ADS queda por debajo del centro -no por arriba- y más cerca de la cámara que la pose de cadera', () => {
+    // Reemplaza un test que exigía ads.y > centerY: encodeaba justo el bug
+    // que motivó este fix (adsOffset.y positivo, que sube el CENTRO del
+    // modelo por encima de su propio centro en vez de bajarlo). La mira
+    // vive montada sizeY/2 por ENCIMA del centro del bounding box, así que
+    // para que sea la mira -no el cuerpo del arma- la que caiga en el eje
+    // de la cámara, el centro tiene que quedar esa misma distancia por
+    // DEBAJO de ese eje. Con el signo viejo la cruceta quedaba enterrada en
+    // el cuerpo del arma en vez de sobre la mira (ver seedAdsOffset en
+    // seed.ts para la derivación completa).
     for (const slug of ['pistol-1', 'assaultrifle-1']) {
       const e = entry(slug)
       const hip = seedHipOffset(e)
       const ads = seedAdsOffset(e)
       const centerY = (e.bounds.min[1] + e.bounds.max[1]) / 2
-      expect(ads.y, slug).toBeGreaterThan(centerY)
+      const sizeY = e.bounds.max[1] - e.bounds.min[1]
+      expect(ads.y, slug).toBeLessThan(centerY)
+      expect(ads.y, slug).toBeCloseTo(centerY - sizeY / 2, 10)
       // ADS acerca el arma a la cámara en vez de alejarla: la componente
       // hacia +Z tiene que ser menor que en la pose de cadera.
       expect(ads.z, slug).toBeLessThan(hip.z)
     }
+  })
+
+  it('adsOffset.y de assaultrifle-1 según la heurística cae a ~1.4% del valor tuneado a mano por Santiago (-0.175)', () => {
+    // No es el valor final -assaultrifle-1 usa el override de
+    // weapons_tuning.json, no la heurística, ver registry/tuning-panel- pero
+    // sirve de test de cordura: confirma que -(sizeY / 2) efectivamente
+    // reproduce el número que un humano encontró mirando la pantalla, no
+    // sólo que "suena razonable" en la teoría.
+    const e = entry('assaultrifle-1')
+    const ads = seedAdsOffset(e)
+    expect(ads.y).toBeCloseTo(-0.175, 2)
   })
 
   it('ninguna rotación queda seteada por la heurística: es sólo posición hasta que alguien la tunee a mano', () => {

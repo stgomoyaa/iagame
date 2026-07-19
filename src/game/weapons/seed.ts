@@ -80,18 +80,20 @@ const HIP_SIZE_RIGHT_FRAC = 0.11
 const HIP_SIZE_DOWN_FRAC = 0.06
 const HIP_SIZE_BACK_FRAC = 0.59
 
-// ADS_FORWARD_FRAC tiene que superar 0.5: por debajo, la culata (el mismo
-// extremo +Z de arriba) queda más cerca de la cámara del viewmodel que su
-// propio centro, así que un ADS ya de por sí más cerca que la cadera
-// terminaría con la culata detrás de la cámara (z positivo en espacio de
-// cámara), no sólo mal encuadrada. 0.8 deja a la culata de la pistola (la
-// más chica, ~0.22m) a una distancia positiva con margen (~6cm) de la
-// cámara: se recorta contra los bordes en ADS -el arma queda pegada al
-// ojo, como en cualquier shooter en primera persona apuntando- pero ya no
-// se mete detrás de la cámara. Este offset no cambió con el fix del hip:
-// el bug de escalado vivía en HIP_BACK_FRAC (ver arriba), no acá.
-const ADS_RAISE_FRAC = 0.3
-const ADS_FORWARD_FRAC = 0.8
+// ADS_PULL_BACK: cuántos metros se acerca el CENTRO del arma a la cámara al
+// pasar de cadera a mira (ver seedAdsOffset.z más abajo). No es una fracción
+// de `size` como el heurístico viejo (ADS_FORWARD_FRAC * size, que además
+// tenía el signo de adsOffset.y invertido -ver comentario de
+// seedAdsOffset-): hombrear el arma es un gesto del brazo -acercar la culata
+// a la cara-, y esa distancia es prácticamente la misma sea cual sea el
+// arma, igual que HIP_ARM_BACK es constante y no escala con `size` (ver el
+// comentario de esas constantes más arriba). El valor sale del único punto
+// de datos real y verificado a ojo que existe: Santiago ajustó
+// assaultrifle-1 en el navegador hasta que la mira quedó sobre la cruceta,
+// y llegó a hipOffset.z = 0.665 / adsOffset.z = 0.495 -> 0.665 - 0.495 =
+// 0.17. Si algún día se agrega una segunda arma tuneada a mano, conviene
+// repetir esta resta y promediar en vez de confiar en un solo punto.
+const ADS_PULL_BACK = 0.17
 
 /**
  * Tamaño característico del modelo: el eje más largo de su bounding box.
@@ -139,26 +141,49 @@ export function seedHipOffset(entry: WeaponIndexEntry): Transform {
 }
 
 /**
- * Pose de apuntado (ADS): centrada en el eje de la cámara horizontalmente
- * (las miras de hierro quedan en la línea de mira, no a un costado),
- * levantada hasta cerca del borde superior del bounding box (ahí viven las
- * miras en casi cualquier arma: por encima del cañón, no en el centro
- * vertical del modelo), y empujada hacia adelante en relación a la pose de
- * cadera: en ADS el arma se acerca al ojo para alinear la mira, así que
- * usa una fracción de `size` bastante menor que la que aporta la cadera
- * en vez de una mayor.
+ * Pose de apuntado (ADS): el modelo se centra en el eje de la cámara, tanto
+ * horizontal (x = 0) como VERTICALMENTE -y ahí está la corrección de esta
+ * función. Los modelos están centrados en el origen de su bounding box (ver
+ * el comentario de arriba del archivo), pero las miras -postas de hierro o
+ * punto rojo- viven montadas ARRIBA del cuerpo del arma, no en ese centro:
+ * están a `sizeY / 2` por encima del centro, en el borde superior del
+ * bounding box o cerca de él. Si el CENTRO del modelo se pusiera en el eje
+ * de la cámara (y = 0, que es lo que hacía la versión vieja de esta
+ * función, con signo positivo), la mira -que cuelga por encima de ese
+ * centro- queda por ENCIMA de la cruceta, y es el CUERPO del arma el que
+ * quedó centrado y tapando el punto de mira. Exactamente el bug que motivó
+ * este fix: el arma "apuntando" con la cruceta enterrada en el cajón de
+ * mecanismos, no en la mira.
+ *
+ * La corrección es bajar el centro del modelo esa misma distancia: para que
+ * la mira -no el centro del modelo- caiga en el eje de la cámara, el centro
+ * tiene que quedar `sizeY / 2` por DEBAJO de ese eje, es decir
+ * y = -(sizeY / 2). Verificado con el único punto de datos real que hay:
+ * Santiago ajustó assaultrifle-1 a mano en el navegador hasta que la mira
+ * se leía centrada en la cruceta, y llegó a adsOffset.y = -0.175. La mitad
+ * de la altura de ese modelo (sizeY = 0.345m, ver bounds en index.json) da
+ * -0.1725: 1.4% de diferencia, dentro de lo esperable porque la mira real
+ * no vive exactamente en el borde superior del bounding box sino un poco
+ * por debajo. Este valor geométrico es el punto de partida; el panel de
+ * tuning (o weapons_tuning.json) sigue siendo quien corrige ese margen a
+ * mano por arma si hace falta -por eso "roughly", no "exactamente".
+ *
+ * En Z, ADS acerca el arma a la cámara -se hombrea, en vez de sostenerse
+ * con el brazo extendido- así que se resta ADS_PULL_BACK (constante, ver
+ * arriba) de la Z DE CADERA de esta misma arma, no de una fracción de
+ * `size` independiente de esa pose como hacía la versión vieja. Un rifle
+ * con la culata más lejos en cadera también la tiene más lejos en ADS, en
+ * la misma proporción de "se acercó al hombro" que cualquier otra arma.
  */
 export function seedAdsOffset(entry: WeaponIndexEntry): Transform {
   const { bounds } = entry
-  const centerY = (bounds.min[1] + bounds.max[1]) / 2
-  const centerZ = (bounds.min[2] + bounds.max[2]) / 2
   const sizeY = bounds.max[1] - bounds.min[1]
-  const size = characteristicSize(bounds)
+  const hipZ = seedHipOffset(entry).z
 
   return {
     x: 0,
-    y: centerY + (sizeY / 2) * ADS_RAISE_FRAC,
-    z: centerZ + size * ADS_FORWARD_FRAC,
+    y: -(sizeY / 2),
+    z: hipZ - ADS_PULL_BACK,
     rx: 0,
     ry: 0,
     rz: 0,
