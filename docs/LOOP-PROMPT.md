@@ -102,15 +102,41 @@ suscriptores. **La cadena de ingesta no está construida ni verificada**: bajar 
 SteamCMD y convertir `.mdl` necesita Blender con SourceIO o Plumber, ninguno instalado.
 Blender son ~1GB, así que pedí permiso antes de instalarlo.
 
+Santiago ya eligió los packs. Metadata verificada contra la API:
+
+| Item | Id | Peso | Para qué |
+|---|---|---|---|
+| CS:GO Weapons | 2180833718 | 382MB | **Prioridad uno.** Es de donde salen AK, M4 y Deagle |
+| Modern Wokefare Base | 2459720887 | 1.0GB | El lado Call of Duty. Segundo |
+| CS:GO Knives SWEPs | 506283460 | 389MB | Cuchillos. Sólo si se agrega slot de melee, opcional |
+
+**No bajes `110871780` ("Hit Numbers").** Pesa 0MB porque es código Lua de GMod que dibuja
+números de daño; no tiene un solo modelo que extraer y su lógica corre en Source, no acá.
+Los números de daño se construyen en la fase 1 como parte del sistema de feedback.
+
+**Empezá por CS:GO Weapons**, convertí una sola arma y verificala en pantalla antes de
+procesar el pack entero. Si la cadena `.mdl` no funciona, es mejor descubrirlo con un archivo
+que con 382MB.
+
 **Nombres de las armas: decisión de Santiago, no la tomes vos.** AK-47 y M4 son designaciones
 reales y se usan sin problema. "Desert Eagle" es marca registrada de Magnum Research, y los
 nombres y skins específicos de CS y COD son de Valve y Activision. Escribí la lista que
 propongas y **dejala anotada para que él la apruebe**, no la shippees.
 - Generador de skins determinista, armería, loadout.
-- **Tres mapas.** El actual es una arena de 3 carriles. Los otros dos tienen que jugar
-  distinto, no ser reskins: probá una planta más vertical y una más cerrada. Cada mapa
-  necesita su navgrid y sus spawns validados con el mismo test de alcanzabilidad que ya
-  existe.
+- **Tres mapas, escritos en código, no importados.** El actual es una arena de 3 carriles
+  definida como cajas AABB declarativas en `src/game/map/arena.ts`. Los otros dos se escriben
+  igual: una planta más vertical y una más cerrada, que **jueguen distinto en vez de ser
+  reskins**. Cada uno necesita sus spawns y su navgrid, validados con el mismo test de
+  alcanzabilidad que ya existe (el que atrapó que la plataforma central era inalcanzable).
+
+  **No importes mapas BSP del Workshop.** La colisión de este juego es cápsula contra AABB,
+  diseñada para arenas de cajas; geometría BSP arbitraria rompe esa premisa, y hacerla
+  jugable exige o aproximaciones de cajas mapa por mapa o extender el motor a mesh colliders,
+  con costo real contra los 2.5ms. Santiago lo sabe y eligió escribirlos.
+
+  Sí conviene usar el catalogador con `fy` y `dm` como búsqueda para **mirar layouts de
+  referencia**: los mapas `fy_`, `dm_` y `aim_` de CS son chicos y de geometría simple, que
+  es exactamente la planta que conviene copiar a mano. Referencia visual, no ingesta.
 
 ### 5. Fase 4 — progresión
 
