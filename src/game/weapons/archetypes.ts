@@ -73,7 +73,15 @@ export interface SpreadCurve {
 }
 
 export interface RecoilSpec {
-  /** Offsets [x, y] determinista, indexado por número de disparo. Ver recoilOffsetForShot(). */
+  /**
+   * Offsets [x, y] determinista, indexado por número de disparo, en
+   * radianes de cámara: mismo eje que `PITCH_LIMIT` (engine/input.ts), ya
+   * que el pitch de la cámara es lo que va a consumir este patrón. `y` es
+   * la subida vertical acumulada (siempre >= 0, monótona no decreciente
+   * dentro del patrón); `x` es el serpenteo horizontal. Ver
+   * recoilOffsetForShot() y generateRecoilPattern(). Referencia física
+   * para calibrar `y`: AR_REFERENCE_CLIMB_DEG_MIN/MAX más abajo.
+   */
   pattern: Array<[number, number]>
   /** Velocidad con la que la cámara vuelve hacia el origen tras cada impulso, radianes/seg. */
   recovery: number
@@ -91,6 +99,39 @@ export interface WeaponArchetype {
   reload: ReloadSpec
   ads: AdsSpec
   recoil: RecoilSpec
+}
+
+/**
+ * Referencia física para la subida vertical total del retroceso sobre un
+ * cargador completo de fuego sostenido: un rifle de asalto real (CS,
+ * Valorant) sube 15-20° en total a lo largo de todo el cargador. Es el
+ * ancla de todo el arsenal — `ar-1` la reproduce casi exacta porque es el
+ * arquetipo de línea base (sección 6 del spec). El resto escala relativo a
+ * esto por carácter: la LMG sube más en total por su cargador de 100 (más
+ * balas acumulando climb, aunque el ritmo por disparo sea el más suave del
+ * arsenal); un arma semi/cerrojo de cadencia bajísima (sniper-bolt) da un
+ * golpe seco chico en vez de una escalada, porque en la práctica hay
+ * sobra de tiempo para que la cámara se recupere entre disparos; una
+ * ráfaga corta (ar-2) resetea antes de acercarse siquiera al techo de un
+ * cargador completo, porque su "cargador" a efectos de retroceso es la
+ * ráfaga de 3 balas, no las 30 del arma. Ver los tests de banda física en
+ * archetypes.test.ts.
+ */
+export const AR_REFERENCE_CLIMB_DEG_MIN = 15
+export const AR_REFERENCE_CLIMB_DEG_MAX = 20
+
+/**
+ * Conversión grados <-> radianes: sólo para expresar de forma legible los
+ * parámetros de retroceso de cada arquetipo (y sus tests) en grados, la
+ * unidad en la que humanamente se razona un ángulo de cámara. El resto del
+ * archivo y el motor siguen trabajando 100% en radianes (ver encabezado).
+ */
+export function degToRad(degrees: number): number {
+  return (degrees * Math.PI) / 180
+}
+
+export function radToDeg(radians: number): number {
+  return (radians * 180) / Math.PI
 }
 
 /**
@@ -121,6 +162,14 @@ function mulberry32(seed: number): () => number {
  * agrega ruido de la seed para que ningún arma tenga un patrón
  * perfectamente geométrico, pero el ruido sale del mismo PRNG determinista,
  * no de Math.random(): misma seed, mismo patrón, siempre.
+ *
+ * `jitter` tiene que quedar chico *relativo al paso típico entre disparos*
+ * (`verticalClimb / (length - 1)`), no relativo a `verticalClimb` total: un
+ * patrón largo (la LMG, 100 disparos) tiene pasos típicos diminutos, así
+ * que un jitter pensado como fracción del climb total puede terminar
+ * siendo varias veces más grande que el paso real entre dos disparos
+ * consecutivos y generar saltos erráticos que rompen la aprendibilidad
+ * tanto como un wrap roto (ver el test de pasos en archetypes.test.ts).
  */
 export function generateRecoilPattern(
   seed: number,
@@ -144,14 +193,27 @@ export function generateRecoilPattern(
  * Offset de retroceso para el disparo `shotIndex` (0-based, absoluto desde
  * que se vació el cargador, no desde que empezó a disparar).
  *
- * Decisión: cuando el patrón es más corto que el cargador, se repite desde
- * el principio (wrap por módulo), no se clampea al último valor. El
- * retroceso real de fuego sostenido cae en un micro-patrón cíclico después
- * de la subida inicial (la mano ya está compensando en un ritmo estable);
- * repetir el patrón completo reproduce ese ciclo, mientras que clampear al
- * último valor congelaría la cámara en un solo punto, que se siente peor y
- * deja de ser "aprendible" a partir de ahí. Ver recoilOffsetForShot.test
- * para el caso donde el arma dispara más balas que las que tiene el patrón.
+ * Decisión: el patrón cubre el cargador entero, sin wrap. Antes se envolvía
+ * por módulo cuando el patrón era más corto que el cargador, justificado
+ * como si reprodujera "un micro-patrón cíclico" — pero generateRecoilPattern()
+ * genera una rampa monótonamente creciente (`verticalClimb * sqrt(progress)`),
+ * no un ciclo, así que el wrap hacía caer la cámara del pico a casi cero de
+ * un salto en medio del spray (hasta 110° de discontinuidad medidos por QA).
+ * Eso rompe exactamente la "aprendibilidad" que pide la sección 5 del spec:
+ * si además el cargador no es múltiplo exacto del patrón, el último ciclo
+ * queda truncado y las últimas balas de la carga tienen un offset distinto
+ * al que tuvieron la vez anterior que se llegó a ese índice. Ahora cada
+ * arma automática o semiautomática tiene un patrón del mismo largo que su
+ * cargador (`pattern.length === magazine`): es más datos, pero es barato, y
+ * es lo que hacen CS y Valorant.
+ *
+ * Excepción: las armas en ráfaga (`fireMode === 'burst'`, ver ar-2) sí
+ * repiten un patrón corto — pero el ciclo que se repite es la ráfaga, no el
+ * cargador entero, y el retroceso se resetea a propósito ráfaga a ráfaga
+ * (hay una pausa de gatillo real entre cada una, tiempo de sobra para que
+ * la cámara recupere). Ahí el wrap es intencional, y el cargador siempre es
+ * múltiplo exacto del patrón (`magazine % pattern.length === 0`), así que
+ * ninguna ráfaga queda truncada a mitad de ciclo.
  */
 export function recoilOffsetForShot(archetype: WeaponArchetype, shotIndex: number): [number, number] {
   const { pattern } = archetype.recoil
@@ -214,7 +276,9 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     reload: { tactical: 1.6, empty: 2.1 },
     ads: { time: 0.16, fovScale: 0.95, sensScale: 0.9, speedScale: 0.92 },
     recoil: {
-      pattern: generateRecoilPattern(101, 12, 0.9, 0.5, 0.15),
+      // Climb total 12° sobre el cargador entero (30 balas): menos que el
+      // AR base porque el calibre es más chico, ver AR_REFERENCE_CLIMB_DEG_MIN/MAX.
+      pattern: generateRecoilPattern(101, 30, degToRad(12), degToRad(6), degToRad(0.1)),
       recovery: 14,
       spread: { base: 0.006, max: 0.03, growthPerShot: 0.004, recoverySpeed: 0.25 },
     },
@@ -233,7 +297,9 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     reload: { tactical: 1.8, empty: 2.3 },
     ads: { time: 0.2, fovScale: 0.93, sensScale: 0.88, speedScale: 0.9 },
     recoil: {
-      pattern: generateRecoilPattern(202, 10, 1.1, 0.35, 0.1),
+      // Climb total 9° sobre el cargador entero (25 balas): menos que la
+      // smg-1, coherente con "gana en control" del comentario de arriba.
+      pattern: generateRecoilPattern(202, 25, degToRad(9), degToRad(3), degToRad(0.1)),
       recovery: 11,
       spread: { base: 0.005, max: 0.026, growthPerShot: 0.0035, recoverySpeed: 0.22 },
     },
@@ -252,7 +318,10 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     reload: { tactical: 2.2, empty: 2.8 },
     ads: { time: 0.22, fovScale: 0.9, sensScale: 0.85, speedScale: 0.85 },
     recoil: {
-      pattern: generateRecoilPattern(303, 15, 1.6, 0.8, 0.08),
+      // Climb total 17.5° sobre el cargador entero (30 balas): el punto
+      // medio de la referencia real de 15-20°, porque este es el arquetipo
+      // de línea base contra el que se mide el resto del arsenal.
+      pattern: generateRecoilPattern(303, 30, degToRad(17.5), degToRad(8), degToRad(0.15)),
       recovery: 9,
       spread: { base: 0.004, max: 0.02, growthPerShot: 0.0025, recoverySpeed: 0.18 },
     },
@@ -260,11 +329,14 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
 
   // AR 2: ráfaga de 3. El patrón de retroceso tiene sólo 3 entradas a
   // propósito: una ráfaga entera es el ciclo completo, y el kick se resetea
-  // ráfaga a ráfaga en vez de acumularse como en un arma automática. Con un
-  // cargador de 30 eso son 10 ráfagas por carga, y el patrón se repite
-  // (wrap) en cada una: el retroceso dentro de una ráfaga se aprende igual
-  // que el de una automática, sólo que el "ciclo" dura 3 disparos en vez
-  // de todo el cargador.
+  // ráfaga a ráfaga en vez de acumularse como en un arma automática, porque
+  // hay una pausa de gatillo real entre ráfagas con tiempo de sobra para que
+  // la cámara recupere. Con un cargador de 30 eso son 10 ráfagas por carga,
+  // y el patrón se repite (wrap) en cada una, exacto (30 % 3 === 0, ninguna
+  // ráfaga queda truncada): el retroceso dentro de una ráfaga se aprende
+  // igual que el de una automática, sólo que el "ciclo" dura 3 disparos en
+  // vez de todo el cargador. Climb total 5° por ráfaga: consistente con lo
+  // que ar-1 (el AR base) alcanza en sus primeros 3 disparos.
   'ar-2': {
     id: 'ar-2',
     class: 'ar',
@@ -275,7 +347,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     reload: { tactical: 2.3, empty: 2.9 },
     ads: { time: 0.2, fovScale: 0.88, sensScale: 0.83, speedScale: 0.84 },
     recoil: {
-      pattern: generateRecoilPattern(404, 3, 1.2, 0.3, 0.03),
+      pattern: generateRecoilPattern(404, 3, degToRad(5), degToRad(1.5), degToRad(0.3)),
       recovery: 13,
       spread: { base: 0.003, max: 0.012, growthPerShot: 0.004, recoverySpeed: 0.3 },
     },
@@ -294,7 +366,9 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     reload: { tactical: 2.4, empty: 3.0 },
     ads: { time: 0.26, fovScale: 0.85, sensScale: 0.8, speedScale: 0.8 },
     recoil: {
-      pattern: generateRecoilPattern(505, 12, 1.9, 0.6, 0.1),
+      // Climb total 20° sobre el cargador entero (25 balas): más que el AR
+      // base porque pega más fuerte por disparo, aunque con menos balas.
+      pattern: generateRecoilPattern(505, 25, degToRad(20), degToRad(6), degToRad(0.2)),
       recovery: 8,
       spread: { base: 0.0035, max: 0.017, growthPerShot: 0.002, recoverySpeed: 0.16 },
     },
@@ -304,7 +378,11 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
   // sección 5. Cadencia bajísima (ciclo de cerrojo manual), cargador
   // chico, ADS lenta con zoom fuerte. Su TTK a rango óptimo da 0ms por la
   // fórmula (un solo disparo mata): es la excepción explícita que el
-  // propio spec marca como "instantáneo", no un valor que quedó mal.
+  // propio spec marca como "instantáneo", no un valor que quedó mal. El
+  // retroceso tampoco es una escalada de spray: entre disparo y disparo hay
+  // sobra de tiempo para ciclar el cerrojo a mano, la cámara ya recuperó
+  // antes del siguiente tiro. Climb total bajo (7°) sobre sólo 5 disparos,
+  // cada uno un golpe seco más que un peldaño de una rampa.
   'sniper-bolt': {
     id: 'sniper-bolt',
     class: 'sniper',
@@ -315,7 +393,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     reload: { tactical: 3.0, empty: 3.6 },
     ads: { time: 0.45, fovScale: 0.3, sensScale: 0.35, speedScale: 0.55 },
     recoil: {
-      pattern: generateRecoilPattern(707, 3, 3.2, 0.1, 0.02),
+      pattern: generateRecoilPattern(707, 5, degToRad(7), degToRad(0.3), degToRad(0.2)),
       recovery: 4,
       spread: { base: 0.0005, max: 0.002, growthPerShot: 0.001, recoverySpeed: 0.5 },
     },
@@ -335,7 +413,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     reload: { tactical: 2.6, empty: 3.2 },
     ads: { time: 0.35, fovScale: 0.55, sensScale: 0.55, speedScale: 0.65 },
     recoil: {
-      pattern: generateRecoilPattern(606, 5, 2.5, 0.2, 0.05),
+      pattern: generateRecoilPattern(606, 10, degToRad(11), degToRad(1), degToRad(0.2)),
       recovery: 6,
       spread: { base: 0.001, max: 0.006, growthPerShot: 0.002, recoverySpeed: 0.4 },
     },
@@ -357,17 +435,19 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     reload: { tactical: 2.8, empty: 3.4 },
     ads: { time: 0.28, fovScale: 0.97, sensScale: 0.92, speedScale: 0.88 },
     recoil: {
-      pattern: generateRecoilPattern(808, 6, 1.4, 0.4, 0.12),
+      pattern: generateRecoilPattern(808, 6, degToRad(9), degToRad(2.5), degToRad(0.3)),
       recovery: 10,
       spread: { base: 0.02, max: 0.05, growthPerShot: 0.01, recoverySpeed: 0.3 },
     },
   },
 
   // LMG: cargador de 100, la mayor sostenibilidad de fuego del arsenal.
-  // Daño por disparo bajo y subida de retroceso lenta a propósito (climb
-  // 0.8, el más chico del arsenal automático): está diseñada para
-  // disparar mucho tiempo seguido sin perder el control, no para ráfagas
-  // cortas. Recarga la más lenta con diferencia.
+  // Daño por disparo bajo. La subida total de retroceso (24°) es la más
+  // alta del arsenal en términos absolutos porque el cargador es el más
+  // largo con diferencia — pero el ritmo por disparo es el más suave con
+  // diferencia (24° repartidos en 100 disparos vs. 17.5° en 30 para ar-1):
+  // está diseñada para disparar mucho tiempo seguido sin perder el
+  // control, no para ráfagas cortas. Recarga la más lenta con diferencia.
   lmg: {
     id: 'lmg',
     class: 'lmg',
@@ -378,7 +458,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     reload: { tactical: 4.5, empty: 5.5 },
     ads: { time: 0.4, fovScale: 0.92, sensScale: 0.8, speedScale: 0.7 },
     recoil: {
-      pattern: generateRecoilPattern(909, 20, 0.8, 0.45, 0.1),
+      pattern: generateRecoilPattern(909, 100, degToRad(24), degToRad(13), degToRad(0.05)),
       recovery: 7,
       spread: { base: 0.005, max: 0.035, growthPerShot: 0.0015, recoverySpeed: 0.1 },
     },
@@ -398,7 +478,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     reload: { tactical: 1.3, empty: 1.7 },
     ads: { time: 0.14, fovScale: 0.96, sensScale: 0.92, speedScale: 0.95 },
     recoil: {
-      pattern: generateRecoilPattern(1010, 12, 1.3, 0.5, 0.12),
+      pattern: generateRecoilPattern(1010, 12, degToRad(10), degToRad(4), degToRad(0.15)),
       recovery: 12,
       spread: { base: 0.006, max: 0.022, growthPerShot: 0.005, recoverySpeed: 0.28 },
     },

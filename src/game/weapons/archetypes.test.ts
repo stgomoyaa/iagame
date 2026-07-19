@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AR_REFERENCE_CLIMB_DEG_MAX,
+  AR_REFERENCE_CLIMB_DEG_MIN,
   ARCHETYPE_LIST,
   ARCHETYPES,
   damageAtRange,
   generateRecoilPattern,
+  radToDeg,
   recoilOffsetForShot,
   shotsToKill,
   ttkMs,
   type ArchetypeId,
 } from '@/game/weapons/archetypes'
+import { PITCH_LIMIT } from '@/game/engine/input'
 
 const HEALTH = 100
 
@@ -18,6 +22,50 @@ const HEALTH = 100
 // es correcto: no son un caso que "no dio" el balance, son la excepción que
 // el propio spec documenta.
 const ONE_SHOT_ARCHETYPES: ArchetypeId[] = ['sniper-bolt', 'shotgun']
+
+/** Componente vertical (climb) de cada entrada del patrón. */
+function verticals(archetype: ArchetypeId): number[] {
+  return ARCHETYPES[archetype].recoil.pattern.map(([, y]) => y)
+}
+
+/**
+ * Subida vertical total del patrón, en grados: pico menos valle. No se usa
+ * sólo el último valor menos el primero porque el jitter puede hacer que el
+ * pico real no caiga exactamente en el último disparo.
+ */
+function totalClimbDeg(archetype: ArchetypeId): number {
+  const ys = verticals(archetype)
+  return radToDeg(Math.max(...ys) - Math.min(...ys))
+}
+
+/**
+ * Banda físicamente sana de subida vertical total por arquetipo, en grados.
+ * `ar-1` tiene que caer dentro de AR_REFERENCE_CLIMB_DEG_MIN/MAX (15-20°,
+ * la referencia real de CS/Valorant sobre un cargador completo, ver el
+ * comentario de esa constante en archetypes.ts): es el arquetipo de línea
+ * base, así que usa la banda sin ajustar. El resto escala por carácter:
+ * - lmg sube más en total por su cargador de 100 balas (más acumulación),
+ *   aunque el ritmo por disparo sea el más suave del arsenal.
+ * - smg-1/smg-2 suben menos que el rifle base (calibre menor); smg-2 gana
+ *   en control sobre smg-1, como documenta su comentario en archetypes.ts.
+ * - sniper-bolt, sniper-marksman y shotgun disparan semi/cerrojo con
+ *   pausas largas entre tiros: cada uno da un golpe seco chico en vez de
+ *   una escalada de spray.
+ * - ar-2 es una ráfaga de 3 balas que resetea entre ráfagas: su "cargador"
+ *   real a efectos de retroceso es la ráfaga, no las 30 balas del arma.
+ */
+const CLIMB_BAND_DEG: Record<ArchetypeId, [number, number]> = {
+  'smg-1': [8, 16],
+  'smg-2': [5, 13],
+  'ar-1': [AR_REFERENCE_CLIMB_DEG_MIN, AR_REFERENCE_CLIMB_DEG_MAX],
+  'ar-2': [2, 8],
+  'ar-3': [15, 25],
+  'sniper-bolt': [3, 10],
+  'sniper-marksman': [6, 15],
+  shotgun: [5, 13],
+  lmg: [18, 28],
+  pistol: [6, 14],
+}
 
 describe('arquetipos: catálogo', () => {
   it('hay exactamente 10 arquetipos', () => {
@@ -150,23 +198,19 @@ describe('retroceso: determinismo y cobertura del cargador', () => {
     }
   })
 
-  it('cuando el patrón es más corto que el cargador, se repite (wrap) exacto cada pattern.length disparos', () => {
-    // smg-1: patrón de 12 entradas, cargador de 30. El disparo 12 tiene que
-    // dar exactamente el mismo offset que el disparo 0, y el 13 el mismo
-    // que el 1: eso es la decisión de wrap documentada en recoilOffsetForShot.
+  it('smg-1 y lmg ya no envuelven dentro de un cargador: el patrón cubre el cargador entero', () => {
+    // Antes (bug corregido): smg-1 tenía patrón de 12 y lmg de 20, ambos más
+    // cortos que su cargador, y envolvían por módulo. Ahora cada uno tiene
+    // un patrón del mismo largo que su cargador, así que disparos distintos
+    // dentro de una misma carga nunca comparten offset.
     const smg1 = ARCHETYPES['smg-1']
-    expect(smg1.recoil.pattern.length).toBeLessThan(smg1.magazine)
-    expect(recoilOffsetForShot(smg1, 12)).toEqual(recoilOffsetForShot(smg1, 0))
-    expect(recoilOffsetForShot(smg1, 13)).toEqual(recoilOffsetForShot(smg1, 1))
-    expect(recoilOffsetForShot(smg1, 29)).toEqual(recoilOffsetForShot(smg1, 29 % 12))
-  })
+    expect(smg1.recoil.pattern.length).toBe(smg1.magazine)
+    expect(recoilOffsetForShot(smg1, 12)).not.toEqual(recoilOffsetForShot(smg1, 0))
 
-  it('la LMG (cargador de 100, patrón de 20) envuelve varias veces sin quedar indefinida', () => {
     const lmg = ARCHETYPES.lmg
-    expect(lmg.recoil.pattern.length).toBeLessThan(lmg.magazine)
+    expect(lmg.recoil.pattern.length).toBe(lmg.magazine)
     expect(recoilOffsetForShot(lmg, 99)).toBeDefined()
-    expect(recoilOffsetForShot(lmg, 20)).toEqual(recoilOffsetForShot(lmg, 0))
-    expect(recoilOffsetForShot(lmg, 40)).toEqual(recoilOffsetForShot(lmg, 0))
+    expect(recoilOffsetForShot(lmg, 20)).not.toEqual(recoilOffsetForShot(lmg, 0))
   })
 
   it('cuando el patrón cubre el cargador entero, no necesita envolver dentro de una sola carga', () => {
@@ -174,5 +218,99 @@ describe('retroceso: determinismo y cobertura del cargador', () => {
     // un offset propio, sin repetición hasta la carga siguiente.
     const pistol = ARCHETYPES.pistol
     expect(pistol.recoil.pattern.length).toBe(pistol.magazine)
+  })
+
+  it('ar-2 (ráfaga) es la única excepción con wrap intencional: el patrón de la ráfaga se repite exacto cada 3 disparos', () => {
+    // Al contrario de smg-1/lmg arriba, acá el wrap es deliberado: una
+    // ráfaga entera es el ciclo, y hay pausa de gatillo real entre ráfagas
+    // para que la cámara recupere. El disparo 3 tiene que dar exactamente
+    // el mismo offset que el 0 (empieza la ráfaga siguiente), y 30 % 3 = 0
+    // así que ninguna ráfaga queda truncada dentro del cargador de 30.
+    const ar2 = ARCHETYPES['ar-2']
+    expect(ar2.recoil.pattern.length).toBeLessThan(ar2.magazine)
+    expect(ar2.magazine % ar2.recoil.pattern.length).toBe(0)
+    expect(recoilOffsetForShot(ar2, 3)).toEqual(recoilOffsetForShot(ar2, 0))
+    expect(recoilOffsetForShot(ar2, 4)).toEqual(recoilOffsetForShot(ar2, 1))
+    expect(recoilOffsetForShot(ar2, 29)).toEqual(recoilOffsetForShot(ar2, 29 % 3))
+  })
+})
+
+describe('retroceso: cordura física de las magnitudes', () => {
+  it('la subida vertical total de cada arquetipo cae dentro de una banda físicamente sana (grados)', () => {
+    for (const a of ARCHETYPE_LIST) {
+      const [min, max] = CLIMB_BAND_DEG[a.id]
+      const climb = totalClimbDeg(a.id)
+      expect(climb, `${a.id}: ${climb.toFixed(2)}° fuera de [${min}, ${max}]°`).toBeGreaterThanOrEqual(min)
+      expect(climb, `${a.id}: ${climb.toFixed(2)}° fuera de [${min}, ${max}]°`).toBeLessThanOrEqual(max)
+    }
+  })
+
+  it('ar-1 (arquetipo base) cae en la referencia real de un rifle de asalto: 15-20° sobre el cargador completo', () => {
+    const climb = totalClimbDeg('ar-1')
+    expect(climb, `ar-1: ${climb.toFixed(2)}°`).toBeGreaterThanOrEqual(AR_REFERENCE_CLIMB_DEG_MIN)
+    expect(climb, `ar-1: ${climb.toFixed(2)}°`).toBeLessThanOrEqual(AR_REFERENCE_CLIMB_DEG_MAX)
+  })
+
+  it('ningún paso disparo-a-disparo excede un múltiplo chico del paso típico del arma (detecta discontinuidades tipo wrap)', () => {
+    // Recorre la secuencia real que ve un jugador: recoilOffsetForShot para
+    // cada índice del cargador completo, no el array crudo del patrón. Si
+    // el patrón es más corto que el cargador y envuelve por módulo, el
+    // salto de vuelta al principio aparece acá, no en el array crudo (que
+    // siempre es una rampa monótona sin discontinuidad propia).
+    //
+    // El paso típico es climb total / (largo del patrón - 1): por identidad
+    // telescópica, es exactamente el promedio de los pasos consecutivos de
+    // una rampa monótona (los términos intermedios se cancelan). El primer
+    // paso de una rampa raíz-cuadrada de N disparos puede llegar a ser
+    // hasta sqrt(N-1) veces ese promedio (la derivada de sqrt es infinita
+    // en 0): para la LMG (100 disparos) eso da ~9.95x de forma sana y
+    // esperable, sin ningún salto real. Un wrap roto en cambio cae del pico
+    // a casi cero en un solo paso: QA midió 11x-17x sobre patrones más
+    // cortos que el cargador. 12x deja margen sobre el caso sano más
+    // extremo sin dejar pasar una discontinuidad real.
+    const MAX_STEP_MULTIPLE = 12
+    for (const a of ARCHETYPE_LIST) {
+      const ys = verticals(a.id)
+      const totalClimb = Math.max(...ys) - Math.min(...ys)
+      const typicalStep = totalClimb / (ys.length - 1)
+      const shots: number[] = []
+      for (let shot = 0; shot < a.magazine; shot++) {
+        shots.push(recoilOffsetForShot(a, shot)[1])
+      }
+      for (let i = 1; i < shots.length; i++) {
+        const step = Math.abs(shots[i] - shots[i - 1])
+        const ratio = typicalStep > 0 ? step / typicalStep : 0
+        expect(
+          step,
+          `${a.id} disparo ${i - 1}->${i}: ${radToDeg(step).toFixed(2)}° (${ratio.toFixed(1)}x el típico de ${radToDeg(typicalStep).toFixed(2)}°)`,
+        ).toBeLessThanOrEqual(typicalStep * MAX_STEP_MULTIPLE)
+      }
+    }
+  })
+
+  it('el patrón cubre el cargador entero: mismo largo que magazine para toda arma que no sea de ráfaga', () => {
+    for (const a of ARCHETYPE_LIST) {
+      if (a.fireMode === 'burst') continue
+      expect(a.recoil.pattern.length, a.id).toBe(a.magazine)
+    }
+  })
+
+  it('ar-2 (la única ráfaga) repite su patrón de ráfaga un número exacto de veces por cargador, sin ciclo truncado', () => {
+    const burst = ARCHETYPE_LIST.filter((a) => a.fireMode === 'burst')
+    expect(burst.map((a) => a.id)).toEqual(['ar-2'])
+    for (const a of burst) {
+      expect(a.magazine % a.recoil.pattern.length, a.id).toBe(0)
+    }
+  })
+
+  it('la subida total de cada arquetipo queda bien adentro del PITCH_LIMIT de la cámara (mitad o menos)', () => {
+    // Fase 1 va a aplicar este patrón al pitch de la cámara. PITCH_LIMIT es
+    // el rango entero de -90° a 90° (menos un margen); un solo cargador no
+    // puede ni acercarse a eso, o el jugador termina mirando al techo.
+    for (const a of ARCHETYPE_LIST) {
+      const ys = verticals(a.id)
+      const climbRad = Math.max(...ys) - Math.min(...ys)
+      expect(climbRad, `${a.id}: ${radToDeg(climbRad).toFixed(2)}°`).toBeLessThan(PITCH_LIMIT * 0.5)
+    }
   })
 })
