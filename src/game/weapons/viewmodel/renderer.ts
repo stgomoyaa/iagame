@@ -50,6 +50,17 @@ export interface ViewmodelRenderer {
    *  Cachea por slug: volver a una arma ya cargada no vuelve a pedir el GLB. */
   setWeaponSlug(slug: string): void
   /**
+   * Slug efectivamente adjunto a modelRoot ahora mismo, o null si todavía
+   * no se adjuntó ninguno (carga en curso o fallida). Distinto del slug
+   * *pedido* por el último setWeaponSlug: si ese pedido está en vuelo o
+   * falló, éste sigue apuntando al último modelo realmente en pantalla.
+   * game.ts lo usa para decidir a qué arma animar (rig, pose) — nunca al
+   * slug pedido, para no volver a caer en el bug de este archivo (ver
+   * comentario de requestedSlug/attachedSlug más abajo).
+   */
+  readonly attachedSlug: string | null
+
+  /**
    * Segunda pasada de render: copia la orientación de la cámara del mundo,
    * limpia sólo profundidad y dibuja encima. No devuelve estadísticas para
    * no asignar un objeto por frame: `renderer.info.render` ya queda
@@ -60,6 +71,15 @@ export interface ViewmodelRenderer {
   render(worldCamera: PerspectiveCamera): void
   resize(width: number, height: number): void
   dispose(): void
+  /**
+   * Mensaje del último load fallido (404, red caída, GLB sin malla), o
+   * null si no hay ninguno pendiente de mostrar. game.ts lo lee cada frame
+   * y lo refleja en un aviso en pantalla — sin esto, un load fallido queda
+   * silencioso salvo por el console.error. No es un stream de eventos a
+   * propósito: un solo valor "último error" alcanza para este caso de uso
+   * y evita sumar un sistema de suscripción sólo para esto.
+   */
+  readonly lastLoadError: string | null
 }
 
 /**
@@ -135,14 +155,42 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
 
   const loader = new GLTFLoader()
   const cache = new Map<string, Mesh>()
-  let currentSlug: string | null = null
+  // requestedSlug: la última arma pedida por setWeaponSlug, gane o pierda su
+  // carga. attachedSlug: la última arma efectivamente puesta en modelRoot —
+  // render() lee ÉSTA para elegir rotationOffset/scaleAdjust, nunca
+  // requestedSlug. Antes había un solo campo (currentSlug) que se movía de
+  // inmediato en setWeaponSlug: un load fallido (404, red caída, GLB sin
+  // malla) lo dejaba apuntando a un arma sin modelo adjunto mientras el
+  // mesh viejo seguía en pantalla, y render() le aplicaba la corrección
+  // visual de la arma NUEVA al modelo VIEJO. Separando los dos campos, un
+  // load fallido nunca mueve attachedSlug: el modelo viejo se sigue viendo
+  // con su propia corrección, coherente, y requestedSlug vuelve a
+  // attachedSlug para que un reintento del mismo slug no se descarte por
+  // deduplicación (ver setWeaponSlug).
+  let requestedSlug: string | null = null
+  let attachedSlug: string | null = null
   // Token de carga: si el panel cambia de arma antes de que termine un
-  // fetch anterior, la respuesta vieja no debe pisar la selección nueva.
+  // fetch anterior, la respuesta vieja (éxito o falla) no debe pisar la
+  // selección nueva.
   let loadToken = 0
+  let lastLoadError: string | null = null
 
-  function attach(mesh: Mesh): void {
+  function attach(slug: string, mesh: Mesh): void {
     modelRoot.clear()
     modelRoot.add(mesh)
+    attachedSlug = slug
+    lastLoadError = null
+  }
+
+  function failLoad(slug: string, message: string, err?: unknown): void {
+    if (err === undefined) console.error(message)
+    else console.error(message, err)
+    lastLoadError = message
+    // Deshace el pedido: sin esto requestedSlug queda apuntando a `slug`
+    // (sin malla adjunta) y render() le aplicaría su rotationOffset /
+    // scaleAdjust al modelo de attachedSlug, que es el que en realidad
+    // sigue en pantalla.
+    requestedSlug = attachedSlug
   }
 
   function load(slug: string): void {
@@ -153,15 +201,18 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
         if (token !== loadToken) return
         const mesh = isolateSingleMesh(gltf.scene)
         if (!mesh) {
-          console.error(`viewmodel: "${slug}.glb" no tiene ninguna malla`)
+          if (requestedSlug === slug) {
+            failLoad(slug, `viewmodel: "${slug}.glb" no tiene ninguna malla`)
+          }
           return
         }
         ensureVertexColors(mesh)
         cache.set(slug, mesh)
-        if (currentSlug === slug) attach(mesh)
+        if (requestedSlug === slug) attach(slug, mesh)
       })
       .catch((err: unknown) => {
-        console.error(`viewmodel: no se pudo cargar "${slug}"`, err)
+        if (token !== loadToken) return
+        if (requestedSlug === slug) failLoad(slug, `viewmodel: no se pudo cargar "${slug}"`, err)
       })
   }
 
@@ -169,18 +220,18 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
     weapon,
 
     setWeaponSlug(slug: string): void {
-      if (slug === currentSlug) return
-      currentSlug = slug
+      if (slug === requestedSlug) return
+      requestedSlug = slug
       const cached = cache.get(slug)
-      if (cached) attach(cached)
+      if (cached) attach(slug, cached)
       else load(slug)
     },
 
     render(worldCamera: PerspectiveCamera): void {
       camera.rotation.copy(worldCamera.rotation)
 
-      if (currentSlug) {
-        const visual = getWeaponVisual(currentSlug)
+      if (attachedSlug) {
+        const visual = getWeaponVisual(attachedSlug)
         modelRoot.rotation.set(
           visual.rotationOffset.rx,
           visual.rotationOffset.ry,
@@ -201,6 +252,14 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
     dispose(): void {
       for (const mesh of cache.values()) disposeModel(mesh)
       cache.clear()
+    },
+
+    get attachedSlug(): string | null {
+      return attachedSlug
+    },
+
+    get lastLoadError(): string | null {
+      return lastLoadError
     },
   }
 }

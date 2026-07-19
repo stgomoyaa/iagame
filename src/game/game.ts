@@ -93,6 +93,36 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   let lastTime = 0
   let rafId = 0
 
+  // Aviso en pantalla del último load de arma fallido (ver
+  // ViewmodelRenderer.lastLoadError, weapons/viewmodel/renderer.ts): sin
+  // esto, un 404 o un GLB corrupto sólo deja rastro en la consola. Se
+  // actualiza sólo cuando el mensaje cambia, no crea ni toca el DOM cada
+  // frame si no hay nada nuevo que mostrar.
+  let weaponErrorBanner: HTMLDivElement | null = null
+  let shownLoadError: string | null = null
+
+  function updateWeaponErrorBanner(): void {
+    const message = viewmodel.lastLoadError
+    if (message === shownLoadError) return
+    shownLoadError = message
+
+    if (message === null) {
+      weaponErrorBanner?.remove()
+      weaponErrorBanner = null
+      return
+    }
+
+    if (!weaponErrorBanner && canvas.parentElement) {
+      weaponErrorBanner = document.createElement('div')
+      weaponErrorBanner.style.cssText =
+        'position:absolute;bottom:8px;left:8px;z-index:25;max-width:60vw;' +
+        'font:12px ui-monospace,monospace;color:#ffb4b4;' +
+        'background:rgba(40,0,0,.85);padding:8px 10px;border-radius:4px'
+      canvas.parentElement.appendChild(weaponErrorBanner)
+    }
+    if (weaponErrorBanner) weaponErrorBanner.textContent = message
+  }
+
   function onResize(): void {
     gfx.resize(canvas.clientWidth, canvas.clientHeight)
     viewmodel.resize(canvas.clientWidth, canvas.clientHeight)
@@ -134,17 +164,29 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     const worldCalls = gfx.renderer.info.render.calls
     const worldTriangles = gfx.renderer.info.render.triangles
 
+    // El delta de mouse crudo de este frame se consume acá pase lo que
+    // pase con el viewmodel (ver abajo): acumularlo sin límite mientras no
+    // hay ningún modelo adjunto todavía produciría un salto de sway al
+    // adjuntar el primero.
+    const mouseDeltaX = input.mouseDeltaX
+    const mouseDeltaY = input.mouseDeltaY
+    input.clearMouseDelta()
+
     // Viewmodel: un paso de rig por frame de render (no por tick fijo), como
-    // el resto de la capa visual. El sway necesita el delta de mouse crudo
-    // de este frame, que sólo tiene sentido a granularidad de frame.
-    if (currentSlug) {
-      syncRigWeapon(rigWeapon, getWeaponVisual(currentSlug))
+    // el resto de la capa visual. Se anima con `attachedSlug` (el modelo
+    // efectivamente en pantalla), no con el slug pedido por el jugador o el
+    // panel de tuning: si el último load pedido falló o sigue en vuelo,
+    // attachedSlug sigue apuntando al último modelo real, así que la pose
+    // (hip/ads/kick) nunca corre por delante del modelo que se ve (ver
+    // weapons/viewmodel/renderer.ts).
+    const shownSlug = viewmodel.attachedSlug
+    if (shownSlug) {
+      syncRigWeapon(rigWeapon, getWeaponVisual(shownSlug))
       vmInput.speed = Math.hypot(player.velocity.x, player.velocity.z)
       vmInput.grounded = player.grounded
       vmInput.ads = debugAdsHeld
-      vmInput.mouseDeltaX = input.mouseDeltaX
-      vmInput.mouseDeltaY = input.mouseDeltaY
-      input.clearMouseDelta()
+      vmInput.mouseDeltaX = mouseDeltaX
+      vmInput.mouseDeltaY = mouseDeltaY
 
       const vmDt = sanitizeDt(frameDt)
       stepViewmodel(vmState, vmInput, rigWeapon, vmOut, vmDt)
@@ -169,6 +211,8 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       gpuTimer.endFrame()
       stats.endFrame(worldCalls, worldTriangles, gpuTimer.stats.gpuMs, gpuTimer.stats.peakMs)
     }
+
+    updateWeaponErrorBanner()
   }
 
   return {
@@ -195,6 +239,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       stats.unmount()
       tuning.unmount()
       weaponTuning?.unmount()
+      weaponErrorBanner?.remove()
+      weaponErrorBanner = null
+      shownLoadError = null
       viewmodel.dispose()
       gfx.dispose()
     },
