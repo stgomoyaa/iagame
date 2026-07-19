@@ -16,12 +16,20 @@ export default function Home() {
       <p className="mt-4 max-w-sm text-[#e6e8ec]/70">
         Movimiento rápido, salto encadenado y un arsenal todavía en construcción.
       </p>
-      <Link
-        href="/play"
-        className="mt-10 rounded border border-[#19e5e5]/40 px-6 py-3 font-mono text-sm text-[#19e5e5] transition-colors hover:border-[#19e5e5] hover:bg-[#19e5e5]/10 focus-visible:border-[#19e5e5] focus-visible:bg-[#19e5e5]/10 focus-visible:outline-none"
-      >
-        Jugar
-      </Link>
+      <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
+        <Link
+          href="/play"
+          className="rounded border border-[#19e5e5]/40 px-6 py-3 font-mono text-sm text-[#19e5e5] transition-colors hover:border-[#19e5e5] hover:bg-[#19e5e5]/10 focus-visible:border-[#19e5e5] focus-visible:bg-[#19e5e5]/10 focus-visible:outline-none"
+        >
+          Jugar
+        </Link>
+        <Link
+          href="/armory"
+          className="rounded border border-[#e6e8ec]/20 px-6 py-3 font-mono text-sm text-[#e6e8ec]/80 transition-colors hover:border-[#e6e8ec]/50 hover:text-[#e6e8ec] focus-visible:border-[#e6e8ec]/50 focus-visible:text-[#e6e8ec] focus-visible:outline-none"
+        >
+          Armería
+        </Link>
+      </div>
     </main>
   )
 }
