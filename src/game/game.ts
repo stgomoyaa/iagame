@@ -27,7 +27,14 @@ import { raycastMap, setRaycastMap } from '@/game/combat/hitscan'
 import type { Hitbox } from '@/game/combat/hitboxes'
 import { ARCHETYPES, type ArchetypeId } from '@/game/weapons/archetypes'
 import { LOADOUT_SLOTS, skinForSlot, type LoadoutSlot } from '@/game/progression/loadout'
-import { accountLevel, createProgressStore } from '@/game/progression/store'
+import {
+  accountLevel,
+  careerFromProgress,
+  createProgressStore,
+  progressWithCareer,
+} from '@/game/progression/store'
+import { applyMatchResult, careerDifficulty, type MatchProgress } from '@/game/progression/career'
+import { performanceFromStats } from '@/game/progression/combat-score'
 import { getWeaponVisual, weaponIndex } from '@/game/weapons/registry'
 import { createRigWeapon, syncRigWeapon } from '@/game/weapons/viewmodel/adapt'
 import { createViewmodelRenderer } from '@/game/weapons/viewmodel/renderer'
@@ -73,7 +80,15 @@ import { directionYaw, vignetteBearing } from '@/game/feedback/vignette'
 import { resetPlayerHealth } from '@/game/feedback/health-vfx'
 import { FEEDBACK } from '@/game/feedback/tuning'
 import { assignBotArchetypes, weaponLabel } from '@/game/match/loadouts'
-import { createMatchState, recordDamage, recordKill, stepMatch, type MatchState } from '@/game/match/match'
+import {
+  buildSummary,
+  createMatchState,
+  playerWon,
+  recordDamage,
+  recordKill,
+  stepMatch,
+  type MatchState,
+} from '@/game/match/match'
 import { invulnerabilityExpiresAt, isInvulnerable, pickFarthestSpawn } from '@/game/match/respawn'
 import { createMatchBots, stepMatchBotsThink } from '@/game/match/squad'
 import { createMatchTargets, type MatchTargets } from '@/game/match/targeting'
@@ -96,6 +111,10 @@ export interface Game {
    *  frecuencia -- referencia mutable, no una copia; quien la lee no debe
    *  escribirla. */
   readonly matchState: MatchState
+  /** Resultado de progresión de la partida (fase 4): RR, colocación, XP y
+   *  drop de skin. `null` mientras la partida sigue viva; se llena una sola
+   *  vez, al terminar. */
+  readonly matchProgress: MatchProgress | null
 }
 
 const SENSITIVITY = 0.0022
@@ -129,18 +148,40 @@ function getDifficultyOverride(): number | null {
   return Math.max(0, Math.min(1, n))
 }
 
-/** Un rango de dificultad por bot: el override explícito de la URL gana
- *  sobre MATCH.difficultyMode si está presente. 'uniform': todos el mismo
- *  MATCH.uniformDifficultyRank. 'mixed': reparte cíclicamente
- *  MATCH.mixedDifficultyRanks (sección "Pacing" de la tarea: variar la
- *  dificultad dentro de la misma partida, no sólo entre partidas). */
-function resolveDifficultyRanks(count: number): number[] {
+/**
+ * Un rango de dificultad por bot, centrado en el rango del jugador.
+ *
+ * **Este es el enganche de la fase 4** (sección 8 del spec: "la dificultad
+ * de los bots se deriva del rango actual del jugador"). Hasta la fase 3 el
+ * centro era una constante de tuneo; ahora lo trae `careerDifficulty`
+ * (progression/career.ts), que sale del rango o, en colocaciones, de la
+ * estimación adaptativa. Hierro juega contra 400ms de reacción y 6.0° de
+ * error; Radiante contra 120ms y 0.7°.
+ *
+ * 'mixed' sigue existiendo y sigue haciendo lo mismo que antes -- repartir
+ * bots más blandos y más duros dentro de la misma partida para que haya
+ * respiros -- pero ahora reparte ALREDEDOR del centro del jugador
+ * (MATCH.mixedDifficultySpread) en vez de sobre una lista fija de rangos
+ * absolutos. Un jugador de Diamante encuentra bots de Platino y de
+ * Ascendente, no de Hierro y de Radiante.
+ *
+ * `?difficulty=` sigue ganando sobre todo: es el override de QA que permite
+ * mirar un nivel concreto sin tener que llegar ahí jugando.
+ */
+function resolveDifficultyRanks(count: number, centro: number): number[] {
   const override = getDifficultyOverride()
   if (override !== null) return new Array(count).fill(override) as number[]
-  if (MATCH.difficultyMode === 'uniform') return new Array(count).fill(MATCH.uniformDifficultyRank) as number[]
-  const pool = MATCH.mixedDifficultyRanks.length > 0 ? MATCH.mixedDifficultyRanks : [MATCH.uniformDifficultyRank]
+  if (MATCH.difficultyMode === 'uniform') return new Array(count).fill(centro) as number[]
+
+  const spread = MATCH.mixedDifficultySpread
   const ranks: number[] = []
-  for (let i = 0; i < count; i++) ranks.push(pool[i % pool.length])
+  for (let i = 0; i < count; i++) {
+    // Reparto simétrico y determinista alrededor del centro: con 4 offsets
+    // y 8 bots salen dos de cada escalón.
+    const paso = count > 1 ? (i % 4) / 3 : 0.5
+    const offset = (paso - 0.5) * 2 * spread
+    ranks.push(Math.min(1, Math.max(0, centro + offset)))
+  }
   return ranks
 }
 
@@ -229,10 +270,17 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   // dificultad por bot en vez de un único arquetipo/rango compartido (ver
   // match/loadouts.ts y resolveDifficultyRanks más arriba) -- "todos con el
   // mismo rifle" es justo lo que pide evitar la tarea.
+  // Progresión del jugador (fase 4, sección 9 del spec). Se lee ACÁ, antes
+  // de crear los bots, porque la dificultad del escuadrón se deriva del
+  // rango: sin el guardado en mano no se sabe contra quién se juega.
+  const progressStore = createProgressStore()
+  const progress = progressStore.load()
+  const carreraInicial = careerFromProgress(progress)
+
   const matchMode = getMatchMode()
   const botCount = getBotCount()
   const botArchetypes = assignBotArchetypes(botCount)
-  const botDifficultyRanks = resolveDifficultyRanks(botCount)
+  const botDifficultyRanks = resolveDifficultyRanks(botCount, careerDifficulty(carreraInicial))
   // spawns.slice(1): el jugador ya ocupa spawns[0] (arriba). No es
   // obligatorio (la física resuelve cualquier superposición inicial), pero
   // evita que todo el escuadrón aparezca encima del jugador al arrancar.
@@ -383,10 +431,38 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   // armería es una pantalla aparte y no se puede cambiar el loadout con la
   // partida corriendo. La ranura arranca en la primaria, así que el arma con
   // la que el jugador spawnea es la que eligió.
-  const progressStore = createProgressStore()
-  const progress = progressStore.load()
   const nivel = accountLevel(progress)
   const loadout = progress.loadout
+
+  /**
+   * Resultado de progresión de esta partida, o null mientras siga viva.
+   * Lo lee la UI (src/ui/MatchSummary.tsx) para mostrar el cambio de RR, la
+   * ceremonia de ascenso y el drop de skin.
+   */
+  let matchProgress: MatchProgress | null = null
+
+  /**
+   * Cobra la partida terminada: aplica RR (o colocación), XP y drop sobre
+   * el guardado, y persiste. Se llama exactamente una vez por partida
+   * (ver el guard en frame()).
+   *
+   * Toda la matemática vive en progression/career.ts, que es puro y
+   * testeado; acá sólo se arma la actuación del jugador desde el puntaje y
+   * se guarda el resultado. Si `save` falla (cuota, almacenamiento
+   * bloqueado) el jugador igual ve su resumen: perder el guardado no puede
+   * costar también la pantalla de recompensa.
+   */
+  function cerrarPartida(): void {
+    const summary = buildSummary(matchState, MATCH)
+    const perf = performanceFromStats(
+      matchState.participants[PLAYER_ID],
+      summary.durationS,
+      playerWon(matchState),
+    )
+    const resultado = applyMatchResult(careerFromProgress(progress), perf)
+    matchProgress = resultado.progress
+    progressStore.save(progressWithCareer(progress, resultado.data))
+  }
 
   let currentSlot: LoadoutSlot = 'primary'
   let currentSlug = loadout.primary.slug ?? loadout.secondary.slug ?? weaponIndex()[0]?.slug ?? null
@@ -908,6 +984,16 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     // cabecera de match/match.ts sobre la garantía de terminación.
     stepMatch(matchState, dt, MATCH)
 
+    // Cierre de partida (fase 4, sección 9 del spec): la transición de
+    // 'live' a 'ended' ocurre UNA sola vez y es acá donde se cobra la
+    // carrera -- RR o colocación, XP y drop de skin. El guard de
+    // `matchProgress === null` es lo que garantiza el "una sola vez": sin
+    // él, cada frame posterior al final volvería a aplicar el resultado y
+    // el jugador subiría de rango indefinidamente mirando el resumen.
+    if (matchState.phase === 'ended' && matchProgress === null) {
+      cerrarPartida()
+    }
+
     targetsRenderer.sync(targetsState)
     botsRenderer.sync(bots)
 
@@ -1161,6 +1247,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     },
     get matchState() {
       return matchState
+    },
+    get matchProgress() {
+      return matchProgress
     },
   }
 }

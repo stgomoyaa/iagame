@@ -16,7 +16,7 @@
  */
 
 import type { MatchMode, MatchPhase } from '@/game/match/types'
-import { PLAYER_ID } from '@/game/match/types'
+import { PLAYER_ID, teamForParticipant } from '@/game/match/types'
 import { type MatchTuning, MATCH } from '@/game/match/tuning'
 import {
   addDamage,
@@ -96,7 +96,7 @@ export function recordKill(
   headshot: boolean,
 ): void {
   if (state.phase === 'ended') return
-  addKill(state.participants[killerId], state.participants[victimId])
+  addKill(state.participants[killerId], state.participants[victimId], headshot)
   pushKill(state.killfeed, killerId, victimId, weaponLabel, headshot)
 }
 
@@ -129,6 +129,29 @@ function winnerLabelFor(state: MatchState): string {
   const scoreB = teamScore(state.mode, state.participants, 1)
   if (scoreA === scoreB) return 'empate'
   return scoreA > scoreB ? 'equipo del jugador' : 'equipo enemigo'
+}
+
+/**
+ * ¿Ganó el jugador? Es la entrada `win` de la fórmula de RR (sección 9 del
+ * spec), que sólo conoce victoria y derrota.
+ *
+ * El empate cuenta como derrota, y conviene que sea explícito y no un
+ * descuido: la fórmula no tiene un tercer caso, y darle la base de victoria
+ * (+18) a un empate premiaría no haber ganado. Con los límites de puntaje
+ * altos y el reloj como cierre habitual (match/tuning.ts), un empate exacto
+ * es raro de todos modos.
+ */
+export function playerWon(state: MatchState): boolean {
+  if (state.mode === 'ffa') {
+    const mios = state.participants[PLAYER_ID]?.kills ?? 0
+    for (const p of state.participants) {
+      if (p.id !== PLAYER_ID && p.kills >= mios) return false
+    }
+    return true
+  }
+  const propio = teamForParticipant(state.mode, PLAYER_ID)
+  const rival = propio === 0 ? 1 : 0
+  return teamScore(state.mode, state.participants, propio) > teamScore(state.mode, state.participants, rival)
 }
 
 /** Resumen post-partida: duración real, ganador y tabla ordenada por kills.
