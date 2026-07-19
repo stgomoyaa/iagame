@@ -17,11 +17,26 @@ import {
   WEAPON_REGISTRY,
   weaponIndex,
   type Transform,
+  type WeaponIndexEntry,
   type WeaponVisual,
 } from '@/game/weapons/registry'
 
 export function debugModeEnabled(): boolean {
   return new URLSearchParams(window.location.search).get('debug') === '1'
+}
+
+/**
+ * Label del dropdown de armas del panel de tuning. `needsManualReview` lo
+ * marca el pipeline de conversión (sección 6.3 del spec) en ~29% de los
+ * modelos, porque su heurística de orientación de cañón por bounding box
+ * falla en siluetas atípicas — precisamente para que alguien lo corrija a
+ * mano acá. Vivía sólo en index.json: el dropdown mostraba nada más
+ * `entry.name`, así que quien tunea no tenía forma de saber cuáles de las
+ * armas necesitan la corrección de rotationOffset sin abrir el JSON, y
+ * terminaba revisando las 14 en vez de las ~4 que importan.
+ */
+export function weaponOptionLabel(entry: WeaponIndexEntry): string {
+  return entry.needsManualReview ? `${entry.name} · revisar` : entry.name
 }
 
 /** Callbacks hacia game.ts: el panel no toca ViewmodelState directamente,
@@ -228,7 +243,7 @@ export function createWeaponTuningPanel(controls: WeaponTuningControls): WeaponT
       for (const entry of weaponIndex()) {
         const option = document.createElement('option')
         option.value = entry.slug
-        option.textContent = entry.name
+        option.textContent = weaponOptionLabel(entry)
         if (entry.slug === currentSlug) option.selected = true
         select.appendChild(option)
       }

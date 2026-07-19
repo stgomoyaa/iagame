@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { loadWeaponTuningOverrides } from '@/game/weapons/viewmodel/tuning-panel'
-import { WEAPON_REGISTRY } from '@/game/weapons/registry'
+import { loadWeaponTuningOverrides, weaponOptionLabel } from '@/game/weapons/viewmodel/tuning-panel'
+import { weaponIndex, WEAPON_REGISTRY } from '@/game/weapons/registry'
 
 /**
  * Defecto 5: loadWeaponTuningOverrides valida sólo Number.isFinite, sin
@@ -204,5 +204,49 @@ describe('loadWeaponTuningOverrides', () => {
       expect(WEAPON_REGISTRY[SLUG].adsTime).toBe(0.5)
       expect(WEAPON_REGISTRY[SLUG].scaleAdjust).toBe(1.8)
     })
+  })
+})
+
+describe('weaponOptionLabel', () => {
+  it('no toca el nombre de un arma que no necesita revisión', () => {
+    const label = weaponOptionLabel({
+      slug: 'foo-1',
+      name: 'Foo 1',
+      triangles: 100,
+      bounds: { min: [0, 0, 0], max: [1, 1, 1] },
+      muzzleConfidence: 0.9,
+      upAxisConfidence: 0.9,
+      needsManualReview: false,
+    })
+    expect(label).toBe('Foo 1')
+  })
+
+  it('marca en el label un arma que sí necesita revisión, sin perder el nombre', () => {
+    const label = weaponOptionLabel({
+      slug: 'foo-1',
+      name: 'Foo 1',
+      triangles: 100,
+      bounds: { min: [0, 0, 0], max: [1, 1, 1] },
+      muzzleConfidence: 0.1,
+      upAxisConfidence: 0.8,
+      needsManualReview: true,
+    })
+    expect(label).not.toBe('Foo 1')
+    expect(label).toContain('Foo 1')
+  })
+
+  it('sobre el index.json real, marca exactamente las armas que index.json marca', () => {
+    // Ancla contra una regresión donde needsManualReview se lee de un
+    // campo distinto o se invierte la condición: cada arma real tiene que
+    // aparecer marcada si y sólo si su propio needsManualReview es true.
+    for (const entry of weaponIndex()) {
+      expect(weaponOptionLabel(entry).includes('revisar')).toBe(entry.needsManualReview)
+    }
+  })
+
+  it('el index.json real trae armas flageadas y sin flagear, para que el chequeo anterior no sea trivial', () => {
+    const entradas = weaponIndex()
+    expect(entradas.some((e) => e.needsManualReview)).toBe(true)
+    expect(entradas.some((e) => !e.needsManualReview)).toBe(true)
   })
 })
