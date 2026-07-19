@@ -84,24 +84,18 @@ function ensureVertexColors(mesh: Mesh): void {
  * Aísla la única malla del GLB en un Object3D con transform identidad,
  * descartando el transform que trae su nodo.
  *
- * Verificado en runtime (no es un supuesto): el nodo de la malla, tal como
- * lo entrega GLTFLoader, carga una escala ~100x y una rotación de -90° en
- * X que no tienen que ver con la pose del arma. Es un artefacto del lado
- * FBX2glTF del pipeline (sección 6.3 del spec) — probablemente la
- * conversión de unidades/eje del FBX de origen quedó como transform de
- * nodo en vez de hornearse — pero los VÉRTICES ya están normalizados
- * correctamente: aplicar ese transform a la geometría (en vez de
- * descartarlo) vuelve a multiplicar por ~100 un modelo que index.json ya
- * reporta en el tamaño correcto, y dejaba al arma 100 veces más grande de
- * lo esperado, con la cámara del viewmodel literalmente adentro de la
- * malla. Por eso acá se resetea el nodo a identidad en vez de "hornear"
- * nada: los vértices ya están donde tienen que estar.
- *
- * Corregir esto en el pipeline de conversión implicaría reconvertir las 14
- * armas y no hay FBX de origen garantizado en todos los entornos; aislar
- * acá, en el borde de carga, es más barato y deja al resto del renderer
- * trabajar sobre un único Object3D con transform identidad sin depender de
- * cuántos niveles de jerarquía trae cada GLB.
+ * Las 14 armas actuales ya salen limpias de scripts/convert-weapons.ts
+ * (clearNodeTransform, sección 6.3 del spec): el nodo llega en identidad y
+ * este reseteo es un no-op para ellas. Se mantiene igual, a propósito, como
+ * defensa: si un pack futuro se convierte con una versión vieja del script,
+ * o llega ya convertido desde otro lado, y trae el mismo artefacto de
+ * FBX2glTF (escala de nodo separada de los vértices), el arma no debe
+ * terminar 100 veces más grande de lo esperado con la cámara del viewmodel
+ * literalmente adentro de la malla — el caso real que motivó este código
+ * antes de que se corrigiera en el pipeline. Aislar acá, en el borde de
+ * carga, además deja al resto del renderer trabajar sobre un único Object3D
+ * con transform identidad sin depender de cuántos niveles de jerarquía trae
+ * cada GLB.
  */
 function isolateSingleMesh(root: Object3D): Mesh | null {
   let mesh: Mesh | null = null

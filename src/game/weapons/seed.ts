@@ -41,11 +41,37 @@ export interface Transform {
 // varía entre una pistola (~0.22m de largo) y un rifle (~0.85m); escalar
 // por ancho o alto casi no cambiaría nada entre armas, porque esas dos
 // dimensiones son parecidas en toda la familia de modelos convertidos.
+//
+// HIP_BACK_FRAC fija cuánto se aleja el arma de la cámara del viewmodel
+// (70° de FOV vertical, ver VIEWMODEL_FOV en viewmodel/renderer.ts). El
+// punto del modelo más cerca de esa cámara no es el centro del bounding box
+// sino la culata (el extremo +Z, del lado del jugador): con el modelo
+// centrado en el origen, esa culata queda a (HIP_BACK_FRAC - 0.5) * size de
+// la cámara. Si esa distancia es chica, el semiancho del frustum ahí
+// también lo es, y el offset lateral/vertical (constante en todo el largo
+// del arma, porque esto es sólo traslación: ver el test de seed.ts que
+// verifica rotación cero) saca la culata del cuadro. Las fracciones de acá
+// dejan a la culata de la pistola (la de peor proporción alto/largo de las
+// 14 armas actuales, ver public/assets/weapons/index.json) dentro de un
+// ~75% del frustum disponible en X e Y a las tres resoluciones de la
+// sección 5 del work order (16:9, 16:10, ultrawide 21:9): suficiente
+// margen para no rozar el borde, verificado en navegador, no sólo con esta
+// cuenta.
 const HIP_RIGHT_FRAC = 0.35
-const HIP_DOWN_FRAC = 0.3
-const HIP_BACK_FRAC = 0.55
-const ADS_RAISE_FRAC = 0.5
-const ADS_FORWARD_FRAC = 0.15
+const HIP_DOWN_FRAC = 0.07
+const HIP_BACK_FRAC = 1.25
+
+// ADS_FORWARD_FRAC tiene que superar 0.5: por debajo, la culata (el mismo
+// extremo +Z de arriba) queda más cerca de la cámara del viewmodel que su
+// propio centro, y con HIP_BACK_FRAC ya en 1.25 eso significa quedar
+// directamente detrás de la cámara (z positivo en espacio de cámara), no
+// sólo mal encuadrada. 0.8 deja a la culata de la pistola (la más chica,
+// ~0.22m) a una distancia positiva con margen (~6cm) de la cámara: se
+// recorta contra los bordes en ADS -el arma queda pegada al ojo, como en
+// cualquier shooter en primera persona apuntando- pero ya no se mete detrás
+// de la cámara.
+const ADS_RAISE_FRAC = 0.3
+const ADS_FORWARD_FRAC = 0.8
 
 /**
  * Tamaño característico del modelo: el eje más largo de su bounding box.

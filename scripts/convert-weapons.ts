@@ -43,7 +43,16 @@ import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync
 import { basename, extname, join, resolve } from 'node:path'
 import { Document, NodeIO } from '@gltf-transform/core'
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions'
-import { dedup, flatten, join as joinMeshes, prune, transformMesh, unlit, weld } from '@gltf-transform/functions'
+import {
+  clearNodeTransform,
+  dedup,
+  flatten,
+  join as joinMeshes,
+  prune,
+  transformMesh,
+  unlit,
+  weld,
+} from '@gltf-transform/functions'
 // Extensión explícita: Node resuelve ESM nativo y la exige. Vitest resuelve
 // sin ella, así que omitirla deja los tests en verde y el script roto.
 import {
@@ -180,6 +189,16 @@ async function convertOne(
 
   // Aplanar y fusionar: el viewmodel quiere una malla, no una jerarquía.
   await doc.transform(flatten(), dedup(), joinMeshes(), weld())
+
+  // FBX2glTF deja un transform residual en el nodo (~100x de escala y -90°
+  // en X) que flatten() compone hacia abajo pero no hornea en la malla: es
+  // el resabio de la conversión de unidades/eje del FBX de origen. Se
+  // descarta acá, antes de detectar cañón y eje "arriba", en vez de dejarlo
+  // para el final: esas detecciones (más abajo) son autoreferenciales sobre
+  // la propia geometría, no asumen ninguna convención de ejes de entrada, así
+  // que hornear este transform primero no cambia el resultado normalizado,
+  // sólo asegura que el nodo llegue a la escritura final en identidad.
+  for (const node of doc.getRoot().listNodes()) clearNodeTransform(node)
 
   // Hornear el color de cada material en vértices y colapsar a un único
   // material antes de volver a fusionar: recién ahí join() puede juntar
