@@ -8,6 +8,8 @@ import { createStatsTracker, runBenchmark } from '@/game/engine/stats'
 import type { FrameStats } from '@/game/engine/stats'
 import { createTuningPanel } from '@/game/engine/tuning-panel'
 import { ARENA } from '@/game/map/arena'
+import { MAP_STORAGE_KEY, mapNames, resolveMap } from '@/game/map/registry'
+import type { MapDef } from '@/game/map/types'
 import { createPlayerState, stepPlayer } from '@/game/movement/step'
 import {
   createBotWorld,
@@ -21,7 +23,7 @@ import { applyDamageToBot, createBotHealthState, stepBotRespawn } from '@/game/b
 import { buildNavGrid } from '@/game/bots/navgrid'
 import { createBotsRenderer } from '@/game/bots/renderer'
 import { BOTS } from '@/game/bots/tuning'
-import { raycastMap } from '@/game/combat/hitscan'
+import { raycastMap, setRaycastMap } from '@/game/combat/hitscan'
 import type { Hitbox } from '@/game/combat/hitboxes'
 import { ARCHETYPES, type ArchetypeId } from '@/game/weapons/archetypes'
 import { getWeaponVisual, weaponIndex } from '@/game/weapons/registry'
@@ -169,15 +171,40 @@ function applyQuickMatchOverrides(): void {
   }
 }
 
+/**
+ * Mapa de esta partida. `?map=NOMBRE` gana; si no vino, se usa el último
+ * elegido en el panel de debug (localStorage). Se resuelve UNA vez acá,
+ * antes de construir nada, porque el mapa alimenta cuatro cosas que se
+ * arman una sola vez: la malla del renderer, el BVH de hitscan, el navgrid
+ * de los bots y las posiciones de spawn.
+ */
+function resolveMapaActual(): MapDef {
+  const fromQuery = new URLSearchParams(window.location.search).get('map')
+  let fromStorage: string | null = null
+  try {
+    fromStorage = window.localStorage.getItem(MAP_STORAGE_KEY)
+  } catch {
+    // localStorage puede tirar en modo privado o con cookies bloqueadas.
+    // Un mapa recordado no vale una pantalla en blanco.
+    fromStorage = null
+  }
+  return resolveMap(fromQuery, fromStorage)
+}
+
 export function createGame(canvas: HTMLCanvasElement): Game {
-  const gfx = createRenderer(canvas)
+  const mapaActual = resolveMapaActual()
+  // El BVH de hitscan es estado de módulo (un mapa activo a la vez): hay que
+  // apuntarlo al mapa de esta partida ANTES del primer disparo.
+  setRaycastMap(mapaActual)
+
+  const gfx = createRenderer(canvas, mapaActual)
   const viewmodel = createViewmodelRenderer(gfx.renderer)
   const stats = createStatsTracker()
   const gpuTimer = createGpuTimer(gfx.gl)
   const tuning = createTuningPanel()
-  const matchTuningPanel = createMatchTuningPanel()
+  const matchTuningPanel = createMatchTuningPanel(mapNames(), mapaActual.name)
   const loop = createFixedLoop()
-  const player = createPlayerState(ARENA.spawns[0])
+  const player = createPlayerState(mapaActual.spawns[0])
 
   applyQuickMatchOverrides()
 
@@ -186,7 +213,13 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   // lista vacía que había acá antes -- el sistema de combate no cambia,
   // sólo deja de recibir un array vacío. No participan del puntaje de
   // partida -- son sólo para plinkear fuera del combate real.
-  const targetsState = createTargets(createDefaultTargetDefs())
+  // Las dianas de plinkeo viven sobre el corredor z=6 de la arena, verificado
+  // libre de geometría y blindado con un test (targets/targets.test.ts). Ese
+  // corredor no existe en los otros mapas: ahí la lista va vacía en vez de
+  // dejar dianas flotando dentro de un muro.
+  const targetsState = createTargets(
+    mapaActual === ARENA ? createDefaultTargetDefs() : [],
+  )
   const targetsRenderer = createTargetsRenderer(gfx.scene, targetsState)
 
   // Partida (sección "Build" de la tarea, segunda mitad de la fase 2): TDM
@@ -201,12 +234,12 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   // spawns.slice(1): el jugador ya ocupa spawns[0] (arriba). No es
   // obligatorio (la física resuelve cualquier superposición inicial), pero
   // evita que todo el escuadrón aparezca encima del jugador al arrancar.
-  const bots: BotState[] = createMatchBots(ARENA.spawns.slice(1), botArchetypes, botDifficultyRanks)
+  const bots: BotState[] = createMatchBots(mapaActual.spawns.slice(1), botArchetypes, botDifficultyRanks)
 
   // Navgrid horneado UNA vez desde la arena real -- nunca se recalcula en
   // frame().
-  const botGrid = buildNavGrid(ARENA)
-  const botWorld = createBotWorld(ARENA.boxes, raycastMap, botGrid)
+  const botGrid = buildNavGrid(mapaActual)
+  const botWorld = createBotWorld(mapaActual.boxes, raycastMap, botGrid)
   const botsRenderer = createBotsRenderer(gfx.scene, bots)
 
   // Participantes de la partida: 0 = jugador (PLAYER_ID), 1..N = bots por
@@ -534,7 +567,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     const ticks = loop.advance(frameDt)
     for (let i = 0; i < ticks; i++) {
       if (playerHealth.alive) {
-        stepPlayer(player, input.player, ARENA.boxes)
+        stepPlayer(player, input.player, mapaActual.boxes)
       } else {
         // Congelado mientras está muerto -- sin input, sin física nueva
         // (mismo patrón que stepBotMotor con bot.health.alive=false,
@@ -545,10 +578,10 @@ export function createGame(canvas: HTMLCanvasElement): Game {
         // cuando murió (sección "Build" de la tarea: "elegí por distancia a
         // enemigos vivos, no al azar").
         const enemyCount = fillEnemyPositions(PLAYER_ID)
-        const spawnIndex = pickFarthestSpawn(ARENA.spawns, enemyPositionsScratch, enemyCount)
+        const spawnIndex = pickFarthestSpawn(mapaActual.spawns, enemyPositionsScratch, enemyCount)
         const revived = stepBotRespawn(playerHealth, TICK_DT, MATCH.respawnDelayS)
         if (revived) {
-          const spawn = ARENA.spawns[spawnIndex]
+          const spawn = mapaActual.spawns[spawnIndex]
           player.position.x = spawn.x
           player.position.y = spawn.y
           player.position.z = spawn.z
@@ -578,8 +611,8 @@ export function createGame(canvas: HTMLCanvasElement): Game {
         botWasAlive[b] = bot.health.alive
         if (!bot.health.alive) {
           const enemyCount = fillEnemyPositions(b + 1)
-          const spawnIndex = pickFarthestSpawn(ARENA.spawns, enemyPositionsScratch, enemyCount)
-          const spawn = ARENA.spawns[spawnIndex]
+          const spawnIndex = pickFarthestSpawn(mapaActual.spawns, enemyPositionsScratch, enemyCount)
+          const spawn = mapaActual.spawns[spawnIndex]
           bot.spawn.x = spawn.x
           bot.spawn.y = spawn.y
           bot.spawn.z = spawn.z

@@ -16,7 +16,7 @@
 import { BufferAttribute, BufferGeometry, Ray } from 'three'
 import { MeshBVH } from 'three-mesh-bvh'
 import { ARENA } from '@/game/map/arena'
-import type { Box } from '@/game/map/types'
+import type { Box, MapDef } from '@/game/map/types'
 import type { Vec3 } from '@/game/math/vec3'
 
 /** Resultado de un raycast contra el mapa. Preasignado por el llamador. */
@@ -128,12 +128,27 @@ export function raycastAgainstBvh(
   }
 }
 
-/** BVH del mapa real, construido una sola vez al cargar el módulo (sección
- *  1 del spec: "un BVH construido una vez sobre la geometría del mapa"). */
-const MAP_BVH = buildMapBvh(ARENA.boxes)
+/** BVH del mapa activo, construido una sola vez por mapa (sección 1 del
+ *  spec: "un BVH construido una vez sobre la geometría del mapa"). Arranca
+ *  en la arena: es el mapa por defecto y el que usan los tests, así que
+ *  ninguno tiene que acordarse de inicializar nada. */
+let mapaActivo: MapDef = ARENA
+let bvhActivo = buildMapBvh(ARENA.boxes)
 
-/** Raycast contra el mapa real de la arena. Atajo de raycastAgainstBvh para
- *  el único BVH que game.ts necesita en producción. */
+/**
+ * Cambia el mapa contra el que dispara raycastMap. Se llama UNA vez al
+ * armar la partida (game.ts), nunca en el camino de frame: reconstruye el
+ * BVH entero. Idempotente, así que llamarla con el mapa que ya está activo
+ * no cuesta nada.
+ */
+export function setRaycastMap(map: MapDef): void {
+  if (map === mapaActivo) return
+  mapaActivo = map
+  bvhActivo = buildMapBvh(map.boxes)
+}
+
+/** Raycast contra el mapa activo. Atajo de raycastAgainstBvh para el único
+ *  BVH que game.ts necesita en producción. */
 export function raycastMap(origin: Vec3, dir: Vec3, maxDistance: number, out: MapHit): void {
-  raycastAgainstBvh(MAP_BVH, origin, dir, maxDistance, out)
+  raycastAgainstBvh(bvhActivo, origin, dir, maxDistance, out)
 }

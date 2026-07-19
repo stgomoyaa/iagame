@@ -12,12 +12,14 @@ import {
   stepBotThink,
   type BotWorld,
 } from '@/game/bots/bot'
-import { buildNavGrid } from '@/game/bots/navgrid'
+import { buildNavGrid, worldToCellIndex } from '@/game/bots/navgrid'
 import { lookAt, type YawPitch } from '@/game/bots/aim'
 import { BOTS } from '@/game/bots/tuning'
 import { ARCHETYPES } from '@/game/weapons/archetypes'
 import { buildMapBvh, raycastAgainstBvh, raycastMap } from '@/game/combat/hitscan'
 import { ARENA } from '@/game/map/arena'
+import { BUNKER } from '@/game/map/bunker'
+import { TORRE } from '@/game/map/torre'
 import { lengthHorizontal, vec3 } from '@/game/math/vec3'
 import { MOVEMENT } from '@/game/movement/tuning'
 import { TICK_DT } from '@/game/engine/constants'
@@ -570,5 +572,121 @@ describe('Enfrentar strafea en vez de disparar plantado', () => {
 
     expect(Math.abs(bot.player.position.x)).toBeLessThan(30)
     expect(Math.abs(bot.player.position.z)).toBeLessThan(30)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Destinos alcanzables: el bug que los mapas nuevos destaparon.
+// ---------------------------------------------------------------------------
+
+describe('los destinos que elige un bot son alcanzables de verdad', () => {
+  // "Caminable" no es "alcanzable": el bake del navgrid marca caminable el
+  // techo de cualquier muro o cobertura alta, superficies planas con espacio
+  // libre encima a las que nadie puede subir. pickCandidateCell (Retirarse y
+  // Reposicionar), la investigación de última actividad y Rotar elegían
+  // destino con nearestWalkableCellIndex SIN la máscara de alcanzables, así
+  // que apuntaban a esos techos, A* no encontraba camino y el bot se quedaba
+  // plantado. Medido jugando antes del arreglo: 37% de las muestras de bot
+  // vivo en la arena y 52% en el búnker, casi todas en Retirarse sin camino.
+  // El búnker lo exhibe más fuerte que la arena porque tiene mucha más
+  // superficie de muro por metro cuadrado.
+
+  it('createBotWorld expone la máscara de alcanzables y excluye los techos de muro', () => {
+    const grid = buildNavGrid(BUNKER, 1, 1.8)
+    const world = createBotWorld(BUNKER.boxes, raycastMap, grid)
+
+    expect(world.reachable.length).toBe(grid.cols * grid.rows)
+
+    // El techo de un muro interior del búnker (4m) es caminable pero no
+    // alcanzable: el alcance real desde el piso es ~2.16m.
+    const enMuro = worldToCellIndex(grid, -6.5, -15.5)
+    expect(grid.walkable[enMuro], 'el techo del muro es caminable').toBe(1)
+    expect(grid.heights[enMuro]).toBe(4)
+    expect(world.reachable[enMuro], 'pero no alcanzable').toBe(0)
+
+    // El piso de una sala sí.
+    const enSala = worldToCellIndex(grid, -15.5, -15.5)
+    expect(world.reachable[enSala]).toBe(1)
+  })
+
+  it.each([
+    ['arena', ARENA],
+    ['bunker', BUNKER],
+    ['torre', TORRE],
+  ])('en %s, un escuadrón bajo fuego no se queda plantado sin camino', (nombre, map) => {
+    const grid = buildNavGrid(map, 1, 1.8)
+    const world = createBotWorld(map.boxes, raycastMap, grid)
+    const squad = createBotSquad(map.spawns, 8, 0.5, ARCHETYPE)
+
+    function mulberry32(seed: number): () => number {
+      let a = seed | 0
+      return function (): number {
+        a = (a + 0x6d2b79f5) | 0
+        let t = Math.imul(a ^ (a >>> 15), 1 | a)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      }
+    }
+    const rand = mulberry32(20260719)
+
+    const TICKS = 7200
+    const previa = squad.map((b) => ({ x: b.player.position.x, z: b.player.position.z }))
+    const quietoTicks = squad.map(() => 0)
+    const maxQuieto = squad.map(() => 0)
+    let muestrasVivas = 0
+    let retreatSinCamino = 0
+
+    for (let tick = 0; tick < TICKS; tick++) {
+      world.simTimeS += TICK_DT
+      // El objetivo salta por el mapa: fuerza a los bots a recorrer todos
+      // los estados según lo que puedan o no percibir desde ahí.
+      if (tick % 90 === 0) {
+        world.targetEye.x = (rand() - 0.5) * (map.bounds.max.x - map.bounds.min.x) * 0.9
+        world.targetEye.y = 1.6
+        world.targetEye.z = (rand() - 0.5) * (map.bounds.max.z - map.bounds.min.z) * 0.9
+      }
+      // Daño frecuente: Retirarse es justo el estado donde vivía el bug.
+      if (tick % 120 === 0) damageBot(squad[Math.floor(rand() * squad.length)], rand() * 90)
+
+      stepAllBotsThink(squad, world, TICK_DT)
+      stepAllBotsMotor(squad, world, TICK_DT)
+
+      for (let i = 0; i < squad.length; i++) {
+        const bot = squad[i]
+        if (!bot.health.alive) {
+          quietoTicks[i] = 0
+          continue
+        }
+        muestrasVivas++
+        if (bot.fsm.current === 'retreat' && bot.pathIndex >= bot.path.length) retreatSinCamino++
+
+        const movido = Math.hypot(
+          bot.player.position.x - previa[i].x,
+          bot.player.position.z - previa[i].z,
+        )
+        previa[i].x = bot.player.position.x
+        previa[i].z = bot.player.position.z
+        quietoTicks[i] = movido < 0.005 ? quietoTicks[i] + 1 : 0
+        if (quietoTicks[i] > maxQuieto[i]) maxQuieto[i] = quietoTicks[i]
+      }
+    }
+
+    // Números medidos con este mismo escenario. Sin el arreglo: hasta 9.8s
+    // clavado en el búnker y 7.5s en la arena, con 9.2% y 6.4% de las
+    // muestras vivas en Retirarse sin camino. Con el arreglo: 1.3s y 1.4s,
+    // 0.3% y 0.5%. Los techos de abajo quedan cómodamente entre los dos.
+    const limiteTicks = Math.round(4 / TICK_DT)
+    for (let i = 0; i < squad.length; i++) {
+      expect(
+        maxQuieto[i],
+        `bot ${i} estuvo ${(maxQuieto[i] * TICK_DT).toFixed(1)}s clavado en ${nombre}`,
+      ).toBeLessThan(limiteTicks)
+    }
+
+    const pctRetreatSinCamino = (100 * retreatSinCamino) / muestrasVivas
+    expect(
+      pctRetreatSinCamino,
+      `${pctRetreatSinCamino.toFixed(1)}% de las muestras vivas en Retirarse sin camino en ${nombre}`,
+    ).toBeLessThan(3)
   })
 })

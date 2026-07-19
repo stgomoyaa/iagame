@@ -148,12 +148,17 @@ export function worldToCellIndex(grid: NavGrid, x: number, z: number): number {
  * nunca cae justo en el centro de una celda, y puede caer un pelo afuera del
  * polígono que el bake consideró caminable (ej. parado sobre el borde de una
  * repisa). Devuelve -1 si no encuentra ninguna dentro del radio.
+ *
+ * `mask` (opcional) restringe la búsqueda a un subconjunto de celdas -- lo
+ * usa la red de patrulla con la máscara de buildMainComponentMask para no
+ * plantar destinos arriba de un muro.
  */
 export function nearestWalkableCellIndex(
   grid: NavGrid,
   x: number,
   z: number,
   maxRadius: number = 4,
+  mask?: Uint8Array,
 ): number {
   const col0 = Math.floor((x - grid.minX) / grid.cellSize)
   const row0 = Math.floor((z - grid.minZ) / grid.cellSize)
@@ -170,7 +175,9 @@ export function nearestWalkableCellIndex(
         const col = col0 + dCol
         if (col < 0 || col >= grid.cols) continue
         const idx = row * grid.cols + col
-        if (grid.walkable[idx]) return idx
+        if (!grid.walkable[idx]) continue
+        if (mask !== undefined && !mask[idx]) continue
+        return idx
       }
     }
   }
@@ -209,3 +216,73 @@ export const NEIGHBOR_OFFSETS: ReadonlyArray<readonly [number, number]> = [
   [0, -1],
   [1, -1],
 ]
+
+/**
+ * Máscara del componente conexo MÁS GRANDE del grid: 1 en las celdas que se
+ * alcanzan caminando y mantleando desde cualquier otra celda del mismo
+ * componente, 0 en el resto.
+ *
+ * Existe porque "caminable" y "alcanzable" no son lo mismo, y confundirlas
+ * produce navegación degenerada. El bake marca caminable cualquier columna
+ * con superficie y espacio libre arriba -- eso incluye el TECHO de los muros
+ * perimetrales y el de la cobertura alta, que son superficies planas
+ * perfectamente paradas a las que nadie puede subir. En la arena eso nunca
+ * molestó porque la retícula de patrulla (cada 10m) no caía encima de
+ * ninguna por casualidad; en el mapa "torre" cayeron dos nodos sobre
+ * cobertura bloqueante de 2.2m, y un bot que elige un destino imposible
+ * quema una petición de camino por ciclo hasta que le toca otro nodo.
+ *
+ * Corre UNA vez por mapa (bake de la red de patrulla), nunca en frame: es un
+ * flood fill sobre todo el grid usando el mismo cellsConnected que después
+ * usa A*, así que la máscara no puede desincronizarse del criterio real de
+ * conectividad.
+ */
+export function buildMainComponentMask(
+  grid: NavGrid,
+  mantleMaxHeight: number = MOVEMENT.mantleMaxHeight,
+): Uint8Array {
+  const total = grid.cols * grid.rows
+  const componente = new Int32Array(total).fill(-1)
+  const pila = new Int32Array(total)
+  const mejor = { id: -1, tam: 0 }
+  let idComponente = 0
+
+  for (let inicio = 0; inicio < total; inicio++) {
+    if (!grid.walkable[inicio] || componente[inicio] >= 0) continue
+
+    let tope = 0
+    pila[tope++] = inicio
+    componente[inicio] = idComponente
+    let tam = 0
+
+    while (tope > 0) {
+      const idx = pila[--tope]
+      tam++
+      const col = idx % grid.cols
+      const row = (idx - col) / grid.cols
+      for (let n = 0; n < NEIGHBOR_OFFSETS.length; n++) {
+        const c = col + NEIGHBOR_OFFSETS[n][0]
+        const r = row + NEIGHBOR_OFFSETS[n][1]
+        if (c < 0 || c >= grid.cols || r < 0 || r >= grid.rows) continue
+        const vecino = r * grid.cols + c
+        if (componente[vecino] >= 0) continue
+        if (!cellsConnected(grid, idx, vecino, mantleMaxHeight)) continue
+        componente[vecino] = idComponente
+        pila[tope++] = vecino
+      }
+    }
+
+    if (tam > mejor.tam) {
+      mejor.tam = tam
+      mejor.id = idComponente
+    }
+    idComponente++
+  }
+
+  const mask = new Uint8Array(total)
+  if (mejor.id < 0) return mask
+  for (let i = 0; i < total; i++) {
+    if (componente[i] === mejor.id) mask[i] = 1
+  }
+  return mask
+}

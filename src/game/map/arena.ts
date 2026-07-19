@@ -1,15 +1,8 @@
 import type { Box, MapDef } from '@/game/map/types'
+import { box } from '@/game/map/box'
 import { vec3 } from '@/game/math/vec3'
 
-export function box(
-  minX: number, minY: number, minZ: number,
-  maxX: number, maxY: number, maxZ: number,
-): Box {
-  return {
-    min: vec3(Math.min(minX, maxX), Math.min(minY, maxY), Math.min(minZ, maxZ)),
-    max: vec3(Math.max(minX, maxX), Math.max(minY, maxY), Math.max(minZ, maxZ)),
-  }
-}
+export { box }
 
 const HALF = 30
 const WALL_H = 6
@@ -19,6 +12,28 @@ const WALL_T = 1
 const LOW = 1.0
 /** Cobertura alta: bloquea línea de vista de pie. */
 const HIGH = 2.2
+
+/**
+ * Cobertura que existe para ROMPER líneas de vista de pie: separadores de
+ * carril (con huecos para rotar) y los dos bloques cerca de los spawns. No
+ * son plataformas; el chequeo de map/invariants.ts exige que sigan sin
+ * quedar parables ni encadenando saltos.
+ *
+ * El extremo de los separadores que mira a la estructura central quedaba a
+ * sólo 3m (en Z, tocando en X) del escalón de 1.1m de esa estructura: un
+ * salto+mantle desde el escalón llegaba igual al tope de 2.2m, aunque el
+ * separador nunca estuviera cerca de una caja suelta de 1m. El hueco
+ * central se agrandó de 12m a 20m para sacar ese extremo del alcance de un
+ * salto (7m, contra un alcance máximo de ~4.7m a velocidad de sprint).
+ */
+const coberturaBloqueante: Box[] = [
+  box(-10, 0, -22, -9, HIGH, -10),
+  box(-10, 0, 10, -9, HIGH, 22),
+  box(9, 0, -22, 10, HIGH, -10),
+  box(9, 0, 10, 10, HIGH, 22),
+  box(-4, 0, -26, 4, HIGH, -24),
+  box(-4, 0, 24, 4, HIGH, 26),
+]
 
 const boxes: Box[] = [
   // Piso
@@ -30,17 +45,7 @@ const boxes: Box[] = [
   box(-HALF, 0, -HALF, -HALF + WALL_T, WALL_H, HALF),
   box(HALF - WALL_T, 0, -HALF, HALF, WALL_H, HALF),
 
-  // Separadores de los tres carriles, con huecos para rotar. El extremo que
-  // mira a la estructura central quedaba a sólo 3m (en Z, tocando en X) del
-  // escalón de 1.1m de esa estructura: un salto+mantle desde el escalón
-  // llegaba igual al tope de 2.2m del separador, aunque el separador nunca
-  // estuviera cerca de una caja suelta de 1m. El hueco central se agranda de
-  // 12m a 20m para sacar ese extremo del alcance de un salto (7m, contra un
-  // alcance máximo de ~4.7m a velocidad de sprint). Ver arena.test.ts.
-  box(-10, 0, -22, -9, HIGH, -10),
-  box(-10, 0, 10, -9, HIGH, 22),
-  box(9, 0, -22, 10, HIGH, -10),
-  box(9, 0, 10, 10, HIGH, 22),
+  ...coberturaBloqueante,
 
   // Estructura central: plataforma elevada con escalones a ambos lados.
   // Cada salto es de 1.1m, bajo el límite de mantle de 1.2m: floor -> 1.1 -> 2.2.
@@ -57,10 +62,6 @@ const boxes: Box[] = [
   box(20, 0, -14, 24, LOW, -10),
   box(20, 0, 10, 24, LOW, 14),
   box(14, 0, -2, 18, LOW, 2),
-
-  // Cobertura alta cerca de los spawns, para romper líneas de vista largas
-  box(-4, 0, -26, 4, HIGH, -24),
-  box(-4, 0, 24, 4, HIGH, 26),
 
   // Cajas mantleables sueltas para encadenar movimiento.
   // Las dos primeras estaban a 4m de un separador (cobertura alta, 2.2m):
@@ -88,4 +89,6 @@ export const ARENA: MapDef = {
   boxes,
   spawns,
   bounds: box(-HALF, -1, -HALF, HALF, WALL_H, HALF),
+  wallHeight: WALL_H,
+  blockingCover: coberturaBloqueante,
 }

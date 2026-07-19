@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildMainComponentMask,
   buildNavGrid,
   cellCenterX,
   cellCenterZ,
@@ -178,5 +179,49 @@ describe('navgrid real de la arena del juego', () => {
     let walkableCount = 0
     for (let i = 0; i < grid.walkable.length; i++) walkableCount += grid.walkable[i]
     expect(walkableCount).toBeGreaterThan(grid.walkable.length * 0.5)
+  })
+})
+
+describe('máscara del componente conexo principal', () => {
+  // Piso de 20x20 con una columna de 3m en el medio: el techo de la columna
+  // es una superficie caminable perfectamente plana a la que no se puede
+  // subir (3m contra 1.2m de mantle). Es exactamente la forma del techo de
+  // un muro o de una cobertura alta en un mapa real.
+  const floor = box(-10, -1, -10, 10, 0, 10)
+  const columna = box(-1, 0, -1, 1, 3, 1)
+  const map = mapOf([floor, columna], box(-10, 0, -10, 10, 6, 10))
+  const grid = buildNavGrid(map, 1, CAPSULE_H)
+
+  it('marca el piso y deja afuera el techo inalcanzable', () => {
+    const mask = buildMainComponentMask(grid, MANTLE_H)
+
+    const enElPiso = worldToCellIndex(grid, -8, -8)
+    expect(grid.walkable[enElPiso]).toBe(1)
+    expect(mask[enElPiso]).toBe(1)
+
+    const enLaColumna = worldToCellIndex(grid, 0.5, 0.5)
+    expect(grid.walkable[enLaColumna], 'el techo de la columna sí es caminable').toBe(1)
+    expect(grid.heights[enLaColumna]).toBe(3)
+    expect(mask[enLaColumna], 'pero no forma parte del componente alcanzable').toBe(0)
+  })
+
+  it('nearestWalkableCellIndex con máscara no devuelve una celda del techo', () => {
+    const mask = buildMainComponentMask(grid, MANTLE_H)
+
+    const sinMascara = nearestWalkableCellIndex(grid, 0.5, 0.5)
+    expect(grid.heights[sinMascara]).toBe(3)
+
+    const conMascara = nearestWalkableCellIndex(grid, 0.5, 0.5, 4, mask)
+    expect(conMascara).toBeGreaterThanOrEqual(0)
+    expect(grid.heights[conMascara]).toBe(0)
+  })
+
+  it('un mapa de un solo nivel queda entero dentro de la máscara', () => {
+    const plano = mapOf([floor], box(-10, 0, -10, 10, 6, 10))
+    const gridPlano = buildNavGrid(plano, 1, CAPSULE_H)
+    const mask = buildMainComponentMask(gridPlano, MANTLE_H)
+    for (let i = 0; i < gridPlano.walkable.length; i++) {
+      expect(mask[i]).toBe(gridPlano.walkable[i])
+    }
   })
 })

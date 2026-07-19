@@ -39,6 +39,7 @@
  */
 
 import {
+  buildMainComponentMask,
   cellCenterX,
   cellCenterZ,
   cellCol,
@@ -76,6 +77,14 @@ const EMPTY_GRAPH: PatrolGraph = {
  * nunca en el camino de frame ni en el tick de IA.
  */
 export function buildPatrolGraph(grid: NavGrid, spacingM: number = BOTS.patrolNodeSpacingM): PatrolGraph {
+  // Sólo el componente conexo grande: "caminable" incluye el techo de los
+  // muros y el de la cobertura alta, superficies planas a las que nadie
+  // puede subir. En la arena la retícula de 10m no caía sobre ninguna por
+  // casualidad; en el mapa "torre" caían dos nodos sobre cobertura
+  // bloqueante de 2.2m, y un destino imposible le quema al bot una petición
+  // de camino por ciclo hasta que le toca otro nodo. Ver
+  // buildMainComponentMask.
+  const mask = buildMainComponentMask(grid)
   const stride = Math.max(1, Math.round(spacingM / grid.cellSize))
   const capacity = Math.ceil(grid.cols / stride) * Math.ceil(grid.rows / stride)
   if (capacity === 0) return EMPTY_GRAPH
@@ -95,7 +104,7 @@ export function buildPatrolGraph(grid: NavGrid, spacingM: number = BOTS.patrolNo
     for (let col = offset; col < grid.cols; col += stride) {
       const wx = cellCenterX(grid, col)
       const wz = cellCenterZ(grid, row)
-      const idx = nearestWalkableCellIndex(grid, wx, wz)
+      const idx = nearestWalkableCellIndex(grid, wx, wz, 4, mask)
       if (idx < 0) continue
 
       let repeated = false
@@ -120,6 +129,8 @@ export function buildPatrolGraph(grid: NavGrid, spacingM: number = BOTS.patrolNo
     grid,
     cellCenterX(grid, centerCol),
     cellCenterZ(grid, centerRow),
+    4,
+    mask,
   )
   const centerX = centerIdx >= 0 ? cellCenterX(grid, cellCol(grid, centerIdx)) : cellCenterX(grid, centerCol)
   const centerZ = centerIdx >= 0 ? cellCenterZ(grid, cellRow(grid, centerIdx)) : cellCenterZ(grid, centerRow)
