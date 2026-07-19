@@ -61,6 +61,15 @@ export interface WeaponTuningControls {
 export interface WeaponTuningPanel {
   mount(parent: HTMLElement): void
   unmount(): void
+  /**
+   * Reconstruye los sliders leyendo WEAPON_REGISTRY de nuevo (no-op si el
+   * panel no está montado). mount() ya la llama sola cuando
+   * loadWeaponTuningOverrides() resuelve -- ver el comentario de esa línea
+   * más abajo -- así que en el uso normal nadie necesita llamarla a mano;
+   * queda pública porque es la única forma de reconstruir el DOM del panel
+   * sin desmontarlo y volverlo a montar.
+   */
+  refresh(): void
 }
 
 interface SliderSpec {
@@ -293,6 +302,31 @@ export function createWeaponTuningPanel(controls: WeaponTuningControls): WeaponT
       window.addEventListener('mouseup', onMouseUp)
       window.addEventListener('contextmenu', onContextMenu)
       window.addEventListener('keydown', onKeyDown)
+
+      // Bug real (no de test): buildSliders() de la línea de arriba lee
+      // WEAPON_REGISTRY en el instante del mount, que es ANTES de que
+      // resuelva el fetch de weapons_tuning.json (loadWeaponTuningOverrides
+      // es async: game.ts la dispara en start() sin esperarla). El registry
+      // SÍ termina mutado a tiempo -- render() en viewmodel/renderer.ts y
+      // syncRigWeapon() en adapt.ts lo releen en vivo cada frame y por eso
+      // el arma en pantalla se ve bien -- pero el DOM de este panel no se
+      // vuelve a construir solo: sin este refresco quedaba mostrando para
+      // siempre los valores heurísticos de seed.ts, así que quien tunea
+      // recargaba la página y el panel le mentía "no cambió nada" aunque el
+      // override sí se hubiera aplicado. game.ts ya llama a
+      // loadWeaponTuningOverrides() por su cuenta (la necesita aunque este
+      // panel no exista, para que el arma se vea bien sin ?debug=1);
+      // llamarla de nuevo acá es idempotente -- vuelve a aplicar el mismo
+      // archivo -- y el navegador la sirve del caché (ver Network: 304), así
+      // que no es un fetch real de más, sólo el enganche para reconstruir
+      // los sliders una vez que el valor ya está disponible.
+      loadWeaponTuningOverrides()
+        .then(() => buildSliders())
+        .catch(() => {})
+    },
+
+    refresh(): void {
+      buildSliders()
     },
 
     unmount(): void {

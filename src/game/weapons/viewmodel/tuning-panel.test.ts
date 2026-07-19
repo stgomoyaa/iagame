@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { loadWeaponTuningOverrides, weaponOptionLabel } from '@/game/weapons/viewmodel/tuning-panel'
-import { weaponIndex, WEAPON_REGISTRY } from '@/game/weapons/registry'
+import {
+  createWeaponTuningPanel,
+  loadWeaponTuningOverrides,
+  weaponOptionLabel,
+} from '@/game/weapons/viewmodel/tuning-panel'
+import { getWeaponVisual, weaponIndex, WEAPON_REGISTRY } from '@/game/weapons/registry'
+import { createRigWeapon, syncRigWeapon } from '@/game/weapons/viewmodel/adapt'
 
 /**
  * Defecto 5: loadWeaponTuningOverrides valida sólo Number.isFinite, sin
@@ -203,6 +208,83 @@ describe('loadWeaponTuningOverrides', () => {
       await loadWeaponTuningOverrides()
       expect(WEAPON_REGISTRY[SLUG].adsTime).toBe(0.5)
       expect(WEAPON_REGISTRY[SLUG].scaleAdjust).toBe(1.8)
+    })
+  })
+
+  /**
+   * Bug real reproducido en el navegador (Chrome DevTools contra el dev
+   * server, no en Vitest): el panel de tuning (createWeaponTuningPanel más
+   * abajo en este archivo, ver mount()) construye sus sliders leyendo
+   * WEAPON_REGISTRY en el instante del mount, que es ANTES de que resuelva
+   * este fetch -- game.ts dispara loadWeaponTuningOverrides() sin esperarla
+   * en start(). El registro SÍ terminaba mutado a tiempo (viewmodel/
+   * renderer.ts y adapt.ts#syncRigWeapon lo releen en vivo cada frame, así
+   * que el arma en pantalla ya se veía bien), pero nada reconstruía el DOM
+   * del panel después: quien tuneaba exportaba, guardaba el archivo,
+   * recargaba, y el panel seguía mostrando los valores heurísticos de
+   * seed.ts para siempre, como si el override nunca se hubiera aplicado.
+   *
+   * Los tests de arriba (`archivo válido pisa los valores del registry`,
+   * etc.) ya probaban que WEAPON_REGISTRY se muta bien -- ESO nunca fue el
+   * problema, y seguían en verde con el bug presente: por eso pasaban
+   * mientras el feature estaba roto en el navegador, "testeando lo
+   * incorrecto" en el sentido de que no cubrían al consumidor que sí
+   * fallaba. Este bloque pinea dos cosas distintas:
+   *
+   * 1. Por qué alcanza con releer/reconstruir el panel después de que la
+   *    promesa resuelve (la solución real: refresh() en tuning-panel.ts,
+   *    llamado desde mount() con loadWeaponTuningOverrides().then(...)), sin
+   *    necesitar un bus de eventos: loadWeaponTuningOverrides() muta el
+   *    objeto IN PLACE, así que una referencia tomada ANTES de la carga (como
+   *    la que buildSliders() captura al mount) ya ve los valores nuevos
+   *    después, sin volver a llamar a getWeaponVisual().
+   * 2. Que createWeaponTuningPanel expone refresh() y no revienta si se lo
+   *    llama antes o después de mount()/unmount().
+   *
+   * Lo que este archivo NO puede pinear: que refresh() efectivamente
+   * reconstruye el DOM de los sliders con los valores nuevos. vitest.config.ts
+   * corre este archivo con environment: 'node' (sin jsdom/happy-dom
+   * instalado) y createWeaponTuningPanel().mount() usa document/window de
+   * verdad -- no hay forma de invocar mount() acá. Esa parte se verificó a
+   * mano contra el dev server: assaultrifle-1 mostraba "rotation.y: 0.000"
+   * tras un hard reload antes del fix y "rotation.y: -3.072" (el valor real
+   * de weapons_tuning.json) después, sin tocar el dropdown de armas.
+   */
+  describe('contrato real: lo que game.ts lee cada frame refleja el override, no sólo WEAPON_REGISTRY', () => {
+    it('una referencia tomada ANTES de cargar overrides ve los valores nuevos DESPUÉS, sin volver a leer el registry', async () => {
+      // Simula lo que buildSliders() hace en mount(): agarra la referencia
+      // del WeaponVisual ANTES de que loadWeaponTuningOverrides() resuelva.
+      const visualAntesDeLaCarga = getWeaponVisual(SLUG)
+
+      globalThis.fetch = fakeFetch(true, {
+        [SLUG]: { adsOffset: { z: 0.31 }, rotationOffset: { ry: 1.2 }, kickMagnitude: 2.2 },
+      })
+      await loadWeaponTuningOverrides()
+
+      // La MISMA referencia -- sin llamar a getWeaponVisual(SLUG) de nuevo --
+      // ya refleja el override: es un objeto mutado in place, no reemplazado.
+      expect(visualAntesDeLaCarga.adsOffset.z).toBe(0.31)
+      expect(visualAntesDeLaCarga.rotationOffset.ry).toBe(1.2)
+      expect(visualAntesDeLaCarga.kickMagnitude).toBe(2.2)
+
+      // Y el consumidor real que game.ts llama cada frame (adapt.ts) ve lo
+      // mismo si se lo invoca DESPUÉS de que la carga resolvió -- que es
+      // justo lo que render()/syncRigWeapon() hacen en el juego real.
+      const rig = createRigWeapon()
+      syncRigWeapon(rig, getWeaponVisual(SLUG))
+      expect(rig.ads.pz).toBe(0.31)
+      expect(rig.kickMagnitude).toBe(2.2)
+    })
+
+    it('createWeaponTuningPanel expone refresh() y no revienta si se llama sin estar montado', () => {
+      const panel = createWeaponTuningPanel({
+        initialSlug: SLUG,
+        onSelectWeapon: () => {},
+        setFireHeld: () => {},
+        onReload: () => {},
+        setAds: () => {},
+      })
+      expect(() => panel.refresh()).not.toThrow()
     })
   })
 })
