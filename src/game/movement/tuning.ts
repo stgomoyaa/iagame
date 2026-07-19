@@ -25,21 +25,28 @@ export interface MovementTuning {
   bhopSoftCapDecay: number
 
   slideBoost: number
+  /** Techo duro de velocidad horizontal al entrar en slide: el boost nunca la supera. */
+  slideMaxSpeed: number
   slideDuration: number
   slideEndSpeedScale: number
   slideFriction: number
   /** Velocidad horizontal mínima para poder entrar en slide. */
   slideMinSpeed: number
+  /** Tiempo mínimo desde que terminó el último slide antes de poder entrar en otro. */
+  slideCooldown: number
 
   mantleMaxHeight: number
   mantleMinSpeed: number
 
   eyeHeight: number
   crouchEyeHeight: number
+  /** Constante de tiempo del acercamiento exponencial de eyeHeight al agacharse/pararse. */
+  eyeHeightLerpTime: number
 }
 
 const walkSpeed = 5.0
 const sprintSpeed = 8.0
+const bhopSoftCap = sprintSpeed * 1.8
 
 export const MOVEMENT: MovementTuning = {
   walkSpeed,
@@ -60,7 +67,7 @@ export const MOVEMENT: MovementTuning = {
 
   jumpBufferWindow: 0.12,
   bhopFrictionSkipWindow: 0.08,
-  bhopSoftCap: sprintSpeed * 1.8,
+  bhopSoftCap,
   // Derivado, no elegido a ojo. Strafeando perfecto se gana
   // airAccel * dt * airWishSpeedCap = 100 * (1/128) * 0.5 = 0.39 m/s por tick.
   // El equilibrio del decay exponencial es gain / (1 - exp(-decay * dt)).
@@ -70,14 +77,26 @@ export const MOVEMENT: MovementTuning = {
   bhopSoftCapDecay: 12.0,
 
   slideBoost: 1.35,
+  // El mismo tope que bhopSoftCap, a propósito: si el slide pudiera superar
+  // el tope del bhop, sería la vía barata de saltárselo (agachar y soltar es
+  // trivial comparado con air-strafear). Un solo techo de velocidad en
+  // suelo, no dos números que alguien puede desincronizar al tunear.
+  slideMaxSpeed: bhopSoftCap,
   slideDuration: 0.7,
   slideEndSpeedScale: 0.6,
   slideFriction: 1.2,
   slideMinSpeed: 4.0,
+  // Sin esto, re-presionar agachar cada ~150ms reaplica el boost sobre una
+  // velocidad ya boosteada: crecimiento compuesto sin límite (ver
+  // movement/invariants.test.ts). 0.4s es más que suficiente para el
+  // slide-cancel legítimo (que ya no depende del cooldown, corta por salto)
+  // pero mata el spam de la tecla.
+  slideCooldown: 0.4,
 
   mantleMaxHeight: 1.2,
   mantleMinSpeed: 1.0,
 
   eyeHeight: 1.65,
   crouchEyeHeight: 1.0,
+  eyeHeightLerpTime: 0.12,
 }

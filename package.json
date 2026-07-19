@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run --pool=forks --execArgv=--expose-gc",
-    "test:watch": "vitest"
+    "test:watch": "vitest --execArgv=--expose-gc"
   },
   "dependencies": {
     "next": "16.2.10",

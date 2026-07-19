@@ -99,4 +99,37 @@ describe('paso del jugador', () => {
     simular(s, input({ forward: 1, sprint: true }), 60)
     expect(s.prevPosition.z).not.toBeCloseTo(s.position.z, 6)
   })
+
+  it('la altura de los ojos converge al agacharse en vez de saltar de golpe', () => {
+    const s = createPlayerState(vec3(0, 0, 0))
+    simular(s, input(), 5)
+    const antes = s.eyeHeight
+
+    stepPlayer(s, input({ crouch: true }), piso, TICK_DT)
+    // Un solo tick no debe alcanzar el objetivo: si lo alcanzara sería el
+    // salto instantáneo de 65cm que este lerp reemplaza.
+    expect(s.eyeHeight).toBeGreaterThan(MOVEMENT.crouchEyeHeight)
+    expect(s.eyeHeight).toBeLessThan(antes)
+
+    simular(s, input({ crouch: true }), 200)
+    expect(s.eyeHeight).toBeCloseTo(MOVEMENT.crouchEyeHeight, 3)
+  })
+
+  it('la altura de los ojos no se pasa del objetivo al converger', () => {
+    const s = createPlayerState(vec3(0, 0, 0))
+    simular(s, input(), 5)
+
+    for (let i = 0; i < 300; i++) {
+      stepPlayer(s, input({ crouch: true }), piso, TICK_DT)
+      expect(s.eyeHeight).toBeGreaterThanOrEqual(MOVEMENT.crouchEyeHeight - 1e-9)
+      expect(s.eyeHeight).toBeLessThanOrEqual(MOVEMENT.eyeHeight + 1e-9)
+    }
+
+    for (let i = 0; i < 300; i++) {
+      stepPlayer(s, input(), piso, TICK_DT)
+      expect(s.eyeHeight).toBeLessThanOrEqual(MOVEMENT.eyeHeight + 1e-9)
+      expect(s.eyeHeight).toBeGreaterThanOrEqual(MOVEMENT.crouchEyeHeight - 1e-9)
+    }
+    expect(s.eyeHeight).toBeCloseTo(MOVEMENT.eyeHeight, 3)
+  })
 })

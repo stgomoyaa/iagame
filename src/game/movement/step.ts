@@ -25,6 +25,7 @@ export function createPlayerState(spawn: Vec3): PlayerState {
     crouchWasPressed: false,
     sliding: false,
     slideTime: 0,
+    timeSinceSlideEnded: Infinity,
     eyeHeight: MOVEMENT.eyeHeight,
   }
 }
@@ -73,6 +74,7 @@ export function stepPlayer(
 
   // Transiciones de slide
   const velHorizontal = Math.hypot(state.velocity.x, state.velocity.z)
+  state.timeSinceSlideEnded += dt
 
   if (state.sliding) {
     state.slideTime += dt
@@ -81,17 +83,28 @@ export function stepPlayer(
     if (expiro || muyLento || !input.crouch) {
       state.sliding = false
       state.slideTime = 0
+      state.timeSinceSlideEnded = 0
     }
   } else if (
     input.crouch &&
     !state.crouchWasPressed &&
     state.grounded &&
-    velHorizontal >= MOVEMENT.slideMinSpeed
+    velHorizontal >= MOVEMENT.slideMinSpeed &&
+    state.timeSinceSlideEnded >= MOVEMENT.slideCooldown
   ) {
     state.sliding = true
     state.slideTime = 0
-    state.velocity.x *= MOVEMENT.slideBoost
-    state.velocity.z *= MOVEMENT.slideBoost
+    // Clamp en el punto de aplicación, no una multiplicación ciega: sin esto
+    // re-presionar agachar cada ~150ms reaplica el boost sobre una velocidad
+    // ya boosteada (compuesto sin límite). El cooldown de arriba ya evita el
+    // re-presionado rápido, pero este clamp es la segunda capa: cualquier
+    // otra fuente futura de velocidad en el suelo entra al slide con el
+    // mismo techo, en vez de heredar el agujero de que applySoftCap sólo
+    // corre en la rama aérea.
+    const objetivo = Math.min(velHorizontal * MOVEMENT.slideBoost, MOVEMENT.slideMaxSpeed)
+    const k = objetivo / velHorizontal
+    state.velocity.x *= k
+    state.velocity.z *= k
   }
 
   if (state.grounded) {
@@ -132,6 +145,10 @@ export function stepPlayer(
     state.timeSinceGrounded = MOVEMENT.coyoteTime + 1
     state.timeSinceJumpPressed = Infinity
     // El slide-cancel no toca la velocidad horizontal: encadenar es el punto.
+    // Pero sí cuenta como el fin del slide para el cooldown: sin esto, un
+    // slide-cancel encadenado (agachar, saltar de inmediato, aterrizar,
+    // agachar de nuevo) reaplica el boost sin pedirle nada al mouse.
+    if (state.sliding) state.timeSinceSlideEnded = 0
     state.sliding = false
     state.slideTime = 0
   }
@@ -166,8 +183,14 @@ export function stepPlayer(
 
   if (scratchResult.hitCeiling && state.velocity.y > 0) state.velocity.y = 0
 
-  state.eyeHeight =
+  // Acercamiento exponencial framerate-independiente, no un salto ni un
+  // paso fijo por tick: `factor` siempre cae en (0, 1) sea cual sea dt, así
+  // que esto converge sin pasarse de largo del objetivo (no hay overshoot
+  // posible) y a los mismos ~120ms de sensación sin importar el framerate.
+  const eyeHeightTarget =
     input.crouch || state.sliding ? MOVEMENT.crouchEyeHeight : MOVEMENT.eyeHeight
+  const factor = 1 - Math.exp(-dt / MOVEMENT.eyeHeightLerpTime)
+  state.eyeHeight += (eyeHeightTarget - state.eyeHeight) * factor
 
   state.crouchWasPressed = input.crouch
 }

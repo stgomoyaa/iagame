@@ -34,6 +34,11 @@ export interface PlayerState {
 
   sliding: boolean
   slideTime: number
+  /** Segundos desde que terminó el último slide (por cualquier vía: expiró,
+   *  se soltó agachar o se canceló saltando). Habilita el cooldown de
+   *  entrada: sin esto, re-presionar agachar reaplica el boost sobre una
+   *  velocidad ya boosteada y crece sin límite. */
+  timeSinceSlideEnded: number
 
   eyeHeight: number
 }

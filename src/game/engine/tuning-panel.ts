@@ -23,6 +23,7 @@ const CAMPOS: Campo[] = [
   { key: 'slideDuration', label: 'dur. slide', min: 0.1, max: 2, step: 0.05 },
   { key: 'slideFriction', label: 'fricción slide', min: 0, max: 10, step: 0.1 },
   { key: 'mantleMaxHeight', label: 'altura mantle', min: 0.3, max: 3, step: 0.1 },
+  { key: 'eyeHeightLerpTime', label: 'lerp ojos', min: 0.01, max: 0.5, step: 0.01 },
 ]
 
 export interface TuningPanel {

@@ -41,7 +41,13 @@ describe('slide', () => {
     const s = createPlayerState(vec3(0, 0, 0))
     correrHastaSprint(s)
     stepPlayer(s, input({ forward: 1, crouch: true }), piso, TICK_DT)
-    expect(s.eyeHeight).toBeCloseTo(MOVEMENT.crouchEyeHeight, 6)
+    // El eyeHeight ya no salta de golpe: converge de a poco (ver
+    // movement/step.test.ts para el test dedicado al lerp). Acá alcanza con
+    // confirmar que, dado tiempo, el slide efectivamente lo baja.
+    for (let i = 0; i < 200; i++) {
+      stepPlayer(s, input({ forward: 1, crouch: true }), piso, TICK_DT)
+    }
+    expect(s.eyeHeight).toBeCloseTo(MOVEMENT.crouchEyeHeight, 3)
   })
 
   it('el slide termina solo pasada su duración', () => {
@@ -101,10 +107,50 @@ describe('slide', () => {
     expect(s.sliding).toBe(false)
     expect(slidingTicks).toBeLessThanOrEqual(Math.ceil(MOVEMENT.slideDuration / TICK_DT) + 1)
 
-    stepPlayer(s, input({ forward: 1 }), piso, TICK_DT)
-    expect(s.sliding).toBe(false)
+    // Soltar agachar y esperar a que pase el cooldown de re-entrada (ver
+    // MOVEMENT.slideCooldown): un re-presionado inmediato tras soltar no se
+    // puede distinguir del spam que el cooldown existe para bloquear.
+    const ticksCooldown = Math.ceil(MOVEMENT.slideCooldown / TICK_DT) + 5
+    for (let i = 0; i < ticksCooldown; i++) {
+      stepPlayer(s, input({ forward: 1 }), piso, TICK_DT)
+      expect(s.sliding).toBe(false)
+    }
 
     stepPlayer(s, input({ forward: 1, crouch: true }), piso, TICK_DT)
     expect(s.sliding).toBe(true)
+  })
+
+  it('el cooldown bloquea re-entrar al slide apenas se suelta y se re-presiona', () => {
+    const s = createPlayerState(vec3(0, 0, 0))
+    correrHastaSprint(s)
+    stepPlayer(s, input({ forward: 1, crouch: true }), piso, TICK_DT)
+    expect(s.sliding).toBe(true)
+    const velTrasBoost = lengthHorizontal(s.velocity)
+
+    // Soltar y re-presionar de inmediato: el flanco es válido, pero el
+    // cooldown todavía no pasó.
+    stepPlayer(s, input({ forward: 1 }), piso, TICK_DT)
+    expect(s.sliding).toBe(false)
+    stepPlayer(s, input({ forward: 1, crouch: true }), piso, TICK_DT)
+
+    expect(s.sliding).toBe(false)
+    // Sin el cooldown, este segundo re-presionado multiplicaría la
+    // velocidad otra vez por slideBoost (~x1.35). Con el cooldown activo se
+    // queda cerca de donde estaba, sólo con el roce normal de 2 ticks.
+    expect(lengthHorizontal(s.velocity)).toBeLessThan(velTrasBoost * MOVEMENT.slideBoost)
+  })
+
+  it('el boost de slide se clampea a slideMaxSpeed en vez de multiplicar sin techo', () => {
+    const s = createPlayerState(vec3(0, 0, 0))
+    correrHastaSprint(s)
+    // Forzar una velocidad de entrada ya cerca del techo: sin clamp, boostear
+    // esto se iría muy por encima de slideMaxSpeed.
+    s.velocity.x = MOVEMENT.slideMaxSpeed * 0.9
+    s.velocity.z = 0
+
+    stepPlayer(s, input({ forward: 1, crouch: true }), piso, TICK_DT)
+
+    expect(s.sliding).toBe(true)
+    expect(lengthHorizontal(s.velocity)).toBeLessThanOrEqual(MOVEMENT.slideMaxSpeed + 1e-9)
   })
 })

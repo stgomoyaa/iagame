@@ -1,10 +1,53 @@
 import { describe, expect, it } from 'vitest'
 import { ARENA, box } from '@/game/map/arena'
+import { PLAYER_CAPSULE } from '@/game/physics/capsule'
+import type { Box } from '@/game/map/types'
 
 /** Límite máximo de altura de mantle (metros) */
 const MAX_MANTLE_HEIGHT = 1.2
 /** Altura de los muros perimetrales (metros); marcan las superficies inescalables */
 const PERIMETER_WALL_HEIGHT = 6
+/** Qué tan cerca en planta (XZ) tiene que estar un escalón de apoyo real. */
+const XZ_TOLERANCE = PLAYER_CAPSULE.radius
+
+/**
+ * Muros de cobertura/separación de carriles: por diseño no son plataformas
+ * para pararse encima, a diferencia de la estructura central (que arena.ts
+ * llama explícitamente "plataforma" y sí tiene escalones de 1.1m a los
+ * lados). Los comentarios de arena.ts los describen como "separadores...
+ * con huecos para rotar" y "cobertura alta... para romper líneas de vista":
+ * paredes que se rodean por planta baja, no algo que se mantlea. No tienen
+ * ningún escalón real cerca (se verificó con el mismo algoritmo XZ-aware de
+ * abajo) y quedan igual de "inescalables" que los muros perimetrales.
+ * Identificados por su huella en XZ, igual que se identifica hoy a los
+ * perimetrales por altura: si arena.ts cambia estas cajas, esta lista deja
+ * de matchear y el test siguiente los vuelve a exigir alcanzables.
+ */
+const COBERTURA_NO_ESCALABLE: ReadonlyArray<readonly [number, number, number, number]> = [
+  [-10, -22, -9, -6],
+  [-10, 6, -9, 22],
+  [9, -22, 10, -6],
+  [9, 6, 10, 22],
+  [-4, -26, 4, -24],
+  [-4, 24, 4, 26],
+]
+
+function esCoberturaNoEscalable(b: Box): boolean {
+  return COBERTURA_NO_ESCALABLE.some(
+    ([minX, minZ, maxX, maxZ]) =>
+      b.min.x === minX && b.min.z === minZ && b.max.x === maxX && b.max.z === maxZ,
+  )
+}
+
+/** Overlap en planta (XZ) entre dos cajas, con margen de tolerancia. */
+function overlapsXZ(a: Box, b: Box, tolerance: number): boolean {
+  return (
+    a.max.x + tolerance > b.min.x &&
+    a.min.x - tolerance < b.max.x &&
+    a.max.z + tolerance > b.min.z &&
+    a.min.z - tolerance < b.max.z
+  )
+}
 
 describe('arena', () => {
   it('box construye min y max ordenados', () => {
@@ -50,79 +93,50 @@ describe('arena', () => {
     expect(ARENA.boxes.length).toBeLessThanOrEqual(200)
   })
 
-  it('toda superficie escalable es alcanzable por una cadena de escalones menores a max mantle height', () => {
-    // El piso siempre es alcanzable en y=0
-    const floorY = 0
+  it('toda superficie escalable tiene un escalón de apoyo que realmente está debajo, en XZ', () => {
+    // Antes esto sólo miraba el conjunto global de alturas: cualquier caja
+    // de 1.1m en cualquier parte del mapa "probaba" que una de 2.2m en la
+    // otra punta era alcanzable. Pasaría igual con los escalones movidos a
+    // la esquina opuesta del mapa respecto de la plataforma que sirven. Acá
+    // el escalón de apoyo tiene que solaparse en planta (XZ) con la caja
+    // que sube, con margen de un radio de cápsula.
 
-    for (const testBox of ARENA.boxes) {
-      // Los muros perimetrales (altura 6m) son intencionalmente inescalables
-      if (testBox.max.y === PERIMETER_WALL_HEIGHT) {
-        continue
-      }
+    const escalables = ARENA.boxes.filter(
+      (b) => b.max.y > 0 && b.max.y !== PERIMETER_WALL_HEIGHT && !esCoberturaNoEscalable(b),
+    )
 
-      // Si la caja está al nivel del piso, no hay nada que verificar
-      if (testBox.max.y <= floorY) {
-        continue
-      }
+    // BFS: el piso es la base (cualquier caja escalable a <= max mantle
+    // height del piso es alcanzable sin apoyo previo). Desde ahí, una caja
+    // es alcanzable si algún soporte ya alcanzado está a <= max mantle
+    // height de diferencia de altura Y se solapa con ella en XZ.
+    const alcanzables = new Set<Box>()
+    let cambio = true
+    while (cambio) {
+      cambio = false
+      for (const b of escalables) {
+        if (alcanzables.has(b)) continue
 
-      // La caja es escalable: verificar que existe un camino desde el piso
-      // mediante saltos de max mantle height.
-      const targetHeight = testBox.max.y
-      let reachable = false
+        const desdeElPiso = b.max.y <= MAX_MANTLE_HEIGHT
+        const conApoyo = [...alcanzables].some(
+          (soporte) =>
+            Math.abs(b.max.y - soporte.max.y) <= MAX_MANTLE_HEIGHT &&
+            overlapsXZ(b, soporte, XZ_TOLERANCE),
+        )
 
-      // Método de escalada: comenzar en el piso y buscar si podemos alcanzar
-      // la altura objetivo subiendo en pasos de max mantle height.
-      // Una altura es alcanzable si existe una caja cuya parte superior está
-      // entre la altura anterior y (altura anterior + max mantle height).
-
-      let currentHeight = floorY
-      const maxSteps = 100 // Límite de iteraciones para detectar ciclos infinitos
-
-      for (let step = 0; step < maxSteps; step++) {
-        if (currentHeight >= targetHeight) {
-          reachable = true
-          break
+        if (desdeElPiso || conApoyo) {
+          alcanzables.add(b)
+          cambio = true
         }
-
-        // Buscar una caja que podemos pisar desde la altura actual
-        let nextHeight: number | null = null
-
-        for (const climbBox of ARENA.boxes) {
-          const boxTopHeight = climbBox.max.y
-
-          // Ignorar muros perimetrales (son inescalables)
-          if (climbBox.max.y === PERIMETER_WALL_HEIGHT) {
-            continue
-          }
-
-          // La caja debe estar por encima de donde estamos
-          if (boxTopHeight <= currentHeight) {
-            continue
-          }
-
-          // La diferencia de altura debe ser mantleable
-          if (boxTopHeight - currentHeight > MAX_MANTLE_HEIGHT) {
-            continue
-          }
-
-          // Esta caja es un paso válido; registrar la altura si es más alta
-          if (nextHeight === null || boxTopHeight > nextHeight) {
-            nextHeight = boxTopHeight
-          }
-        }
-
-        if (nextHeight === null) {
-          // No hay más pasos disponibles desde esta altura
-          break
-        }
-
-        currentHeight = nextHeight
       }
+    }
 
-      if (!reachable) {
-        throw new Error(`Caja en [${testBox.min.x}, ${testBox.min.y}, ${testBox.min.z}] a [${testBox.max.x}, ${testBox.max.y}, ${testBox.max.z}] (altura ${targetHeight}m) no es alcanzable`)
+    for (const b of escalables) {
+      if (!alcanzables.has(b)) {
+        throw new Error(
+          `Caja en [${b.min.x}, ${b.min.y}, ${b.min.z}] a [${b.max.x}, ${b.max.y}, ${b.max.z}] no tiene un escalón de apoyo real (solapado en XZ) dentro de max mantle height`,
+        )
       }
-      expect(reachable).toBe(true)
+      expect(alcanzables.has(b)).toBe(true)
     }
   })
 })

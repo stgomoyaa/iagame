@@ -31,4 +31,17 @@ describe('tuning del movimiento', () => {
     expect(MOVEMENT.slideBoost).toBeGreaterThan(1)
     expect(MOVEMENT.slideEndSpeedScale).toBeLessThan(1)
   })
+
+  it('el techo de velocidad del slide es el mismo que el del bhop, no un segundo número', () => {
+    expect(MOVEMENT.slideMaxSpeed).toBe(MOVEMENT.bhopSoftCap)
+  })
+
+  it('el cooldown de slide es positivo: sin él, re-presionar agachar reaplica el boost', () => {
+    expect(MOVEMENT.slideCooldown).toBeGreaterThan(0)
+  })
+
+  it('el lerp de eyeHeight es positivo pero corto, para que el agache siga sintiéndose ágil', () => {
+    expect(MOVEMENT.eyeHeightLerpTime).toBeGreaterThan(0)
+    expect(MOVEMENT.eyeHeightLerpTime).toBeLessThan(0.3)
+  })
 })
