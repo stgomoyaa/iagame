@@ -28,6 +28,15 @@ const PUBLIC_MAPS_DIR = 'public/assets/maps'
  *  problema que public/assets/maps/: ver el test más abajo. */
 const PUBLIC_LOCAL_WEAPONS_DIR = 'public/assets/weapons-local'
 
+/** Sonidos de disparo por arma, derivados del Workshop. Cuarta puerta: ver
+ *  el test más abajo. */
+const PUBLIC_WEAPON_SOUNDS_DIR = 'public/assets/audio/weapons-local'
+
+/** Los samples por clase que SÍ se commitean, y que son el fallback que
+ *  garantiza que ningún arma quede muda. Están en la carpeta PADRE de la
+ *  anterior, así que el guard tiene que distinguirlas. */
+const PUBLIC_CLASS_SOUNDS_DIR = 'public/assets/audio'
+
 const WORKSHOP_CATALOG_FILES = ['workshop-catalog.csv', 'workshop-catalog.json']
 
 function gitTrackedFiles(pathspec: string): string[] {
@@ -77,6 +86,50 @@ describe('guardia de publicación: assets del Workshop', () => {
       `estos archivos de ${PUBLIC_LOCAL_WEAPONS_DIR}/ están en el índice de git y no deberían: ${tracked.join(', ')}. ` +
         `Sacarlos con "git rm --cached <archivo>".`,
     ).toEqual([])
+  })
+
+  // Cuarta puerta, abierta por los sonidos de disparo por arma
+  // (scripts/prepare-weapon-sounds.ts): 130 .ogg recortados de tres packs de
+  // armas del Workshop, que el navegador sólo puede bajar desde /public.
+  // Mismo razonamiento que las otras tres.
+  //
+  // Ésta tiene un filo propio que las otras no tienen: es la primera que se
+  // mete DENTRO de una carpeta cuyo contenido sí se commitea
+  // (public/assets/audio/ tiene los once samples por clase que son el
+  // fallback del juego). O sea que acá no sirve ignorar la carpeta entera, y
+  // la línea del .gitignore tiene que apuntar exactamente a la subcarpeta —
+  // que es justo el tipo de patrón que se escribe mal una vez y nadie nota
+  // hasta que un .ogg aparece en un diff.
+  it('git ls-files no encuentra ningún sonido de arma dentro de public/assets/audio/weapons-local/', () => {
+    const tracked = gitTrackedFiles(PUBLIC_WEAPON_SOUNDS_DIR)
+    expect(
+      tracked,
+      `estos archivos de ${PUBLIC_WEAPON_SOUNDS_DIR}/ están en el índice de git y no deberían: ${tracked.join(', ')}. ` +
+        `Sacarlos con "git rm --cached <archivo>".`,
+    ).toEqual([])
+  })
+
+  // La otra mitad de la misma moneda, y la razón por la que este archivo no
+  // se conforma con "no hay nada trackeado": si alguien "arregla" el
+  // .gitignore ignorando public/assets/audio/ entero, el guard de arriba
+  // sigue verde y el juego se queda SIN el fallback por clase — o sea, todas
+  // las armas mudas en un checkout limpio, que es peor que el bug original.
+  // Este test falla si eso pasa.
+  it('los samples por clase (el fallback) SIGUEN commiteados', () => {
+    const tracked = gitTrackedFiles(PUBLIC_CLASS_SOUNDS_DIR)
+    const porClase = tracked.filter((f) => !f.startsWith(`${PUBLIC_WEAPON_SOUNDS_DIR}/`))
+    expect(
+      porClase.length,
+      `public/assets/audio/ tiene que conservar los samples por clase commiteados: son el ` +
+        `fallback que evita que un arma quede muda sin los assets del Workshop (ver src/game/feedback/gun-audio.ts).`,
+    ).toBeGreaterThanOrEqual(11)
+  })
+
+  it('.gitignore declara public/assets/audio/weapons-local/ como ignorado', () => {
+    const gitignore = readFileSync(join(REPO_ROOT, '.gitignore'), 'utf8')
+    expect(gitignore).toMatch(/^\/public\/assets\/audio\/weapons-local\/$/m)
+    // Y NO la carpeta padre: ver el test de arriba.
+    expect(gitignore).not.toMatch(/^\/?public\/assets\/audio\/?$/m)
   })
 
   it('.gitignore declara public/assets/weapons-local/ como ignorado', () => {

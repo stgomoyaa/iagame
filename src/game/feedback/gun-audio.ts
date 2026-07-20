@@ -26,25 +26,80 @@
  * al primer gesto ya están los bytes en memoria y decodificar es inmediato,
  * en vez de recién ahí empezar a pedirlos por red y perderse los primeros
  * disparos de la partida.
+ *
+ * DOS NIVELES DE DISPARO: POR ARMA, CON RED DE SEGURIDAD POR CLASE
+ * El disparo se resuelve por SLUG (el arma concreta) y sólo cae a la clase
+ * si no hay nada mejor. Antes se resolvía únicamente por clase, y eso hacía
+ * que las 79 armas sonaran como 7: en un shooter, distinguir de oído qué te
+ * está disparando es información táctica, no adorno.
+ *
+ * Los dos niveles no son intercambiables ni opcionales:
+ *
+ *  - **Por clase** (11 samples, `public/assets/audio/`): están EN EL REPO.
+ *    Es el piso garantizado -- ningún arma queda muda jamás.
+ *  - **Por arma** (130 archivos, `public/assets/audio/weapons-local/`):
+ *    derivados del Workshop, gitignoreados (docs/WORKSHOP.md). En un
+ *    checkout limpio sencillamente NO ESTÁN, el fetch da 404 y el juego
+ *    suena exactamente como antes de esta tarea. Sin mensaje de error: ese
+ *    build es el producto normal, no una instalación rota.
+ *
+ * ESTRATEGIA DE CARGA: PEREZOSA POR ARMA, CON PRECALENTAMIENTO
+ * Bajar los 130 archivos al arranque (1,8 MB) sería tirar ~10x de lo que una
+ * partida usa -- se juega con dos armas propias y N de bots, no con 79 -- y
+ * competiría por ancho de banda con los GLB y el mapa justo en el momento en
+ * que la latencia importa. Así que:
+ *
+ *   1. `precargar()` baja los 11 samples por clase + el índice (~15 KB).
+ *   2. `prewarm(slug)` baja las 1-5 variantes de UN arma (~10-70 KB).
+ *      Lo llama el juego al equipar un arma y al armar el escuadrón de bots.
+ *   3. `playShot()` se auto-ceba: si le piden un arma que nadie precalentó,
+ *      dispara su descarga y ESE disparo sale con el sample de la clase.
+ *
+ * El punto fino: la carga perezosa normalmente se paga con un tirón la
+ * primera vez. Acá no, porque el nivel por clase ya está decodificado y
+ * suena en el mismo frame. Lo peor que puede pasar es que un disparo suene
+ * genérico; nunca que falte, ni que el hilo se bloquee esperando bytes.
+ *
+ * FORMATO: OPUS EN OGG, SIN FALLBACK AAC (decisión deliberada)
+ * Safari soporta Opus-en-Ogg recién desde 18.4 (marzo 2025). Un Safari
+ * anterior falla el decodeAudioData, el catch de `decodificarPendientes` se
+ * lo come, el buffer nunca entra al mapa y `playShot` cae al sample de la
+ * clase. O sea: en el navegador que no soporta el formato, el juego suena
+ * como sonaba antes -- que es el mismo desenlace que ya tiene un checkout
+ * sin los assets. Duplicar los 130 archivos a AAC (el preparador lo soporta
+ * con `--formato aac`) costaría el doble de disco y un segundo pipeline para
+ * comprar una degradación que ya está cubierta y es silenciosa. Si algún día
+ * el fallback por clase deja de existir, esta decisión hay que revisarla.
  */
 
 import type { WeaponClass } from '@/game/weapons/archetypes'
 import { WEAPON_AUDIO } from '@/game/feedback/tuning'
 import { SUPERFICIE_CARNE } from '@/game/feedback/vfx'
+import { entradaDisparo, loadShotIndex, SHOT_INDEX_BASE } from '@/game/feedback/shot-index'
 
-/** Carpeta pública de los samples. */
+/** Carpeta pública de los samples por clase (los que sí están en el repo). */
 const BASE = '/assets/audio/'
 
 export interface WeaponAudio {
   /** Crea (una sola vez) y reanuda el AudioContext, y dispara la
    *  decodificación de lo que ya se haya bajado. Llamar desde un gesto. */
   unlock(): void
-  /** Baja los bytes de todos los samples. No necesita gesto de usuario ni
-   *  AudioContext. Idempotente. */
+  /** Baja los bytes de los samples por clase y el índice por arma. No
+   *  necesita gesto de usuario ni AudioContext. Idempotente. */
   precargar(): void
-  /** Disparo de la clase indicada. `ganancia` escala sobre WEAPON_AUDIO.shotGain
-   *  (los bots disparan más bajo y con atenuación por distancia). */
-  playShot(clase: WeaponClass, ganancia?: number): void
+  /** Baja las variantes de un arma concreta. Idempotente y seguro de llamar
+   *  con un slug que no tenga sonido propio (no hace nada). Llamarlo al
+   *  equipar un arma evita que su primer disparo salga con el sample de la
+   *  clase. */
+  prewarm(slug: string): void
+  /**
+   * Disparo del arma indicada. `slug` elige el sample propio del arma; si es
+   * `null` o el arma todavía no tiene su buffer listo, cae al sample de
+   * `clase`, que siempre existe. `ganancia` escala sobre
+   * WEAPON_AUDIO.shotGain (los bots disparan más bajo y con atenuación por
+   * distancia).
+   */
+  playShot(slug: string | null, clase: WeaponClass, ganancia?: number): void
   /** Recarga de la clase indicada. */
   playReload(clase: WeaponClass): void
   /** Impacto, sintetizado. `superficie` es uno de los SUPERFICIE_* de vfx.ts. */
@@ -103,6 +158,8 @@ export function createWeaponAudio(): WeaponAudio {
   const bytes = new Map<string, ArrayBuffer>()
   /** Buffers ya decodificados, por archivo. */
   const buffers = new Map<string, AudioBuffer>()
+  /** Claves ya pedidas por red (hayan llegado o no). Evita repetir el fetch. */
+  const pedidos = new Set<string>()
   let precargaIniciada = false
 
   function decodificarPendientes(): void {
@@ -147,12 +204,19 @@ export function createWeaponAudio(): WeaponAudio {
     return buf
   }
 
-  function reproducir(nombre: string, ganancia: number, detune: number): void {
+  /**
+   * Devuelve `true` si el sample efectivamente arrancó. Ese booleano es lo
+   * que hace posible la cascada de dos niveles sin preguntar dos veces por
+   * el mismo buffer: quien llama intenta el sample del arma y, si devuelve
+   * `false` (todavía no bajó, no decodificó, o el navegador no soporta el
+   * formato), tira el de la clase.
+   */
+  function reproducir(nombre: string, ganancia: number, detune: number): boolean {
     const c = ctx
     const dest = master
-    if (!c || !dest || c.state !== 'running' || ganancia <= 0) return
+    if (!c || !dest || c.state !== 'running' || ganancia <= 0) return false
     const buf = buffers.get(nombre)
-    if (!buf) return
+    if (!buf) return false
 
     try {
       const src = c.createBufferSource()
@@ -166,9 +230,46 @@ export function createWeaponAudio(): WeaponAudio {
       g.connect(dest)
       // start(0) = ya, en el mismo frame en que se resolvió el disparo.
       src.start()
+      return true
     } catch {
       // Nunca tirar desde el camino de feedback.
+      return false
     }
+  }
+
+  /**
+   * Baja UN archivo y lo deja listo para decodificar. Idempotente por clave:
+   * `pedidos` marca lo que ya se pidió, así que llamar mil veces con el
+   * mismo sample cuesta un `Set.has` -- que es exactamente lo que pasa
+   * cuando `playShot` se auto-ceba con el arma que el jugador está usando.
+   */
+  function bajar(clave: string, url: string): void {
+    if (pedidos.has(clave)) return
+    pedidos.add(clave)
+    if (typeof fetch === 'undefined') return
+    fetch(url)
+      .then((r) => (r.ok ? r.arrayBuffer() : null))
+      .then((datos) => {
+        if (!datos) return
+        bytes.set(clave, datos)
+        // Si el contexto ya existe (el jugador ya hizo click), decodificar
+        // apenas llega en vez de esperar al próximo gesto.
+        decodificarPendientes()
+      })
+      .catch(() => {})
+  }
+
+  /**
+   * Pide las variantes de un arma. Devuelve `false` si el arma no está en el
+   * índice -- que puede querer decir dos cosas MUY distintas: que no hay
+   * índice (checkout limpio, y no lo habrá nunca) o que todavía no llegó.
+   * Quien llama decide si vale la pena reintentar; acá no se puede saber.
+   */
+  function pedirVariantes(slug: string): boolean {
+    const entrada = entradaDisparo(slug)
+    if (!entrada) return false
+    for (const v of entrada.variantes) bajar(v, SHOT_INDEX_BASE + v)
+    return true
   }
 
   return {
@@ -179,19 +280,28 @@ export function createWeaponAudio(): WeaponAudio {
     precargar(): void {
       if (precargaIniciada) return
       precargaIniciada = true
-      if (typeof fetch === 'undefined') return
-      for (const nombre of archivosUnicos()) {
-        fetch(BASE + nombre)
-          .then((r) => (r.ok ? r.arrayBuffer() : null))
-          .then((datos) => {
-            if (!datos) return
-            bytes.set(nombre, datos)
-            // Si el contexto ya existe (el jugador ya hizo click), decodificar
-            // apenas llega en vez de esperar al próximo gesto.
-            decodificarPendientes()
-          })
-          .catch(() => {})
-      }
+      // Los 11 por clase: son el piso garantizado, se bajan siempre y
+      // enteros. Pesan ~120 KB en total.
+      for (const nombre of archivosUnicos()) bajar(nombre, BASE + nombre)
+      // El índice por arma, en cambio, sólo trae la TABLA (~15 KB): los 1,8
+      // MB de .ogg se bajan por arma, cuando y si hacen falta. Ver el
+      // encabezado, "estrategia de carga".
+      loadShotIndex().catch(() => {})
+    },
+
+    prewarm(slug: string): void {
+      if (pedirVariantes(slug)) return
+      // El índice todavía no llegó. Y no es un caso raro: equipar el arma
+      // inicial y armar el escuadrón de bots pasan en el mismo arranque en
+      // que se pide el índice, así que SIN este reintento el
+      // precalentamiento no serviría casi nunca y todo el mundo estrenaría
+      // arma con el sample de la clase. `loadShotIndex()` es idempotente:
+      // devuelve la misma promesa en vuelo, no dispara un segundo fetch.
+      loadShotIndex()
+        .then(() => {
+          pedirVariantes(slug)
+        })
+        .catch(() => {})
     },
 
     unlock(): void {
@@ -223,11 +333,36 @@ export function createWeaponAudio(): WeaponAudio {
       }
     },
 
-    playShot(clase: WeaponClass, ganancia = 1): void {
-      const nombre = WEAPON_AUDIO.shotByClass[clase]
-      if (!nombre) return
+    playShot(slug: string | null, clase: WeaponClass, ganancia = 1): void {
+      // Variar el tono por disparo (mismo detune para los dos niveles: es
+      // una propiedad del disparo, no del sample que le tocó).
       const d = (Math.random() * 2 - 1) * WEAPON_AUDIO.shotDetune
-      reproducir(nombre, WEAPON_AUDIO.shotGain * ganancia, d)
+      const g = WEAPON_AUDIO.shotGain * ganancia
+
+      // NIVEL 1: el sample propio del arma.
+      const entrada = slug === null ? null : entradaDisparo(slug)
+      if (slug !== null && entrada) {
+        const n = entrada.variantes.length
+        // Recorre desde el cursor: rota entre las variantes en ráfaga y, si
+        // sólo algunas decodificaron todavía, usa las que sí en vez de caer
+        // a la clase por culpa de la que faltaba. Son 5 vueltas como mucho,
+        // sobre un array ya asignado -- ni un objeto nuevo por disparo.
+        for (let i = 0; i < n; i++) {
+          const idx = (entrada.cursor + i) % n
+          if (reproducir(entrada.variantes[idx], g, d)) {
+            entrada.cursor = idx + 1 === n ? 0 : idx + 1
+            return
+          }
+        }
+        // Nadie precalentó esta arma (o todavía está en vuelo): pedirla
+        // ahora para que el PRÓXIMO disparo ya suene como corresponde. Es
+        // idempotente, así que sostener el gatillo no dispara mil fetch.
+        pedirVariantes(slug)
+      }
+
+      // NIVEL 2: el sample de la clase. Siempre está en el repo.
+      const porClase = WEAPON_AUDIO.shotByClass[clase]
+      if (porClase) reproducir(porClase, g, d)
     },
 
     playReload(clase: WeaponClass): void {
