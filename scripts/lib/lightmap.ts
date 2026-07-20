@@ -216,11 +216,27 @@ function aSrgb(lineal: number): number {
  * Las muestras de Source NO están normalizadas a [0,1]: en nuketown la
  * luminancia lineal llega a 2.69 y el 35% de las muestras pasa de 1.0.
  * Recortar en 1.0 quemaría todo el exterior a blanco plano y borraría
- * justamente el degradé del sol. Se divide por un percentil alto en vez de
- * por una constante fija porque una constante afinada mirando nuketown deja
+ * justamente el degradé del sol. Se divide por un percentil en vez de por
+ * una constante fija porque una constante afinada mirando nuketown deja
  * negro cualquier mapa más oscuro.
+ *
+ * POR QUÉ p90 Y NO UN PERCENTIL MÁS ALTO: la primera versión usaba p99.5 y
+ * ROMPIÓ gm_lasertag_arena. Ese mapa tiene la luz apretada alrededor de 0.5
+ * (p50=0.478, p75=0.580, p90=0.670) más una cola finita de neones que llega
+ * a 2.86. El p99.5 cae en esa cola, así que dividía TODO por 2.86 y dejaba
+ * la arena entera al 45% -- con su albedo ya oscuro, negra e injugable. El
+ * p90 sigue el plateau de superficies bien iluminadas en vez de la cola:
+ *
+ *   nuketown  p90=2.387 vs p99.5=2.594  -> la mediana pasa de 0.48 a 0.50
+ *                                          (o sea, no cambia nada)
+ *   lasertag  p90=0.670 vs p99.5=2.859  -> el divisor cae al piso de 1.0 y
+ *                                          la mediana pasa de 0.45 a 0.72
+ *
+ * El precio es que el 10% más brillante se recorta a blanco. En nuketown
+ * ese 10% ya estaba en 0.96-1.0 con el p99.5, así que no se pierde degradé
+ * visible: se verificó mirando las dos capturas.
  */
-const PERCENTIL_BLANCO = 0.995
+const PERCENTIL_BLANCO = 0.9
 
 /**
  * Divisor de exposición del mapa. Nunca es menor que 1: normalizar HACIA

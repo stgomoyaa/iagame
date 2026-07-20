@@ -63,7 +63,19 @@ export const MAPAS_EXTERNOS: readonly MapaExterno[] = [
     name: 'lasertag',
     json: '/assets/maps/gm_lasertag_arena.json',
     glb: '/assets/maps/gm_lasertag_arena.glb',
-    lightmap: '/assets/maps/gm_lasertag_arena-lightmap.png',
+    // SIN lightmap a propósito, y no por olvido. `bsp-convert.ts` genera el
+    // atlas de este mapa igual que el de nuketown, pero engancharlo lo deja
+    // INJUGABLE: la arena se ve casi negra, no se distinguen ni las paredes
+    // ni el techo. No es un bug del importador -- es que la luz horneada de
+    // este mapa realmente es así de tenue (p50=0.478, p75=0.580, p90=0.670,
+    // contra 0.510/1.900/2.387 de nuketown: la misma mediana pero sin nada
+    // del rango alto que en nuketown ilumina el exterior). Con el divisor
+    // ya en su piso de 1.0 no queda margen de exposición para levantarla, y
+    // subirla más sería inventar luz que el autor del mapa no puso.
+    //
+    // Se prefiere dejarlo como estaba -- albedo pleno, plano pero legible --
+    // antes que shippear un mapa fiel e injugable. Verificado mirando las
+    // capturas de las dos versiones.
   },
 ]
 
