@@ -42,6 +42,7 @@ import {
   createProgressStore,
   progressWithCareer,
   progressWithWeaponXp,
+  progressWithMedals,
 } from '@/game/progression/store'
 import { applyMatchResult, careerDifficulty, type MatchProgress } from '@/game/progression/career'
 import { performanceFromStats } from '@/game/progression/combat-score'
@@ -138,6 +139,18 @@ import {
   recordSpawnUse,
   spreadInitialSpawns,
 } from '@/game/match/respawn'
+import {
+  createKillContext,
+  createMedalTracker,
+  finalizarMedallas,
+  registrarDanoMedallas,
+  registrarKillMedallas,
+  registrarReaparicionMedallas,
+  stepMedallas,
+  tallyDeMedallas,
+  type MedalTrackerState,
+} from '@/game/match/medal-tracker'
+import type { MedalTally } from '@/game/progression/medals'
 import { createMatchBots, stepMatchBotsThink } from '@/game/match/squad'
 import { createMatchTargets, type MatchTargets } from '@/game/match/targeting'
 import { MATCH } from '@/game/match/tuning'
@@ -213,6 +226,21 @@ export interface Game {
    *  drop de skin. `null` mientras la partida sigue viva; se llena una sola
    *  vez, al terminar. */
   readonly matchProgress: MatchProgress | null
+  /**
+   * Detector de medallas de gesta en vivo (match/medal-tracker.ts).
+   * Referencia mutable, igual que `matchState`: la UI la sondea a baja
+   * frecuencia y NO debe escribirla.
+   *
+   * Para los avisos que aparecen y se van:
+   * `listActiveAwardsNewestFirst(medalTracker)`.
+   * Para el conteo de la partida en curso: `tallyDeMedallas(medalTracker)`.
+   * Para el histórico de toda la carrera: `ProgressData.medallas`.
+   */
+  readonly medalTracker: MedalTrackerState
+  /** Medallas ganadas en esta partida, `slug -> veces`. `null` mientras la
+   *  partida sigue viva; se llena una sola vez al terminar, junto con
+   *  `matchProgress`. Es lo que muestra la pantalla de resumen. */
+  readonly medallasDeLaPartida: MedalTally | null
 
   /**
    * XP ganada por cada arma que el jugador usó en la partida, con su ascenso
@@ -561,6 +589,11 @@ export function createGame(
   const playerHealth = createBotHealthState(BOTS.maxHealth)
   const matchState: MatchState = createMatchState(matchMode, participantCount, MATCH)
   const matchTargets: MatchTargets = createMatchTargets(matchMode, participantCount)
+  // Medallas de gesta (match/medal-tracker.ts): consume los MISMOS eventos
+  // que el killfeed y el puntaje -- no vuelve a detectar nada por su cuenta.
+  // `medalKill` es un struct reusado: registrar una baja no puede asignar.
+  const medalTracker = createMedalTracker(matchMode, participantCount, PLAYER_ID)
+  const medalKill = createKillContext()
   const invulnerableUntilS: number[] = new Array(participantCount).fill(-Infinity) as number[]
   const botWasAlive: boolean[] = new Array(bots.length).fill(true) as boolean[]
   // Spawn elegido por cada bot muerto, para anotarlo en el historial recién
@@ -780,6 +813,7 @@ export function createGame(
    * ceremonia de ascenso y el drop de skin.
    */
   let matchProgress: MatchProgress | null = null
+  let medallasDeLaPartida: MedalTally | null = null
 
   /**
    * Acumulado de XP por arma de ESTA partida (progression/weapon-xp.ts). Se
@@ -824,8 +858,26 @@ export function createGame(
     // actualizado por la carrera en vez de mezclarse con applyMatchResult.
     const armas = applyWeaponXp(progress.armas, weaponTally)
     weaponXp = armas.outcomes
+
+    // Medallas: se cierra el tracker y se acumulan sobre el histórico. Van
+    // por separado de la carrera a propósito -- suman XP de cuenta (cuánto
+    // jugaste) y NO tocan el RR (qué tan bien jugás). Ver progression/xp.ts
+    // sobre por qué esas dos escaleras no se cruzan.
+    finalizarMedallas(medalTracker)
+    medallasDeLaPartida = tallyDeMedallas(medalTracker)
+
+    // UN SOLO guardado que compone las tres capas, y el orden importa poco
+    // pero el anidado importa mucho: cada `progressWith*` devuelve un
+    // guardado nuevo a partir del que recibe. Dos llamadas separadas a
+    // `save()`, cada una partiendo de `progress`, harían que la última pise
+    // a la anterior y se pierda una capa entera -- la XP de arma se
+    // guardaría y la sobreescribiría el guardado de medallas medio
+    // milisegundo después, sin ningún error.
     progressStore.save(
-      progressWithWeaponXp(progressWithCareer(progress, resultado.data), armas.armas),
+      progressWithMedals(
+        progressWithWeaponXp(progressWithCareer(progress, resultado.data), armas.armas),
+        medallasDeLaPartida,
+      ),
     )
 
     // Soltar el puntero al terminar la partida. El resumen (ui/MatchSummary)
@@ -1207,6 +1259,8 @@ export function createGame(
           mirarComoElSpawn(spawnIndex)
           resetPlayerHealth(feedbackState.health)
           invulnerableUntilS[PLAYER_ID] = invulnerabilityExpiresAt(matchState.elapsedS, MATCH.respawnInvulnerabilityS)
+          // Vida nueva: reinicia el reloj de supervivencia de "sin morir".
+          registrarReaparicionMedallas(medalTracker, PLAYER_ID)
         }
       }
 
@@ -1269,6 +1323,7 @@ export function createGame(
         matchTargets.alive[b + 1] = bot.health.alive
         if (!botWasAlive[b] && bot.health.alive) {
           invulnerableUntilS[b + 1] = invulnerabilityExpiresAt(matchState.elapsedS, MATCH.respawnInvulnerabilityS)
+          registrarReaparicionMedallas(medalTracker, b + 1)
           // Reaparición consumada: recién ahora el punto queda "usado" y
           // empieza a penalizar a quien reaparezca en los próximos
           // segundos (match/respawn.ts RECENT_WINDOW_S).
@@ -1600,7 +1655,25 @@ export function createGame(
         }
 
         recordDamage(matchState, shooterId, damage)
-        if (killed) recordKill(matchState, shooterId, victimId, weaponLabel(bot.archetype.id), headshot)
+        // Las medallas necesitan saber QUIÉN recibió el daño, no sólo quién
+        // lo hizo: de ahí salen "salvada" (le pegaron a un compañero) y
+        // "clutch" (te venían pegando a vos). recordDamage no lleva la
+        // víctima porque el puntaje no la necesita.
+        registrarDanoMedallas(medalTracker, shooterId, victimId, matchState.elapsedS)
+        if (killed) {
+          recordKill(matchState, shooterId, victimId, weaponLabel(bot.archetype.id), headshot)
+          // También se registran las bajas de bot contra bot: "primera
+          // sangre" necesita saber si alguien se le adelantó al jugador, y
+          // venganza y dominación necesitan recordar quién lo mató a él.
+          medalKill.killerId = shooterId
+          medalKill.victimId = victimId
+          medalKill.headshot = headshot
+          medalKill.distanciaM = bot.shotResult.distance
+          medalKill.balasRestantes = bot.combat.fireControl.ammo
+          medalKill.vidaDelKiller = bot.health.health
+          medalKill.tiempoS = matchState.elapsedS
+          registrarKillMedallas(medalTracker, medalKill)
+        }
       }
     }
 
@@ -1652,6 +1725,28 @@ export function createGame(
           registrarDano(weaponTally, currentSlug, shotResult.damage)
           if (killed) registrarKill(weaponTally, currentSlug, headshot)
         }
+
+        // Las medallas se registran SIEMPRE, fuera del `if` de arriba: ese
+        // condicional existe porque la XP de arma necesita saber CON QUÉ
+        // arma fue, y sin slug no hay a quién acreditársela. Una medalla no
+        // depende del arma, así que meterla adentro la haría desaparecer en
+        // cualquier caso donde el slug todavía no esté resuelto.
+        registrarDanoMedallas(medalTracker, PLAYER_ID, victimId, matchState.elapsedS)
+        if (killed) {
+          recordKill(matchState, PLAYER_ID, victimId, weaponLabel(combatArchetypeId ?? 'ar-1'), shotResult.part === 'head')
+          // La distancia y el cargador salen del disparo REAL que remató
+          // (combat/shot.ts y el control de fuego), no de una reconstrucción:
+          // "tiro largo", "a quemarropa" y "última bala" se calibran contra
+          // la distribución medida de esos valores exactos.
+          medalKill.killerId = PLAYER_ID
+          medalKill.victimId = victimId
+          medalKill.headshot = shotResult.part === 'head'
+          medalKill.distanciaM = shotResult.distance
+          medalKill.balasRestantes = combatState.fireControl.ammo
+          medalKill.vidaDelKiller = playerHealth.health
+          medalKill.tiempoS = matchState.elapsedS
+          registrarKillMedallas(medalTracker, medalKill)
+        }
       }
 
       // Punto de impacto EXACTO, tal como lo resolvió fireShot con la
@@ -1692,6 +1787,10 @@ export function createGame(
     // reloj o el límite de kills todavía cuente -- ver el comentario de
     // cabecera de match/match.ts sobre la garantía de terminación.
     stepMatch(matchState, dt, MATCH)
+    // Envejece los avisos y hace correr el reloj de supervivencia. Va
+    // DESPUÉS de stepMatch para que use el reloj de partida ya avanzado de
+    // este frame.
+    stepMedallas(medalTracker, dt, matchState.elapsedS)
 
     // Cierre de partida (fase 4, sección 9 del spec): la transición de
     // 'live' a 'ended' ocurre UNA sola vez y es acá donde se cobra la
@@ -2142,6 +2241,12 @@ export function createGame(
     },
     get matchProgress() {
       return matchProgress
+    },
+    get medalTracker() {
+      return medalTracker
+    },
+    get medallasDeLaPartida() {
+      return medallasDeLaPartida
     },
 
     readHud(out: HudSnapshot): void {

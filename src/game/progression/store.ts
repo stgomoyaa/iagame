@@ -27,6 +27,7 @@ import { HISTORIAL_MAX, type MatchHistoryEntry } from '@/game/progression/histor
 import { RANK_MAX, RANK_MIN, RR_MAXIMO } from '@/game/progression/ranks'
 import { RR, type RankState } from '@/game/progression/rr'
 import { XP_ARMA_MAESTRIA } from '@/game/progression/weapon-xp'
+import { emptyTally, parseTally, sumarTallies, type MedalTally } from '@/game/progression/medals'
 
 /**
  * Versión del formato guardado. Si cambia la forma de `ProgressData`, sube
@@ -82,6 +83,16 @@ export interface ProgressData {
    * `leerArmas`.
    */
   armas: Record<string, number>
+  /**
+   * Medallas de gesta acumuladas de toda la carrera, `slug -> veces`
+   * (progression/medals.ts). Es aditivo sobre el formato v2: un guardado
+   * escrito antes de que existieran las medallas no trae este campo, y
+   * `parseProgress` lo completa con `{}` -- no hace falta subir
+   * PROGRESS_VERSION ni descartar el guardado, porque no hay nada viejo que
+   * reinterpretar mal. Ese es el patrón para todo lo que se agregue después:
+   * campo nuevo con default, nunca un cambio de forma de lo que ya estaba.
+   */
+  medallas: MedalTally
 }
 
 /**
@@ -144,6 +155,7 @@ export function createDefaultProgress(): ProgressData {
     derrotas: 0,
     historial: [],
     armas: {},
+    medallas: emptyTally(),
   }
 }
 
@@ -296,6 +308,9 @@ export function parseProgress(raw: unknown): ProgressData {
     derrotas: Math.max(0, Math.floor(numeroSeguro(obj.derrotas, 0))),
     historial: leerHistorial(obj.historial),
     armas: leerArmas(obj.armas),
+    // Campo agregado después de v2: ausente cae a {} en vez de invalidar el
+    // guardado entero (ver el comentario del campo en ProgressData).
+    medallas: parseTally(obj.medallas),
   }
 }
 
@@ -310,6 +325,18 @@ export function progressWithWeaponXp(
   armas: Record<string, number>,
 ): ProgressData {
   return { ...data, armas }
+}
+
+/**
+ * Suma las medallas de una partida al acumulado histórico del guardado. Es
+ * una función aparte y no un paso dentro de `progressWithCareer` porque las
+ * medallas NO son parte de `CareerData`: la carrera es rango, RR y XP, y las
+ * medallas son su propia capa. Mezclarlas ahí obligaría a la simulación de
+ * rangos (progression/simulate.ts) a inventar medallas que no tiene, que es
+ * justo el tipo de dato falso que no debe existir en este sistema.
+ */
+export function progressWithMedals(data: ProgressData, ganadas: MedalTally): ProgressData {
+  return { ...data, medallas: sumarTallies(data.medallas, ganadas) }
 }
 
 /**
