@@ -67,3 +67,76 @@ describe('resolución del enemigo más cercano', () => {
     expect(out).toEqual({ x: 0, y: 0, z: 0 }) // el otro participante, no self
   })
 })
+
+describe('preferencia por el enemigo dentro del cono', () => {
+  // yaw 0 mira hacia -Z. Cono de 55° de semiángulo y 45m de alcance, los
+  // mismos valores que usa squad.ts desde BOTS.
+  const YAW_HACIA_MENOS_Z = 0
+  const RANGO = 45
+  const SEMI = (55 * Math.PI) / 180
+
+  it('elige al enemigo del cono aunque otro esté más cerca a la espalda', () => {
+    // FFA: todos son enemigos entre sí.
+    const targets = createMatchTargets('ffa', 3)
+    targets.positions[0] = vec3(0, 0, 0) // self, mirando hacia -Z
+    targets.positions[1] = vec3(0, 0, 2) // 2m JUSTO DETRÁS (fuera del cono)
+    targets.positions[2] = vec3(0, 0, -8) // 8m al frente, dentro del cono
+
+    const out = vec3()
+    // Sin cono: gana el de atrás por ser el más cercano -- el bot se queda
+    // fijado en alguien que no puede ver nunca.
+    expect(resolveNearestEnemy(targets, 0, out)).toBe(true)
+    expect(out.z).toBe(2)
+
+    // Con cono: gana el que efectivamente tiene delante.
+    expect(resolveNearestEnemy(targets, 0, out, YAW_HACIA_MENOS_Z, RANGO, SEMI)).toBe(true)
+    expect(out.z).toBe(-8)
+  })
+
+  it('sin nadie en el cono cae al más cercano (lo que mantiene vivos Rotar y Reposicionar)', () => {
+    const targets = createMatchTargets('ffa', 3)
+    targets.positions[0] = vec3(0, 0, 0)
+    targets.positions[1] = vec3(0, 0, 3) // detrás
+    targets.positions[2] = vec3(0, 0, 20) // detrás y más lejos
+
+    const out = vec3()
+    expect(resolveNearestEnemy(targets, 0, out, YAW_HACIA_MENOS_Z, RANGO, SEMI)).toBe(true)
+    expect(out.z).toBe(3)
+  })
+
+  it('entre dos enemigos dentro del cono, gana el más cercano', () => {
+    const targets = createMatchTargets('ffa', 3)
+    targets.positions[0] = vec3(0, 0, 0)
+    targets.positions[1] = vec3(0, 0, -30)
+    targets.positions[2] = vec3(0, 0, -6)
+
+    const out = vec3()
+    expect(resolveNearestEnemy(targets, 0, out, YAW_HACIA_MENOS_Z, RANGO, SEMI)).toBe(true)
+    expect(out.z).toBe(-6)
+  })
+
+  it('un enemigo dentro del cono pero fuera de alcance no cuenta', () => {
+    const targets = createMatchTargets('ffa', 3)
+    targets.positions[0] = vec3(0, 0, 0)
+    targets.positions[1] = vec3(0, 0, -100) // al frente pero a 100m (> 45m)
+    targets.positions[2] = vec3(0, 0, 50) // detrás, más lejos que el alcance
+
+    const out = vec3()
+    // Ninguno califica para el cono -> cae al más cercano global (el de -100
+    // está a 100m, el de 50 a 50m: gana ese).
+    expect(resolveNearestEnemy(targets, 0, out, YAW_HACIA_MENOS_Z, RANGO, SEMI)).toBe(true)
+    expect(out.z).toBe(50)
+  })
+
+  it('respeta los equipos: un compañero dentro del cono no se elige nunca', () => {
+    // TDM: el equipo es la paridad del id. self=0 (equipo 0), 2 es compañero.
+    const targets = createMatchTargets('tdm', 3)
+    targets.positions[0] = vec3(0, 0, 0)
+    targets.positions[1] = vec3(0, 0, 12) // enemigo (id impar), detrás
+    targets.positions[2] = vec3(0, 0, -4) // COMPAÑERO, justo al frente
+
+    const out = vec3()
+    expect(resolveNearestEnemy(targets, 0, out, YAW_HACIA_MENOS_Z, RANGO, SEMI)).toBe(true)
+    expect(out.z).toBe(12)
+  })
+})

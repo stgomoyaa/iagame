@@ -116,7 +116,14 @@ import {
   stepMatch,
   type MatchState,
 } from '@/game/match/match'
-import { invulnerabilityExpiresAt, isInvulnerable, pickFarthestSpawn, spreadInitialSpawns } from '@/game/match/respawn'
+import {
+  createSpawnHistory,
+  invulnerabilityExpiresAt,
+  isInvulnerable,
+  pickFarthestSpawn,
+  recordSpawnUse,
+  spreadInitialSpawns,
+} from '@/game/match/respawn'
 import { createMatchBots, stepMatchBotsThink } from '@/game/match/squad'
 import { createMatchTargets, type MatchTargets } from '@/game/match/targeting'
 import { MATCH } from '@/game/match/tuning'
@@ -438,11 +445,23 @@ export function createGame(
   const matchTargets: MatchTargets = createMatchTargets(matchMode, participantCount)
   const invulnerableUntilS: number[] = new Array(participantCount).fill(-Infinity) as number[]
   const botWasAlive: boolean[] = new Array(bots.length).fill(true) as boolean[]
+  // Spawn elegido por cada bot muerto, para anotarlo en el historial recién
+  // cuando revive. Int32Array preasignado: se escribe por tick, nunca asigna.
+  const botSpawnIndex = new Int32Array(bots.length)
   // Scratch de posiciones enemigas para pickFarthestSpawn (match/respawn.ts):
   // tamaño máximo (participantCount - 1), reusado cada tick sin reasignar
   // -- ver fillEnemyPositions más abajo.
   const enemyPositionsScratch: Vec3[] = []
   for (let i = 0; i < participantCount; i++) enemyPositionsScratch.push(vec3())
+  // Mismo scratch, pero para los COMPAÑEROS vivos: el maximin de
+  // pickFarthestSpawn sólo mira enemigos, así que sin esto todos los
+  // compañeros que reaparecen con el mismo cuadro de enemigos eligen el
+  // mismo punto y salen apilados (ver el comentario de la función).
+  const allyPositionsScratch: Vec3[] = []
+  for (let i = 0; i < participantCount; i++) allyPositionsScratch.push(vec3())
+  // Historial de spawns recién usados, compartido por todos los
+  // participantes: se crea una vez por partida, nunca asigna después.
+  const spawnHistory = createSpawnHistory(participantCount)
 
   /** Llena enemyPositionsScratch con las posiciones vivas y enemigas de
    *  `selfId`, devuelve cuántas entradas son válidas. Cero asignaciones. */
@@ -454,6 +473,24 @@ export function createGame(
       if (!isEnemy(matchMode, selfId, id)) continue
       const p = matchTargets.positions[id]
       const slot = enemyPositionsScratch[count]
+      slot.x = p.x
+      slot.y = p.y
+      slot.z = p.z
+      count++
+    }
+    return count
+  }
+
+  /** Igual que fillEnemyPositions pero con los compañeros vivos de `selfId`
+   *  (mismo equipo, sin contarlo a él). Cero asignaciones. */
+  function fillAllyPositions(selfId: number): number {
+    let count = 0
+    for (let id = 0; id < participantCount; id++) {
+      if (id === selfId) continue
+      if (!matchTargets.alive[id]) continue
+      if (isEnemy(matchMode, selfId, id)) continue
+      const p = matchTargets.positions[id]
+      const slot = allyPositionsScratch[count]
       slot.x = p.x
       slot.y = p.y
       slot.z = p.z
@@ -880,9 +917,23 @@ export function createGame(
         // cuando murió (sección "Build" de la tarea: "elegí por distancia a
         // enemigos vivos, no al azar").
         const enemyCount = fillEnemyPositions(PLAYER_ID)
-        const spawnIndex = pickFarthestSpawn(mapaActual.spawns, enemyPositionsScratch, enemyCount)
+        const allyCount = fillAllyPositions(PLAYER_ID)
+        const spawnIndex = pickFarthestSpawn(
+          mapaActual.spawns,
+          enemyPositionsScratch,
+          enemyCount,
+          allyPositionsScratch,
+          allyCount,
+          spawnHistory,
+          matchState.elapsedS,
+        )
         const revived = stepBotRespawn(playerHealth, TICK_DT, MATCH.respawnDelayS)
         if (revived) {
+          // El historial se anota sólo cuando la reaparición OCURRE de
+          // verdad: mientras sigue muerto, el índice se recalcula cada tick
+          // y anotar cada tentativa llenaría el anillo con un mismo punto
+          // que todavía no usó nadie.
+          recordSpawnUse(spawnHistory, spawnIndex, matchState.elapsedS)
           const spawn = mapaActual.spawns[spawnIndex]
           player.position.x = spawn.x
           player.position.y = spawn.y
@@ -918,7 +969,20 @@ export function createGame(
         botWasAlive[b] = bot.health.alive
         if (!bot.health.alive) {
           const enemyCount = fillEnemyPositions(b + 1)
-          const spawnIndex = pickFarthestSpawn(mapaActual.spawns, enemyPositionsScratch, enemyCount)
+          const allyCount = fillAllyPositions(b + 1)
+          const spawnIndex = pickFarthestSpawn(
+            mapaActual.spawns,
+            enemyPositionsScratch,
+            enemyCount,
+            allyPositionsScratch,
+            allyCount,
+            spawnHistory,
+            matchState.elapsedS,
+          )
+          // Se guarda para anotarlo en el historial recién cuando el bot
+          // REVIVA de verdad (más abajo): acá todavía es una tentativa que
+          // se recalcula cada tick.
+          botSpawnIndex[b] = spawnIndex
           const spawn = mapaActual.spawns[spawnIndex]
           bot.spawn.x = spawn.x
           bot.spawn.y = spawn.y
@@ -949,6 +1013,10 @@ export function createGame(
         matchTargets.alive[b + 1] = bot.health.alive
         if (!botWasAlive[b] && bot.health.alive) {
           invulnerableUntilS[b + 1] = invulnerabilityExpiresAt(matchState.elapsedS, MATCH.respawnInvulnerabilityS)
+          // Reaparición consumada: recién ahora el punto queda "usado" y
+          // empieza a penalizar a quien reaparezca en los próximos
+          // segundos (match/respawn.ts RECENT_WINDOW_S).
+          recordSpawnUse(spawnHistory, botSpawnIndex[b], matchState.elapsedS)
         }
       }
     }

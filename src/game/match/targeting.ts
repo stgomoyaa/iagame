@@ -55,11 +55,49 @@ const FAR_AWAY = 1e6
  * si todo el equipo contrario está muerto reapareciendo a la vez. Cero
  * asignaciones: `out` es siempre el mismo Vec3 preasignado por el llamador
  * (BotWorld.targetEye).
+ *
+ * Los tres últimos parámetros son OPCIONALES y, omitidos, dejan la función
+ * exactamente como era (el más cercano y nada más). Con un cono (`facingYaw`
+ * + `rangeM` + `halfAngleRad`) prefiere al enemigo más cercano DENTRO del
+ * cono, y sólo cae al más cercano global si no hay ninguno adentro.
+ *
+ * Por qué: `canSee` (bots/perception.ts) mide el cono desde el yaw de
+ * apuntado actual, y el apuntado sólo gira hacia un objetivo que el bot ya
+ * "ve". Asignar siempre al más cercano cierra ese lazo en falso -- un
+ * enemigo pegado pero fuera del cono no se ve nunca, así que el bot no entra
+ * a Enfrentar, así que no gira, así que sigue sin verlo. Medido en 6 min de
+ * nuketown: en el 23% de las muestras de bot vivo el enemigo asignado caía
+ * fuera del cono, y en 5191 de esas muestras había OTRO enemigo dentro del
+ * cono al que estaba ignorando. Eso es la captura: dos enemigos a dos
+ * metros, cada uno mirando para otro lado.
+ *
+ * Sólo el cono, sin raycast de oclusión: es el filtro barato que arregla el
+ * caso medido sin agregar un solo rayo al presupuesto por tick. Si el
+ * elegido resulta estar detrás de una pared, `canSee` lo descarta igual que
+ * antes y el bot no entra a Enfrentar ese tick. La caída al más cercano es
+ * lo que mantiene vivos a Rotar y Reposicionar (perseguir a quien ya no se
+ * ve).
  */
-export function resolveNearestEnemy(targets: MatchTargets, selfId: number, out: Vec3): boolean {
+export function resolveNearestEnemy(
+  targets: MatchTargets,
+  selfId: number,
+  out: Vec3,
+  facingYaw: number | null = null,
+  rangeM = Infinity,
+  halfAngleRad = Math.PI,
+): boolean {
   const selfPos = targets.positions[selfId]
   let bestDist = Infinity
   let bestIndex = -1
+  let bestConeDist = Infinity
+  let bestConeIndex = -1
+
+  // yaw 0 mira hacia -Z (misma convención que movement/step.ts y que
+  // bots/perception.ts inVisionCone).
+  const usaCono = facingYaw !== null
+  const forwardX = usaCono ? -Math.sin(facingYaw) : 0
+  const forwardZ = usaCono ? -Math.cos(facingYaw) : 0
+  const cosHalf = Math.cos(halfAngleRad)
 
   for (let i = 0; i < targets.positions.length; i++) {
     if (i === selfId) continue
@@ -72,7 +110,21 @@ export function resolveNearestEnemy(targets: MatchTargets, selfId: number, out: 
       bestDist = d
       bestIndex = i
     }
+
+    if (!usaCono || d > rangeM || d >= bestConeDist) continue
+    // Cono en XZ, igual que inVisionCone: la componente vertical no entra en
+    // el campo visual horizontal.
+    const dx = p.x - selfPos.x
+    const dz = p.z - selfPos.z
+    const distXZ = Math.sqrt(dx * dx + dz * dz)
+    const dentro = distXZ < 1e-6 || (dx / distXZ) * forwardX + (dz / distXZ) * forwardZ >= cosHalf
+    if (dentro) {
+      bestConeDist = d
+      bestConeIndex = i
+    }
   }
+
+  if (bestConeIndex >= 0) bestIndex = bestConeIndex
 
   if (bestIndex < 0) {
     out.x = FAR_AWAY

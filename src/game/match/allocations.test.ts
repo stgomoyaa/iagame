@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createMatchState, recordDamage, recordKill, stepMatch } from '@/game/match/match'
 import { createMatchTargets, resolveNearestEnemy } from '@/game/match/targeting'
-import { pickFarthestSpawn } from '@/game/match/respawn'
+import { createSpawnHistory, pickFarthestSpawn, recordSpawnUse } from '@/game/match/respawn'
 import { ARENA } from '@/game/map/arena'
 import { vec3 } from '@/game/math/vec3'
 import type { MatchTuning } from '@/game/match/tuning'
@@ -128,6 +128,59 @@ describe('presupuesto de asignaciones de match/', () => {
     const crecimientoMB = (despues - antes) / 1024 / 1024
     // Ruido medido (6 corridas, Node v26.3.1): 0.004 a 0.007MB. Fuga
     // inyectada en pickFarthestSpawn() (match/respawn.ts): 1.95MB.
+    expect(crecimientoMB).toBeLessThan(0.5)
+  })
+  it('pickFarthestSpawn con compañeros e historial tampoco hace crecer el heap', () => {
+    // Mismo guard que el de arriba, pero por el camino COMPLETO que usa
+    // game.ts desde esta tarea: los dos términos nuevos (compañeros y
+    // recencia) corren en el mismo tick caliente y no pueden asignar.
+    expect(typeof global.gc, 'correr con --expose-gc').toBe('function')
+
+    const enemigos = [vec3(), vec3(), vec3(), vec3(), vec3(), vec3(), vec3(), vec3()]
+    const companeros = [vec3(), vec3(), vec3(), vec3(), vec3(), vec3(), vec3(), vec3()]
+    const history = createSpawnHistory(9)
+    function fill(buf: typeof enemigos, seed: number): number {
+      const count = 1 + (seed % buf.length)
+      for (let i = 0; i < count; i++) {
+        buf[i].x = ((seed * 7 + i * 13) % 60) - 30
+        buf[i].z = ((seed * 11 + i * 17) % 60) - 30
+      }
+      return count
+    }
+
+    for (let i = 0; i < 2000; i++) {
+      pickFarthestSpawn(
+        ARENA.spawns,
+        enemigos,
+        fill(enemigos, i),
+        companeros,
+        fill(companeros, i + 3),
+        history,
+        i * 0.01,
+      )
+      recordSpawnUse(history, i % ARENA.spawns.length, i * 0.01)
+    }
+
+    global.gc?.()
+    const antes = process.memoryUsage().heapUsed
+
+    for (let i = 0; i < 200_000; i++) {
+      pickFarthestSpawn(
+        ARENA.spawns,
+        enemigos,
+        fill(enemigos, i),
+        companeros,
+        fill(companeros, i + 3),
+        history,
+        i * 0.01,
+      )
+      recordSpawnUse(history, i % ARENA.spawns.length, i * 0.01)
+    }
+
+    global.gc?.()
+    const despues = process.memoryUsage().heapUsed
+    const crecimientoMB = (despues - antes) / 1024 / 1024
+    // Mismo umbral y misma derivación que los dos guards de arriba.
     expect(crecimientoMB).toBeLessThan(0.5)
   })
 })

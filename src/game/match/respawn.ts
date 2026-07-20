@@ -8,6 +8,73 @@
 import type { Vec3 } from '@/game/math/vec3'
 
 /**
+ * Cuánto pesa "no salir encima de un compañero" frente a "no salir cerca de
+ * un enemigo", y hasta dónde. El término de compañeros se topea en
+ * ALLY_SPREAD_CAP_M metros: alcanza de sobra para desempatar entre spawns
+ * de seguridad parecida (en nuketown los 16 spawns de una misma casa están
+ * a 5-12 m entre sí) y nunca puede convencer a un bot de meterse en la mira
+ * de un enemigo con tal de separarse de un aliado.
+ *
+ * El tope arrancó en 8 m y se bajó a 5 midiendo: con 8, en 6 min de
+ * nuketown, la partida caía de 79 a 53 kills -- el término era tan fuerte
+ * que mandaba a los bots a spawns peores en vez de sólo desempatar entre
+ * spawns equivalentes, que es todo lo que tiene que hacer.
+ */
+const ALLY_SPREAD_WEIGHT = 1
+const ALLY_SPREAD_CAP_M = 5
+
+/**
+ * Ventana y castigo del término de recencia. 4 s es del orden de lo que
+ * tarda un bot en irse caminando de su punto de aparición, así que castiga
+ * exactamente el caso malo -- dos muertes seguidas del mismo bando
+ * resolviendo al mismo punto mientras el primero todavía está parado ahí --
+ * y deja de castigar cuando el punto ya se despejó.
+ *
+ * 6 m es mayor que ALLY_SPREAD_CAP_M a propósito: reusar un punto recién
+ * usado tiene que perder incluso contra un spawn algo peor, porque el
+ * apilamiento se ve y "un poco más cerca de un enemigo" no. Igual que el
+ * tope de compañeros, arrancó más alto (14 m) y se bajó midiendo: castigos
+ * grandes distorsionan la elección de spawn mucho más de lo que arreglan.
+ */
+const RECENT_WINDOW_S = 4
+const RECENT_PENALTY_M = 6
+
+/**
+ * Últimos spawns usados, en un anillo de tamaño fijo. Existe porque
+ * `pickFarthestSpawn` es una función pura del estado del mundo y el estado
+ * del mundo NO incluye "quién salió de acá hace dos segundos": sin memoria,
+ * dos reapariciones separadas en el tiempo pero con el mismo cuadro de
+ * enemigos vuelven a elegir el mismo punto.
+ *
+ * Arrays tipados y `next` circular: se crea una vez por partida y nunca
+ * asigna después (mismo contrato de cero asignaciones por frame que el
+ * resto del camino caliente).
+ */
+export interface SpawnHistory {
+  indices: Int32Array
+  times: Float64Array
+  next: number
+}
+
+/** `capacity` entradas de historial, todas vacías (índice -1). Conviene que
+ *  sea del orden del número de participantes: alcanza para cubrir una
+ *  oleada de reapariciones simultáneas sin recorrer de más en el bucle
+ *  caliente. */
+export function createSpawnHistory(capacity: number): SpawnHistory {
+  const indices = new Int32Array(capacity)
+  indices.fill(-1)
+  return { indices, times: new Float64Array(capacity), next: 0 }
+}
+
+/** Anota que `index` se usó en `nowS` (reloj de partida), pisando la entrada
+ *  más vieja del anillo. Cero asignaciones. */
+export function recordSpawnUse(history: SpawnHistory, index: number, nowS: number): void {
+  history.indices[history.next] = index
+  history.times[history.next] = nowS
+  history.next = (history.next + 1) % history.indices.length
+}
+
+/**
  * Elige, de `spawns`, el índice cuya distancia MÍNIMA a cualquier enemigo
  * vivo en `enemyPositions` es la más grande posible (maximin, no "más lejos
  * del centroide"): un spawn que en promedio está lejos pero pegado a UN
@@ -28,25 +95,101 @@ import type { Vec3 } from '@/game/math/vec3'
  * participante muerto (mientras elige dónde reaparecer), así que necesita
  * poder pasar el mismo array scratch siempre y decirle cuántas entradas de
  * ese array son válidas esta vez, sin reconstruirlo.
+ *
+ * Los tres últimos parámetros son OPCIONALES y, omitidos, dejan la función
+ * exactamente como era (maximin puro sobre enemigos). Existen porque ese
+ * maximin puro, medido en una partida real de nuketown, reparte 76
+ * reapariciones sobre apenas 10 de los 32 spawns: es determinista y sólo
+ * mira enemigos, así que todos los compañeros que reaparecen con el mismo
+ * cuadro de enemigos resuelven al MISMO argmax y salen apilados (medido:
+ * compañeros apareciendo a 0.58 m, racimos de 3-4 bots durante hasta 10 s).
+ *
+ * - `allyPositions`/`allyCount`: compañeros vivos de quien reaparece, para
+ *   no salir encima de ellos (término topeado, ver ALLY_SPREAD_CAP_M).
+ * - `history`/`nowS`: qué spawns se usaron hace poco, para no repetir el
+ *   mismo punto dos veces seguidas (ver RECENT_WINDOW_S).
+ *
+ * Sigue sin asignar nada: los dos términos nuevos son escalares sobre
+ * buffers que el llamador ya tiene vivos.
  */
 export function pickFarthestSpawn(
   spawns: readonly Vec3[],
   enemyPositions: readonly Vec3[],
   enemyCount: number = enemyPositions.length,
+  allyPositions: readonly Vec3[] | null = null,
+  allyCount = 0,
+  history: SpawnHistory | null = null,
+  nowS = 0,
 ): number {
   let bestIndex = 0
-  let bestMinDist = -Infinity
+  let bestScore = -Infinity
 
   for (let i = 0; i < spawns.length; i++) {
     const spawn = spawns[i]
-    let minDist = Infinity
+
+    // Término principal, el de siempre: distancia al enemigo vivo más
+    // cercano (maximin). Sin enemigos vivos vale 0 y no Infinity -- con
+    // Infinity todos los spawns empatarían y los dos términos de abajo no
+    // podrían desempatar nada, que es justamente cuando más falta hacen
+    // (equipo entero muerto reapareciendo junto).
+    let dEnemy = Infinity
     for (let j = 0; j < enemyCount; j++) {
       const enemy = enemyPositions[j]
-      const d = Math.hypot(spawn.x - enemy.x, spawn.z - enemy.z)
-      if (d < minDist) minDist = d
+      const dx = spawn.x - enemy.x
+      const dz = spawn.z - enemy.z
+      // sqrt y no hypot: hypot protege del overflow a costa de ser ~10x más
+      // lento, y acá esto corre 128 veces por segundo por cada participante
+      // muerto sobre los 32 spawns de nuketown. Las coordenadas de un mapa
+      // no se acercan ni de lejos al rango donde hypot importa.
+      const d = Math.sqrt(dx * dx + dz * dz)
+      if (d < dEnemy) dEnemy = d
     }
-    if (minDist > bestMinDist) {
-      bestMinDist = minDist
+    if (dEnemy === Infinity) dEnemy = 0
+
+    let score = dEnemy
+
+    // Término de compañeros: el maximin de arriba sólo mira ENEMIGOS, así
+    // que dos compañeros que reaparecen con el mismo cuadro de enemigos
+    // resuelven al mismo argmax y salen uno encima del otro. Medido en
+    // nuketown antes de este término: 76 reapariciones repartidas en sólo
+    // 10 de los 32 spawns, con compañeros apareciendo a 0.58 m.
+    //
+    // Va topeado (ALLY_SPREAD_CAP_M) para que sólo desempate entre spawns
+    // parecidos en seguridad: alejarse de un compañero nunca puede valer
+    // más que meterse en la mira de un enemigo.
+    if (allyPositions !== null && allyCount > 0) {
+      let dAlly = Infinity
+      for (let j = 0; j < allyCount; j++) {
+        const ally = allyPositions[j]
+        const dx = spawn.x - ally.x
+        const dz = spawn.z - ally.z
+        const d = Math.sqrt(dx * dx + dz * dz)
+        if (d < dAlly) dAlly = d
+      }
+      if (dAlly !== Infinity) {
+        score += ALLY_SPREAD_WEIGHT * (dAlly < ALLY_SPREAD_CAP_M ? dAlly : ALLY_SPREAD_CAP_M)
+      }
+    }
+
+    // Término de recencia: aunque no haya nadie cerca AHORA, repetir el
+    // mismo punto una y otra vez concentra a todo el equipo ahí en cuanto
+    // dos muertes caen con pocos segundos de diferencia. Penaliza los
+    // spawns usados hace poco, con la penalización decayendo a cero al
+    // final de la ventana.
+    if (history !== null) {
+      let penalty = 0
+      for (let j = 0; j < history.indices.length; j++) {
+        if (history.indices[j] !== i) continue
+        const age = nowS - history.times[j]
+        if (age < 0 || age >= RECENT_WINDOW_S) continue
+        const p = RECENT_PENALTY_M * (1 - age / RECENT_WINDOW_S)
+        if (p > penalty) penalty = p
+      }
+      score -= penalty
+    }
+
+    if (score > bestScore) {
+      bestScore = score
       bestIndex = i
     }
   }

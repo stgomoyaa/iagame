@@ -65,7 +65,20 @@ export function stepMatchBotsThink(
     bot.aiAccumulator += dt
     while (bot.aiAccumulator >= interval) {
       bot.aiAccumulator -= interval
-      if (bot.health.alive) resolveNearestEnemy(targets, i + 1, world.targetEye)
+      // Con el cono del bot, no sólo con la distancia: elegir siempre al
+      // más cercano deja al bot fijado en alguien que tiene detrás y que
+      // por lo tanto no puede ver nunca, ignorando al que sí tiene delante
+      // (ver el comentario de resolveVisibleEnemy en match/targeting.ts).
+      if (bot.health.alive) {
+        resolveNearestEnemy(
+          targets,
+          i + 1,
+          world.targetEye,
+          bot.aimMotor.yaw,
+          BOTS.visionRangeM,
+          (BOTS.visionHalfAngleDeg * Math.PI) / 180,
+        )
+      }
       stepBotThink(bot, world, interval)
     }
   }

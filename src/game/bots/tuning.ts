@@ -68,6 +68,10 @@ export interface BotsTuning {
    *  de entrada a propósito (histéresis): sin el margen, health oscilando
    *  justo en el umbral generaría un parpadeo Retirarse<->Enfrentar cada tick. */
   retreatExitHealthFraction: number
+  /** Distancia (m) por debajo de la cual un bot en Retirarse deja de huir y
+   *  devuelve el fuego. Huir de alguien que ya te tiene a quemarropa es
+   *  morir de espaldas: a esa distancia la única jugada que queda es pelear. */
+  retreatFightBackM: number
 
   /** Vida máxima de un bot. Igual que la del jugador (feedback/tuning.ts
    *  startingHealth): mismas reglas para todos, sección 8 del spec. */
@@ -218,6 +222,12 @@ export const BOTS: BotsTuning = {
 
   retreatEnterHealthFraction: 0.3,
   retreatExitHealthFraction: 0.5,
+  // 6 m es, con cualquier arma del arsenal, distancia de no fallar: por
+  // dentro de eso girarse y correr regala la espalda gratis. Medido antes
+  // de existir este umbral, en 6 min de nuketown: 77 muestras con un
+  // enemigo a menos de 3 m y el bot en Retirarse SIN apretar el gatillo
+  // ni una sola vez, contra 51 en Enfrentar disparando.
+  retreatFightBackM: 6.0,
 
   maxHealth: 100,
   respawnDelayS: 3.0,
