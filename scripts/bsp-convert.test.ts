@@ -5,7 +5,8 @@ import { NodeIO } from '@gltf-transform/core'
 import { describe, expect, it } from 'vitest'
 
 import { METROS_POR_UNIDAD } from './lib/bsp.ts'
-import { convertir } from './bsp-convert.ts'
+import { convertir, esCaraDescartable } from './bsp-convert.ts'
+import { ESPESOR_CIERRE_M, MARGEN_JUGABLE_M } from './lib/caja-jugable.ts'
 
 const S = METROS_POR_UNIDAD
 
@@ -523,4 +524,162 @@ describe('bsp-convert: contra los mapas reales', () => {
       30_000,
     )
   }
+})
+
+/**
+ * Un .bsp sintético con una malla visible CHICA y colisión GRANDE, que es
+ * exactamente la forma del bug de nuketown: la geometría de colisión abarca
+ * mucho más que lo que el mapa dibuja, y el jugador termina caminando sobre
+ * piso invisible.
+ *
+ * La malla es un triángulo en el cuadrado de Source [0..100] x [0..100]; la
+ * colisión son tres brushes: uno adentro, uno que se pasa por un lado, y uno
+ * a 5000 unidades (el papel de la maqueta del skybox 3D).
+ */
+function bspMallaChicaColisionGrande(conSkyCamera: boolean) {
+  const dentro = planosDeCaja([10, 10, -10], [90, 90, 0])
+  const cruza = planosDeCaja([10, 10, 0], [5000, 90, 10])
+  const lejos = planosDeCaja([9000, 9000, 0], [9100, 9100, 10])
+  const planos = [...dentro, ...cruza, ...lejos]
+  const idx = (base: number) => planos.slice(base, base + 6).map((_, i) => ({ planeIdx: base + i }))
+
+  const entidades: Array<Record<string, string>> = [
+    { classname: 'info_player_deathmatch', origin: '50 50 8' },
+  ]
+  if (conSkyCamera) entidades.push({ classname: 'sky_camera', origin: '9050 9050 8', scale: '16' })
+
+  return construirBspSintetico({
+    planos,
+    brushes: [
+      { contents: CONTENTS_SOLID, lados: idx(0) },
+      { contents: CONTENTS_SOLID, lados: idx(6) },
+      { contents: CONTENTS_SOLID, lados: idx(12) },
+    ],
+    entidades,
+    vertices: [
+      [0, 0, 0],
+      [100, 0, 0],
+      [0, 100, 0],
+    ],
+    edges: [
+      [0, 1],
+      [1, 2],
+      [2, 0],
+    ],
+    surfedges: [0, 1, 2],
+    faces: [{ firstedge: 0, numedges: 3, texinfo: 0 }],
+    texinfos: [{ texdata: 0 }],
+    texdatas: [{ nameStringTableID: 0, width: 1, height: 1 }],
+    materiales: ['CONCRETE/FLOOR01'],
+  })
+}
+
+describe('bsp-convert: la colisión no se sale de la caja jugable', () => {
+  it('descarta el brush lejano, recorta el que cruza y sella el recinto', async () => {
+    const { colision, reporte } = await convertir(bspMallaChicaColisionGrande(true), 'test-jugable')
+    const j = reporte.jugable
+
+    expect(j.caja).not.toBeNull()
+    expect(j.descartados).toBe(1)
+    expect(j.enSkybox3D).toBe(1)
+    expect(j.recortados).toBe(1)
+    expect(j.dentro).toBe(1)
+    expect(j.cierre).toBe(5)
+
+    // La caja jugable sale de la malla (0..100 unidades de Source en X, que
+    // son 0..1.905 m) más el margen, NO de los 5000 de la colisión.
+    const caja = j.caja!
+    expect(caja.max[0]).toBeLessThan(100 * S + MARGEN_JUGABLE_M + 1e-6)
+
+    // Ningún brush emitido se va de la caja jugable, salvo los muros de
+    // cierre, que por definición viven pegados por afuera.
+    const fuera = colision.brushes.filter(
+      (b) => b.min[0] > caja.max[0] + 1e-6 || b.max[0] < caja.min[0] - 1e-6,
+    )
+    expect(fuera).toHaveLength(0)
+
+    // El brush que cruzaba llegaba a 5000 unidades (95 m) y ahora termina en
+    // el borde de la caja. Sin el recorte esto seguiría dando 95.
+    const maxX = Math.max(...colision.brushes.map((b) => b.max[0]))
+    expect(maxX).toBeLessThan(caja.max[0] + ESPESOR_CIERRE_M + 1e-6)
+  })
+
+  it('sin sky_camera igual recorta, pero no atribuye nada a la maqueta del skybox', async () => {
+    // El brush lejano se sigue descartando -- no toca la caja jugable -- pero
+    // sin la entidad que marca la maqueta no se lo puede LLAMAR skybox 3D.
+    // Distinguir las dos cosas es lo que hace que el reporte sirva.
+    const { reporte } = await convertir(bspMallaChicaColisionGrande(false), 'test-sin-sky')
+    expect(reporte.jugable.descartados).toBe(1)
+    expect(reporte.jugable.enSkybox3D).toBe(0)
+  })
+
+  it('el jugador queda encerrado: los muros de cierre rodean la caja por los cuatro costados', async () => {
+    const { colision, reporte } = await convertir(bspMallaChicaColisionGrande(true), 'test-cierre')
+    const caja = reporte.jugable.caja!
+    // Se toman los brushes que están AFUERA de la caja (los de cierre) y se
+    // comprueba que hay uno en cada uno de los cuatro rumbos horizontales.
+    const afuera = colision.brushes.filter(
+      (b) =>
+        b.max[0] <= caja.min[0] + 1e-6 ||
+        b.min[0] >= caja.max[0] - 1e-6 ||
+        b.max[2] <= caja.min[2] + 1e-6 ||
+        b.min[2] >= caja.max[2] - 1e-6,
+    )
+    expect(afuera.some((b) => b.max[0] <= caja.min[0] + 1e-6)).toBe(true)
+    expect(afuera.some((b) => b.min[0] >= caja.max[0] - 1e-6)).toBe(true)
+    expect(afuera.some((b) => b.max[2] <= caja.min[2] + 1e-6)).toBe(true)
+    expect(afuera.some((b) => b.min[2] >= caja.max[2] - 1e-6)).toBe(true)
+  })
+})
+
+describe('bsp-convert: las caras de herramienta no llegan a la malla', () => {
+  it('un material TOOLS/TOOLSSKYBOX no aporta triángulos ni agranda la caja jugable', async () => {
+    // Es el caso real de nuketown: la cáscara de toolsskybox mide 136 m de
+    // profundidad contra los 76 del mapa. Si se colara a la malla, la caja
+    // jugable saldría de ella y el filtro de colisión no filtraría nada.
+    expect(esCaraDescartable(0, 'TOOLS/TOOLSSKYBOX')).toBe(true)
+    expect(esCaraDescartable(0, 'TOOLS/TOOLSBLACK')).toBe(true)
+    expect(esCaraDescartable(0, 'CONCRETE/FLOOR01')).toBe(false)
+
+    const planos = planosDeCaja([0, 0, 0], [10, 10, 10])
+    const buf = construirBspSintetico({
+      planos,
+      brushes: [{ contents: CONTENTS_SOLID, lados: planos.map((_, i) => ({ planeIdx: i })) }],
+      entidades: [{ classname: 'info_player_deathmatch', origin: '5 5 5' }],
+      vertices: [
+        [0, 0, 0],
+        [100, 0, 0],
+        [0, 100, 0],
+        [0, 0, 0],
+        [4000, 0, 0],
+        [0, 4000, 0],
+      ],
+      edges: [
+        [0, 1],
+        [1, 2],
+        [2, 0],
+        [3, 4],
+        [4, 5],
+        [5, 3],
+      ],
+      surfedges: [0, 1, 2, 3, 4, 5],
+      faces: [
+        { firstedge: 0, numedges: 3, texinfo: 0 },
+        { firstedge: 3, numedges: 3, texinfo: 1 },
+      ],
+      texinfos: [{ texdata: 0 }, { texdata: 1 }],
+      texdatas: [
+        { nameStringTableID: 0, width: 1, height: 1 },
+        { nameStringTableID: 1, width: 1, height: 1 },
+      ],
+      materiales: ['CONCRETE/FLOOR01', 'TOOLS/TOOLSSKYBOX'],
+    })
+
+    const { reporte } = await convertir(buf, 'test-tools')
+    // Sólo el triángulo de concreto.
+    expect(reporte.triangulos).toBe(1)
+    // Y la caja jugable sale de ESE triángulo (100 unidades), no del de
+    // toolsskybox (4000).
+    expect(reporte.jugable.caja!.max[0]).toBeLessThan(100 * S + MARGEN_JUGABLE_M + 1e-6)
+  })
 })

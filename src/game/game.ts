@@ -1970,6 +1970,25 @@ export function createGame(
           input.pitch = pitch
         }
 
+        // Contraparte de sólo lectura de __debugTeleport, detrás del mismo
+        // gate ?debug=1. Sin esto, verificar "¿el jugador subió la escalera?"
+        // o "¿se salió del mapa?" desde el navegador obliga a mirar una
+        // captura y adivinar la altura: la cámara no expone la posición de
+        // los pies, que es la que decide la colisión. Devuelve un objeto
+        // nuevo por llamada a propósito -- se invoca a mano desde la consola
+        // o desde CDP, nunca dentro del frame, así que no cuenta para el
+        // presupuesto de cero asignaciones por cuadro.
+        ;(
+          window as unknown as {
+            __debugPos?: () => { x: number; y: number; z: number; onGround: boolean }
+          }
+        ).__debugPos = () => ({
+          x: player.position.x,
+          y: player.position.y,
+          z: player.position.z,
+          onGround: player.grounded,
+        })
+
         // El objeto de tuning en sí (sección 5 del spec: "en un objeto
         // mutable... para poder exponerlo a un panel de debug más
         // adelante"): un panel real todavía no existe, pero exponerlo ya

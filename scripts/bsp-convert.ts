@@ -67,6 +67,19 @@ import {
   puntoSourceAThreeMetros,
   yawSourceAThree,
 } from './lib/bsp.ts'
+import {
+  type Caja,
+  cajaJugableDesdeMalla,
+  cajaValida,
+  cajaVacia,
+  cajasSeTocan,
+  esDelSkybox3D,
+  expandirCaja,
+  murosDeCierre,
+  planosDeCaja,
+  planosDeRecorte,
+  recortarCaja,
+} from './lib/caja-jugable.ts'
 import { type Atlas, construirAtlas, uvBlanco, uvLightmap } from './lib/lightmap.ts'
 import { encodePng } from './lib/png-writer.ts'
 
@@ -86,6 +99,22 @@ const SURF_DESCARTABLE = SURF_NODRAW | SURF_TRIGGER | SURF_HINT | SURF_SKIP
  *  bit SURF_ propio -- los brushes clip normalmente ni generan cara -- así
  *  que este chequeo por nombre es la única red para ese caso. */
 const MATERIALES_DESCARTABLES = ['nodraw', 'trigger', 'skip', 'hint', 'clip']
+
+/**
+ * Prefijo de TODOS los materiales de herramienta de Hammer.
+ *
+ * Los cinco substrings de arriba no los cubren a todos: `toolsskybox` y
+ * `toolsblack` no llevan SURF_NODRAW y no contienen ninguno de esos textos,
+ * así que se colaban a la malla. `map-textures.ts` los venía filtrando por
+ * este mismo prefijo un paso más adelante, y por eso el GLB final se veía
+ * bien -- pero el filtro estaba en el lugar equivocado, y esta tarea lo
+ * demostró: la caja jugable se deriva de la malla que se construye ACÁ, y
+ * con la cáscara de `toolsskybox` adentro medía 137 m de profundidad en vez
+ * de los 76 que mide el mapa. Filtrar acá deja a los dos consumidores de la
+ * malla -- el GLB y la caja jugable -- mirando lo mismo. El filtro de
+ * map-textures.ts queda como red de seguridad, no como el que decide.
+ */
+const PREFIJO_HERRAMIENTA = 'tools/'
 
 export interface BrushColision {
   /** Planos del brush, aplanados: [nx,ny,nz,d, nx,ny,nz,d, ...]. Normal hacia
@@ -121,6 +150,30 @@ export interface ReporteConversion {
   triangulos: number
   materiales: number
   displacements: number
+  /**
+   * Separación de la geometría de colisión contra la caja jugable (ver
+   * `scripts/lib/caja-jugable.ts`). Se reporta entero y no sólo el total
+   * porque los tres números responden preguntas distintas: `descartados`
+   * mide cuánta geometría no era del mapa, `recortados` cuánta estaba a
+   * caballo del borde, y `cierre` confirma que el recinto quedó sellado.
+   */
+  jugable: {
+    /** Caja usada, en metros y ejes del motor. `null` si el mapa no tiene
+     *  malla visible y no se pudo derivar (no se filtra nada). */
+    caja: Caja | null
+    /** Brushes que quedaron enteros adentro. */
+    dentro: number
+    /** Brushes descartados por no tocar la caja. */
+    descartados: number
+    /** De los descartados, cuántos son de la maqueta del skybox 3D. */
+    enSkybox3D: number
+    /** Brushes que sobrevivieron pero con planos de recorte agregados. */
+    recortados: number
+    /** Muros de cierre emitidos. */
+    cierre: number
+    /** Caras de malla descartadas por ser de la maqueta del skybox 3D. */
+    carasSkybox3D: number
+  }
   /** null si el mapa no trae muestras horneadas en LUMP_LIGHTING. */
   lightmap: { lado: number; caras: number; exposicion: number; ocupacion: number } | null
 }
@@ -185,6 +238,35 @@ function leerSpawns(
   }
 
   return { origenes, yaws }
+}
+
+/**
+ * Origen de la entidad `sky_camera`, en metros y ejes del motor, o `null` si
+ * el mapa no la trae.
+ *
+ * Es la marca oficial de Source de dónde está la maqueta del skybox 3D, y
+ * viaja en el .bsp: no hay que adivinarla ni deducirla de nombres de modelo
+ * (ver `scripts/lib/caja-jugable.ts`). Un mapa sin `sky_camera` no tiene
+ * skybox 3D que separar, y devolver `null` hace que nada se filtre por ese
+ * criterio -- que es lo correcto, no un caso degradado.
+ */
+export function leerSkyCamera(texto: string): [number, number, number] | null {
+  for (const ent of leerEntidades(texto)) {
+    if (ent.classname !== 'sky_camera') continue
+    if (!ent.origin) continue
+    const partes = ent.origin.trim().split(/\s+/).map(Number)
+    if (partes.length !== 3 || partes.some((n) => !Number.isFinite(n))) continue
+    return puntoSourceAThreeMetros(partes as [number, number, number])
+  }
+  return null
+}
+
+/** Caja de los `info_player_*` en metros y ejes del motor. Referencia de
+ *  "dónde se juega" para el criterio de Voronoi contra `sky_camera`. */
+export function cajaDeSpawns(origenes: ReadonlyArray<[number, number, number]>): Caja {
+  const caja = cajaVacia()
+  for (const o of origenes) expandirCaja(caja, o)
+  return caja
 }
 
 function leerVertices(buf: Buffer, lump: Lump): Array<[number, number, number]> {
@@ -300,9 +382,10 @@ function leerNombresMateriales(buf: Buffer, lumpTabla: Lump, lumpDatos: Lump): s
   return nombres
 }
 
-function esCaraDescartable(flags: number, nombreMaterial: string): boolean {
+export function esCaraDescartable(flags: number, nombreMaterial: string): boolean {
   if ((flags & SURF_DESCARTABLE) !== 0) return true
   const n = nombreMaterial.toLowerCase()
+  if (n.startsWith(PREFIJO_HERRAMIENTA)) return true
   return MATERIALES_DESCARTABLES.some((m) => n.includes(m))
 }
 
@@ -323,11 +406,16 @@ function construirMalla(
   buf: Buffer,
   lumps: Lump[],
   atlas: Atlas | null,
+  skyCamera: [number, number, number] | null,
+  cajaSpawns: Caja,
 ): {
   porMaterial: Map<string, PrimitivaAcumulada>
   triangulos: number
   displacements: number
   carasSinLightmap: number
+  /** Caja de lo que efectivamente se dibuja, en metros y ejes del motor. */
+  cajaMalla: Caja
+  carasSkybox3D: number
 } {
   const vertices = leerVertices(buf, lumps[LUMP_VERTEXES])
   const edges = leerEdges(buf, lumps[LUMP_EDGES])
@@ -353,6 +441,11 @@ function construirMalla(
   const porMaterial = new Map<string, PrimitivaAcumulada>()
   let triangulos = 0
   let carasSinLightmap = 0
+  const cajaMalla = cajaVacia()
+  let carasSkybox3D = 0
+  // Scratch del centroide de cara: se reusa entre caras para no asignar un
+  // array por cada una de las 5400 caras del mapa.
+  const centroide: [number, number, number] = [0, 0, 0]
 
   for (let indiceCara = 0; indiceCara < faces.length; indiceCara++) {
     const face = faces[indiceCara]
@@ -383,6 +476,26 @@ function construirMalla(
       loop[e] = vertices[idxVertice]
     }
 
+    // La maqueta del skybox 3D se descarta ANTES de medirle la caja a la
+    // malla: si aportara caras dibujables, contaminaría la caja jugable que
+    // se deriva de acá y el filtro de colisión se volvería inútil (ver
+    // scripts/lib/caja-jugable.ts). Se decide por el centroide de la cara y
+    // no por un vértice suelto: un vértice puede caer del lado equivocado
+    // en una cara que cruza la frontera de Voronoi, el centroide no.
+    centroide[0] = 0
+    centroide[1] = 0
+    centroide[2] = 0
+    for (const v of loop) {
+      const p = puntoSourceAThreeMetros(v)
+      centroide[0] += p[0] / loop.length
+      centroide[1] += p[1] / loop.length
+      centroide[2] += p[2] / loop.length
+    }
+    if (esDelSkybox3D(centroide, skyCamera, cajaSpawns)) {
+      carasSkybox3D++
+      continue
+    }
+
     let acumulado = porMaterial.get(nombreMaterial)
     if (!acumulado) {
       acumulado = { posiciones: [], uvs: [], uvsLightmap: [], indices: [] }
@@ -399,6 +512,7 @@ function construirMalla(
     for (const v of loop) {
       const p = puntoSourceAThreeMetros(v)
       acumulado.posiciones.push(p[0], p[1], p[2])
+      expandirCaja(cajaMalla, p)
 
       // UV de Source: proyección del vértice (en unidades de Source, sin
       // convertir) sobre los vectores de textureVecs, dividida por el
@@ -442,7 +556,7 @@ function construirMalla(
     }
   }
 
-  return { porMaterial, triangulos, displacements, carasSinLightmap }
+  return { porMaterial, triangulos, displacements, carasSinLightmap, cajaMalla, carasSkybox3D }
 }
 
 async function construirGlb(porMaterial: Map<string, PrimitivaAcumulada>): Promise<Document> {
@@ -521,10 +635,42 @@ export async function convertir(
     console.error(`[${nombre}] ADVERTENCIA: no se encontró ningún info_player_*. Este mapa no es jugable.`)
   }
 
+  // La MALLA va primero, al revés de como estaba: la caja jugable contra la
+  // que se filtra la colisión sale de la malla visible (ver
+  // scripts/lib/caja-jugable.ts), así que hay que tenerla antes de mirar un
+  // solo brush.
+  const skyCamera = leerSkyCamera(
+    buf.toString('utf8', lumps[LUMP_ENTITIES].offset, lumps[LUMP_ENTITIES].offset + lumps[LUMP_ENTITIES].largo),
+  )
+  const cajaSpawns = cajaDeSpawns(spawns)
+
+  const atlas = construirAtlas(buf, lumps)
+  const { porMaterial, triangulos, displacements, carasSinLightmap, cajaMalla, carasSkybox3D } = construirMalla(
+    buf,
+    lumps,
+    atlas,
+    skyCamera,
+    cajaSpawns,
+  )
+
+  // Sin malla visible no hay de dónde derivar la caja, y filtrar contra una
+  // caja inventada sería peor que no filtrar: se deja el mapa tal cual y se
+  // avisa. Un .bsp sin una sola cara dibujable no es un caso normal.
+  const cajaJugable = cajaValida(cajaMalla) ? cajaJugableDesdeMalla(cajaMalla) : null
+  if (cajaJugable === null) {
+    console.error(
+      `[${nombre}] ADVERTENCIA: el mapa no tiene malla visible, no se puede derivar la caja jugable. La colisión va SIN filtrar.`,
+    )
+  }
+
   const brushesSolidos = leerBrushesDeColision(buf, lumps)
   const brushes: BrushColision[] = []
   const boundsMin: [number, number, number] = [Infinity, Infinity, Infinity]
   const boundsMax: [number, number, number] = [-Infinity, -Infinity, -Infinity]
+  let dentro = 0
+  let descartados = 0
+  let enSkybox3D = 0
+  let recortados = 0
 
   for (const planos of brushesSolidos) {
     const bboxSource = bboxDelBrush(planos, nx, ny, nz, dist)
@@ -540,16 +686,61 @@ export async function convertir(
     }
 
     const { min, max } = bboxSourceAThreeMetros(bboxSource.min, bboxSource.max)
-    brushes.push({ planes, min, max })
+    let caja: Caja = { min, max }
+
+    if (cajaJugable !== null) {
+      const centro: [number, number, number] = [
+        (min[0] + max[0]) / 2,
+        (min[1] + max[1]) / 2,
+        (min[2] + max[2]) / 2,
+      ]
+      // El brush que no toca la caja jugable no aporta nada al mapa: o es
+      // la maqueta del skybox 3D, o es cáscara exterior. Se cuentan aparte
+      // para que el reporte diga CUÁL de las dos cosas era.
+      if (!cajasSeTocan(caja, cajaJugable)) {
+        descartados++
+        if (esDelSkybox3D(centro, skyCamera, cajaSpawns)) enSkybox3D++
+        continue
+      }
+      // El que la toca pero se sale por algún lado se recorta agregándole
+      // los semiespacios de la caja. Recortar un convexo con un semiespacio
+      // da otro convexo: no hay que recalcular nada más que la bbox.
+      const nuevos = planosDeRecorte(caja, cajaJugable)
+      if (nuevos.length > 0) {
+        planes.push(...nuevos)
+        caja = recortarCaja(caja, cajaJugable)
+        recortados++
+      } else {
+        dentro++
+      }
+    } else {
+      dentro++
+    }
+
+    brushes.push({ planes, min: caja.min, max: caja.max })
 
     for (let eje = 0; eje < 3; eje++) {
-      if (min[eje] < boundsMin[eje]) boundsMin[eje] = min[eje]
-      if (max[eje] > boundsMax[eje]) boundsMax[eje] = max[eje]
+      if (caja.min[eje] < boundsMin[eje]) boundsMin[eje] = caja.min[eje]
+      if (caja.max[eje] > boundsMax[eje]) boundsMax[eje] = caja.max[eje]
     }
   }
 
-  const atlas = construirAtlas(buf, lumps)
-  const { porMaterial, triangulos, displacements, carasSinLightmap } = construirMalla(buf, lumps, atlas)
+  // Cierre del recinto. Recortar la colisión saca el piso invisible pero
+  // TAMBIÉN saca los muros de la cáscara del mapa, que estaban afuera: sin
+  // esto el jugador deja de caminar sobre la nada para pasar a caerse de
+  // ella. Ver ESPESOR_CIERRE_M.
+  let cierre = 0
+  if (cajaJugable !== null) {
+    for (const muro of murosDeCierre(cajaJugable)) {
+      brushes.push({ planes: planosDeCaja(muro), min: muro.min, max: muro.max })
+      cierre++
+      for (let eje = 0; eje < 3; eje++) {
+        if (muro.min[eje] < boundsMin[eje]) boundsMin[eje] = muro.min[eje]
+        if (muro.max[eje] > boundsMax[eje]) boundsMax[eje] = muro.max[eje]
+      }
+    }
+  }
+
   if (displacements > 0) {
     console.log(`[${nombre}] ${displacements} displacement(s): fuera de alcance, no se generó terreno para ellos`)
   }
@@ -579,6 +770,7 @@ export async function convertir(
     triangulos,
     materiales: [...porMaterial.values()].filter((p) => p.indices.length > 0).length,
     displacements,
+    jugable: { caja: cajaJugable, dentro, descartados, enSkybox3D, recortados, cierre, carasSkybox3D },
     lightmap:
       atlas === null
         ? null
@@ -625,6 +817,18 @@ async function main(): Promise<void> {
   console.log(`triángulos:          ${reporte.triangulos}`)
   console.log(`materiales:          ${reporte.materiales}`)
   console.log(`displacements:       ${reporte.displacements}`)
+  const j = reporte.jugable
+  if (j.caja === null) {
+    console.log('caja jugable:        (no derivable: el mapa no tiene malla visible)')
+  } else {
+    const tam = [0, 1, 2].map((e) => (j.caja!.max[e] - j.caja!.min[e]).toFixed(1)).join(' x ')
+    console.log(`caja jugable:        ${tam} m`)
+    console.log(`  brushes dentro:    ${j.dentro}`)
+    console.log(`  recortados:        ${j.recortados}`)
+    console.log(`  descartados:       ${j.descartados} (${j.enSkybox3D} de la maqueta del skybox 3D)`)
+    console.log(`  muros de cierre:   ${j.cierre}`)
+    console.log(`  caras de malla descartadas por skybox 3D: ${j.carasSkybox3D}`)
+  }
   if (reporte.lightmap !== null) {
     const lm = reporte.lightmap
     console.log(
