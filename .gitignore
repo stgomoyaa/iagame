@@ -88,3 +88,16 @@ workshop-assets/
 
 # permitir el ejemplo de env aunque .env* esté ignorado arriba
 !.env.example
+
+# Skybox procedural horneado por scripts/generate-skybox.ts. NO se commitea,
+# pero por un motivo distinto al de workshop-assets/: éste es 100% nuestro y
+# se podría publicar sin problema (ver docs/SKYBOX.md). Queda afuera porque
+# es una SALIDA DETERMINISTA de un script que está sí commiteado -- misma
+# lógica que workshop-catalog.json de más arriba. Regenerarlo cuesta 5
+# segundos y da byte por byte lo mismo mientras no cambien la semilla ni la
+# paleta, así que versionar 1.1 MB de PNG en cada retoque de la paleta sería
+# pagar historia de git por algo que se reconstruye con un comando.
+#
+# OJO: por lo mismo, un deploy tiene que correr el generador antes del build.
+# Ver docs/SKYBOX.md, sección "Cómo se aplica".
+/public/assets/skybox/
