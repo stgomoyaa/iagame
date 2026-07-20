@@ -94,10 +94,17 @@ export interface BrushColision {
 
 export interface MapaColision {
   nombre: string
-  /** Pese al nombre (heredado del formato acordado con el consumidor en
-   *  `src/`), el valor es metros por unidad de Source: 1 unidad = 0.01905 m.
-   *  Ya está aplicado a todo lo demás en este objeto. */
-  unidadesPorMetro: number
+  /** Metros por unidad de Source: 1 unidad = 0.75 pulgadas = 0.01905 m.
+   *
+   *  Es informativo: **ya está aplicado** a `bounds`, `spawns` y los planos de
+   *  los brushes, que salen todos en metros. Está acá para que el consumidor
+   *  pueda verificar la escala, no para que la aplique otra vez.
+   *
+   *  Se llamaba `unidadesPorMetro`, que decía exactamente lo contrario de lo
+   *  que contiene. Se renombró antes de que existiera ningún consumidor,
+   *  porque un nombre invertido en un factor de escala termina en alguien
+   *  dividiendo donde correspondía multiplicar. */
+  metrosPorUnidad: number
   bounds: { min: [number, number, number]; max: [number, number, number] }
   spawns: Array<[number, number, number]>
   brushes: BrushColision[]
@@ -462,7 +469,7 @@ export async function convertir(
 
   const colision: MapaColision = {
     nombre,
-    unidadesPorMetro: METROS_POR_UNIDAD,
+    metrosPorUnidad: METROS_POR_UNIDAD,
     bounds:
       brushes.length === 0
         ? { min: [0, 0, 0], max: [0, 0, 0] }
