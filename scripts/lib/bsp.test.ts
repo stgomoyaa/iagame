@@ -6,6 +6,7 @@ import {
   ejesSourceAThree,
   planoSourceAThreeMetros,
   puntoSourceAThreeMetros,
+  yawSourceAThree,
 } from './bsp.ts'
 
 /**
@@ -89,5 +90,42 @@ describe('bboxSourceAThreeMetros', () => {
     const { min, max } = bboxSourceAThreeMetros([1, 10, 5], [2, 20, 6])
     expect(min[2]).toBeCloseTo(-20 * S, 10)
     expect(max[2]).toBeCloseTo(-10 * S, 10)
+  })
+})
+
+describe('yawSourceAThree', () => {
+  /** Dirección de mirada que produce un yaw del motor (`camera.rotation.y`
+   *  con orden YXZ): la cámara mira a -Z y el ángulo rota sobre Y. */
+  function adelante(yaw: number): [number, number] {
+    return [-Math.sin(yaw), -Math.cos(yaw)]
+  }
+
+  it('yaw 0 de Source (mirando a +X) mira a +X en three', () => {
+    const [x, z] = adelante(yawSourceAThree(0))
+    expect(x).toBeCloseTo(1)
+    expect(z).toBeCloseTo(0)
+  })
+
+  it('yaw 180 de Source mira a -X en three', () => {
+    // Son las dos direcciones reales de nuketown: los 16 spawns de un bando
+    // a 0 grados y los 16 del otro a 180, enfrentados a lo largo del eje X.
+    const [x, z] = adelante(yawSourceAThree(180))
+    expect(x).toBeCloseTo(-1)
+    expect(z).toBeCloseTo(0)
+  })
+
+  it('yaw 90 de Source (mirando a +Y de Source) mira a -Z en three', () => {
+    // +Y de Source es -Z de three (ver ejesSourceAThree). Éste y el de 270
+    // son los casos que distinguen un signo dado vuelta de una conversión
+    // correcta: con los de 0 y 180 solos, las dos fórmulas coinciden.
+    const [x, z] = adelante(yawSourceAThree(90))
+    expect(x).toBeCloseTo(0)
+    expect(z).toBeCloseTo(-1)
+  })
+
+  it('yaw 270 de Source mira a +Z en three', () => {
+    const [x, z] = adelante(yawSourceAThree(270))
+    expect(x).toBeCloseTo(0)
+    expect(z).toBeCloseTo(1)
   })
 })

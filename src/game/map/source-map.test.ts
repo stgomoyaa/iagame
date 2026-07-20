@@ -182,3 +182,54 @@ describe('dm_nuketown real', () => {
     expect(spawnsUtilizables(crudo.spawns, def.convexes!)).toHaveLength(crudo.spawns.length)
   })
 })
+
+describe('yaws de spawn', () => {
+  it('un JSON sin spawnYaws sigue siendo válido y carga sin yaws', () => {
+    // Compatibilidad hacia atrás: los .json que produjo el conversor antes
+    // de que existieran los yaws tienen que seguir cargando. El motor los
+    // trata como "sin preferencia" y nadie ve un cambio.
+    const def = mapDefDesdeJson(jsonDePrueba(), 'prueba')
+    expect(def.spawnYaws).toBeUndefined()
+  })
+
+  it('rechaza un spawnYaws desalineado con spawns', () => {
+    // Un array de largo distinto significa que el conversor y el motor no
+    // se pusieron de acuerdo. Usarlo igual haría aparecer a cada jugador
+    // mirando hacia donde debía mirar OTRO spawn, que es un defecto mucho
+    // más difícil de atribuir que un mapa que no carga.
+    const roto = { ...jsonDePrueba({ spawns: [[0, 0, 0], [1, 0, 1]] }), spawnYaws: [0.5] }
+    expect(esMapaFuenteJson(roto)).toBe(false)
+  })
+
+  it('los yaws siguen a su spawn cuando el filtro de utilizables descarta alguno', () => {
+    // El bug que este test fija: `spawnsUtilizables` descarta los spawns
+    // que caen dentro de un brush, así que la lista final es MÁS CORTA que
+    // la cruda. Indexar los yaws por la posición en la lista ya filtrada
+    // desalinea las dos y nadie lo nota mirando el mapa cargar.
+    //
+    // El spawn del medio queda enterrado en la caja del suelo (y = -0.9,
+    // adentro del brush que va de -1 a 0), así que sale del filtro; los de
+    // los extremos, a y = 0.5, sobreviven. El yaw que le corresponde al
+    // último es 3, no 2.
+    const json = {
+      ...jsonDePrueba({
+        spawns: [[0, 0.5, 0], [2, -0.9, 2], [4, 0.5, 4]],
+      }),
+      spawnYaws: [1, 2, 3],
+    }
+    expect(esMapaFuenteJson(json)).toBe(true)
+
+    const def = mapDefDesdeJson(json as MapaFuenteJson, 'prueba')
+    expect(def.spawns).toHaveLength(2)
+    expect(def.spawnYaws).toEqual([1, 3])
+  })
+
+  it('spawnYaws queda alineado con spawns en largo, siempre', () => {
+    const json = {
+      ...jsonDePrueba({ spawns: [[0, 0.5, 0], [4, 0.5, 4]] }),
+      spawnYaws: [1, 3],
+    }
+    const def = mapDefDesdeJson(json as MapaFuenteJson, 'prueba')
+    expect(def.spawnYaws).toHaveLength(def.spawns.length)
+  })
+})

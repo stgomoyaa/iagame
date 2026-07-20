@@ -37,6 +37,22 @@ export interface MapDef {
    */
   convexes?: Convex[]
   spawns: Vec3[]
+  /**
+   * Hacia dónde mira quien aparece en `spawns[i]`, en radianes y en la MISMA
+   * convención que `PlayerState.yaw` (la que consume `camera.rotation.y`).
+   * Paralelo a `spawns`: mismo largo, mismo orden.
+   *
+   * Opcional porque los mapas escritos en código no la traen: ahí aparecer
+   * mirando a -Z es tan bueno como cualquier otra cosa, porque sus spawns
+   * están repartidos alrededor de un centro y no hay un "frente" del mapa.
+   * En un mapa de Source sí lo hay: el mapper puso los 32 `info_player_*`
+   * de nuketown con `angles` enfrentados (los 16 de un bando a 0°, los 16
+   * del otro a 180°), que es lo que hace que el jugador aparezca mirando la
+   * calle por donde viene el enemigo. Sin esto todos aparecen mirando a -Z,
+   * que en nuketown es perpendicular al eje del mapa: 27 de los 32 spawns
+   * quedan mirando al vacío fuera de la zona jugable.
+   */
+  spawnYaws?: number[]
   bounds: Box
   /**
    * Triángulos de la malla visible, no indexados, en metros y ejes de

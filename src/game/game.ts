@@ -103,7 +103,7 @@ import {
   stepMatch,
   type MatchState,
 } from '@/game/match/match'
-import { invulnerabilityExpiresAt, isInvulnerable, pickFarthestSpawn } from '@/game/match/respawn'
+import { invulnerabilityExpiresAt, isInvulnerable, pickFarthestSpawn, spreadInitialSpawns } from '@/game/match/respawn'
 import { createMatchBots, stepMatchBotsThink } from '@/game/match/squad'
 import { createMatchTargets, type MatchTargets } from '@/game/match/targeting'
 import { MATCH } from '@/game/match/tuning'
@@ -315,7 +315,14 @@ export function createGame(
   const tuning = createTuningPanel()
   const matchTuningPanel = createMatchTuningPanel(mapNames(), mapaActual.name)
   const loop = createFixedLoop()
-  const player = createPlayerState(mapaActual.spawns[0])
+  // Reparto de spawns del ARRANQUE. Se calcula antes de crear al jugador
+  // porque él es el participante 0 del plan: en un mapa de Source los
+  // spawns vienen agrupados por bando y pegados entre sí, y tomarlos en
+  // orden dejaba a media partida dentro de la misma casa (ver
+  // spreadInitialSpawns en match/respawn.ts). getBotCount() es una lectura
+  // pura de la query, se la puede llamar acá arriba sin efectos.
+  const spawnPlan = spreadInitialSpawns(mapaActual.spawns, 1 + getBotCount())
+  const player = createPlayerState(mapaActual.spawns[spawnPlan[0]])
 
   applyQuickMatchOverrides()
 
@@ -349,10 +356,16 @@ export function createGame(
   const botCount = getBotCount()
   const botArchetypes = assignBotArchetypes(botCount)
   const botDifficultyRanks = resolveDifficultyRanks(botCount, careerDifficulty(carreraInicial))
-  // spawns.slice(1): el jugador ya ocupa spawns[0] (arriba). No es
-  // obligatorio (la física resuelve cualquier superposición inicial), pero
-  // evita que todo el escuadrón aparezca encima del jugador al arrancar.
-  const bots: BotState[] = createMatchBots(mapaActual.spawns.slice(1), botArchetypes, botDifficultyRanks)
+  // Los bots toman los spawns 1..N del MISMO plan que ubicó al jugador
+  // (spawnPlan, arriba), no `spawns.slice(1)`. El slice repartía en el
+  // orden en que el mapper los escribió, que en nuketown es "los 16 de una
+  // casa primero": con 5 bots, cuatro arrancaban a menos de 5 m del
+  // jugador. El plan los separa lo más posible entre sí.
+  const bots: BotState[] = createMatchBots(
+    spawnPlan.slice(1).map((i) => mapaActual.spawns[i]),
+    botArchetypes,
+    botDifficultyRanks,
+  )
 
   // Navgrid horneado UNA vez desde la arena real -- nunca se recalcula en
   // frame().
@@ -481,6 +494,27 @@ export function createGame(
   // el valor interpolado de combat/ads.ts.
   let sensMultiplier = 1
   const input = createInputSystem(() => SENSITIVITY * sensMultiplier)
+
+  /**
+   * Deja al jugador mirando hacia donde el mapper apuntó ese spawn. Sin
+   * esto todos aparecen con yaw 0 (mirando a -Z), que en nuketown es
+   * perpendicular al eje del mapa: 27 de los 32 spawns quedan mirando al
+   * vacío fuera de la zona jugable en vez de a la calle por donde viene el
+   * enemigo. Es una escritura, no una animación: el jugador todavía no
+   * movió el mouse, así que no le estamos sacando el control de la cámara.
+   *
+   * Un mapa sin `spawnYaws` (los tres escritos en código, o un JSON de un
+   * conversor viejo) no toca el yaw y se comporta igual que antes.
+   */
+  function mirarComoElSpawn(spawnIndex: number): void {
+    const yaws = mapaActual.spawnYaws
+    if (yaws === undefined) return
+    const yaw = yaws[spawnIndex]
+    if (yaw === undefined) return
+    input.player.yaw = yaw
+  }
+
+  mirarComoElSpawn(spawnPlan[0])
 
   // Estado del viewmodel: todo preasignado una sola vez acá. El frame loop
   // sólo muta estos objetos, nunca crea uno nuevo (presupuesto de cero
@@ -801,6 +835,11 @@ export function createGame(
           player.velocity.x = 0
           player.velocity.y = 0
           player.velocity.z = 0
+          // Mismo criterio que al arrancar: reaparecer mirando hacia donde
+          // el spawn apunta. Reaparecer conservando el yaw de la muerte
+          // deja al jugador mirando hacia donde lo mataron, que en otro
+          // punto del mapa no significa nada.
+          mirarComoElSpawn(spawnIndex)
           resetPlayerHealth(feedbackState.health)
           invulnerableUntilS[PLAYER_ID] = invulnerabilityExpiresAt(matchState.elapsedS, MATCH.respawnInvulnerabilityS)
         }

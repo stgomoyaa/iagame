@@ -65,6 +65,7 @@ import {
   leerPlanos,
   planoSourceAThreeMetros,
   puntoSourceAThreeMetros,
+  yawSourceAThree,
 } from './lib/bsp.ts'
 
 // Bits de SURF_ relevantes de LUMP_TEXINFO (texinfo_t.flags). El resto del
@@ -107,6 +108,8 @@ export interface MapaColision {
   metrosPorUnidad: number
   bounds: { min: [number, number, number]; max: [number, number, number] }
   spawns: Array<[number, number, number]>
+  /** Yaw de cada spawn, en radianes del motor, paralelo a `spawns`. */
+  spawnYaws: number[]
   brushes: BrushColision[]
 }
 
@@ -140,10 +143,26 @@ function leerEntidades(texto: string): Array<Record<string, string>> {
   return entidades
 }
 
-/** Spawns del mapa: origin de toda entidad `info_player_*`, en metros de three.js. */
-function leerSpawns(buf: Buffer, lump: Lump): Array<[number, number, number]> {
+/**
+ * Spawns del mapa: origin + yaw de toda entidad `info_player_*`, en metros y
+ * radianes de three.js.
+ *
+ * El yaw sale de `angles` ("pitch yaw roll"), del que sólo se usa el yaw:
+ * pitch y roll en un `info_player_*` son basura del editor -- el jugador
+ * aparece parado y mirando al horizonte, no cabeceado ni inclinado.
+ *
+ * Un spawn sin `angles` (o con uno ilegible) cae en 0, que en la convención
+ * de Source es "mirando a +X". No se lo descarta: perder un punto de
+ * aparición por no saber hacia dónde mirar sería cambiar un defecto chico
+ * por uno grande.
+ */
+function leerSpawns(
+  buf: Buffer,
+  lump: Lump,
+): { origenes: Array<[number, number, number]>; yaws: number[] } {
   const texto = buf.toString('utf8', lump.offset, lump.offset + lump.largo)
-  const spawns: Array<[number, number, number]> = []
+  const origenes: Array<[number, number, number]> = []
+  const yaws: number[] = []
 
   for (const ent of leerEntidades(texto)) {
     if (!ent.classname?.startsWith('info_player_')) continue
@@ -152,10 +171,16 @@ function leerSpawns(buf: Buffer, lump: Lump): Array<[number, number, number]> {
     const partes = ent.origin.trim().split(/\s+/).map(Number)
     if (partes.length !== 3 || partes.some((n) => !Number.isFinite(n))) continue
 
-    spawns.push(puntoSourceAThreeMetros(partes as [number, number, number]))
+    origenes.push(puntoSourceAThreeMetros(partes as [number, number, number]))
+
+    const angulos = ent.angles?.trim().split(/\s+/).map(Number)
+    const yawSource = angulos !== undefined && angulos.length === 3 && Number.isFinite(angulos[1])
+      ? angulos[1]
+      : 0
+    yaws.push(yawSourceAThree(yawSource))
   }
 
-  return spawns
+  return { origenes, yaws }
 }
 
 function leerVertices(buf: Buffer, lump: Lump): Array<[number, number, number]> {
@@ -435,7 +460,7 @@ export async function convertir(
   const { lumps } = leerLumps(buf)
   const { nx, ny, nz, dist } = leerPlanos(buf, lumps[LUMP_PLANES])
 
-  const spawns = leerSpawns(buf, lumps[LUMP_ENTITIES])
+  const { origenes: spawns, yaws: spawnYaws } = leerSpawns(buf, lumps[LUMP_ENTITIES])
   if (spawns.length === 0) {
     console.error(`[${nombre}] ADVERTENCIA: no se encontró ningún info_player_*. Este mapa no es jugable.`)
   }
@@ -482,6 +507,7 @@ export async function convertir(
         ? { min: [0, 0, 0], max: [0, 0, 0] }
         : { min: boundsMin, max: boundsMax },
     spawns,
+    spawnYaws,
     brushes,
   }
 

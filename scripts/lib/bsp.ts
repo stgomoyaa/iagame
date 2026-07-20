@@ -373,6 +373,36 @@ export function ejesSourceAThree(v: readonly [number, number, number]): [number,
   return [v[0], v[2], -v[1]]
 }
 
+/**
+ * Yaw de Source (el segundo número de `angles`, en GRADOS) al yaw del motor
+ * (radianes, el que va a `camera.rotation.y` con orden YXZ).
+ *
+ * Las dos convenciones no coinciden en nada: en Source yaw=0 mira a +X y el
+ * ángulo crece hacia +Y; en three, con la cámara rotando sobre Y, yaw=0 mira
+ * a -Z y el ángulo crece hacia... el otro lado. Componiendo la permutación
+ * de ejes de `ejesSourceAThree` (+Y de Source es -Z de three) con la
+ * dirección que produce `camera.rotation.y`, el resultado se reduce a un
+ * signo y un cuarto de vuelta:
+ *
+ *     adelante_source = ( cos θ, sin θ, 0 )        (en ejes de Source)
+ *     adelante_three  = ( cos θ, 0, -sin θ )       (tras ejesSourceAThree)
+ *     adelante_three  = ( -sin ψ, 0, -cos ψ )      (lo que da rotation.y = ψ)
+ *     => sin ψ = -cos θ, cos ψ = sin θ  =>  ψ = θ - π/2
+ *
+ * Se verifica en bsp.test.ts contra las CUATRO direcciones cardinales, no
+ * sólo contra las dos que aparecen en nuketown (θ=0 y θ=180). Los mapas de
+ * Source enfrentan a los dos bandos a lo largo de un eje, así que sus dos
+ * valores están a 180° -- y `-θ - π/2` (el signo equivocado) da el mismo
+ * resultado que `θ - π/2` para esos dos, porque difieren en 2θ, que para
+ * θ=0 y θ=180 es 0 o una vuelta entera. O sea: la conversión con el signo
+ * dado vuelta pasa cualquier prueba hecha SÓLO con nuketown y falla en
+ * cuanto un mapa tenga un spawn en diagonal. Por eso los casos de 90 y 270
+ * de ese test no son decoración.
+ */
+export function yawSourceAThree(grados: number): number {
+  return (grados * Math.PI) / 180 - Math.PI / 2
+}
+
 /** `ejesSourceAThree` + conversión de unidades de Source a metros. */
 export function puntoSourceAThreeMetros(v: readonly [number, number, number]): [number, number, number] {
   const [x, y, z] = ejesSourceAThree(v)
