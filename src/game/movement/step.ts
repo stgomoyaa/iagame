@@ -1,6 +1,6 @@
 import { TICK_DT } from '@/game/engine/constants'
 import { sanitizeDt } from '@/game/engine/dt'
-import type { Box } from '@/game/map/types'
+import type { Box, Convex } from '@/game/map/types'
 import { copy, vec3, type Vec3 } from '@/game/math/vec3'
 import { accelerate, applyFriction } from '@/game/movement/accelerate'
 import { applySoftCap, shouldSkipFriction } from '@/game/movement/bhop'
@@ -12,6 +12,10 @@ import { PLAYER_CAPSULE, resolveMove, type MoveResult } from '@/game/physics/cap
 const scratchWishDir: Vec3 = vec3()
 const scratchDelta: Vec3 = vec3()
 const scratchResult: MoveResult = { hitGround: false, hitCeiling: false, hitWall: false }
+// Ningún mapa actual trae brushes convexos (eso es de la tarea de
+// integración con BSP, todavía no escrita); constante de módulo y no un
+// literal `[]` en el call site para no asignar por tick.
+const NO_CONVEXES: Convex[] = []
 
 export function createPlayerState(spawn: Vec3): PlayerState {
   return {
@@ -167,7 +171,7 @@ export function stepPlayer(
   scratchDelta.y = state.velocity.y * dt
   scratchDelta.z = state.velocity.z * dt
 
-  resolveMove(state.position, scratchDelta, PLAYER_CAPSULE, boxes, scratchResult)
+  resolveMove(state.position, scratchDelta, PLAYER_CAPSULE, boxes, NO_CONVEXES, scratchResult)
 
   // Mantle: sólo si chocamos una pared en el aire yendo hacia ella.
   if (!scratchResult.hitGround && scratchResult.hitWall) {

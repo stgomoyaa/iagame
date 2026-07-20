@@ -5,6 +5,21 @@ export interface Box {
   max: Vec3
 }
 
+/**
+ * Poliedro convexo como intersección de semiespacios, para brushes de Source
+ * que no son cajas alineadas a los ejes (rampas, muros en ángulo). Ver la
+ * derivación completa en physics/capsule.ts.
+ */
+export interface Convex {
+  /** Planos empaquetados (nx, ny, nz, d), 4 floats por plano. Normales hacia
+   *  AFUERA: el interior del cuerpo es donde dot(n, p) <= d. */
+  planes: Float32Array
+  count: number
+  /** Caja envolvente, para descarte rápido antes de mirar los planos. */
+  min: Vec3
+  max: Vec3
+}
+
 export interface MapDef {
   name: string
   /** Geometría sólida. Alimenta tanto la colisión como el mesh visual. */
