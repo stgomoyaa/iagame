@@ -860,7 +860,27 @@ export function colorDelCielo(
 
   // Mezcla de color frío/cálido. El sesgo por radio copia la referencia:
   // azul y blanco hacia adentro, magenta rojizo hacia afuera.
-  const mezclaBruta = fbm(dir.x * 2.2, dir.y * 2.2, dir.z * 2.2, params.semilla + 577, 3) * 0.5 + 0.5
+  //
+  // La mezcla tiene DOS escalas y esa es la parte que importa:
+  //
+  //  - la gruesa (2.2) reparte regiones grandes azules y magentas, que es lo
+  //    que hace que el disco no sea de un solo color;
+  //  - la fina (26) hace que DENTRO de un brazo el tono salte de grumo en
+  //    grumo, y es de donde sale la textura granular de la referencia.
+  //
+  // La fina se agregó porque con sólo la gruesa los brazos salían lisos, como
+  // aerografiados: se leía la espiral pero no el grano. La alternativa obvia
+  // -- subir el grano de LUMINANCIA -- no se podía: el contraste local ya
+  // está en 0.0401 de un techo de 0.05, o sea que queda el 20% de margen y se
+  // lo llevarían las estrellas. En cambio el croma no tiene techo (sólo el
+  // piso de CROMA_ESTRUCTURA_PISO), así que meter el grano acá es
+  // prácticamente gratis para el gate: mover la mezcla frío/cálido cambia el
+  // TONO del texel y casi no su brillo, porque los dos extremos de la mezcla
+  // están elegidos con luminancias parecidas. Es la misma idea que sostiene
+  // todo el archivo, aplicada a la escala del grano en vez de a la del brazo.
+  const mezclaGruesa = fbm(dir.x * 2.2, dir.y * 2.2, dir.z * 2.2, params.semilla + 577, 3) * 0.5 + 0.5
+  const mezclaFina = fbm(dir.x * 26, dir.y * 26, dir.z * 26, params.semilla + 733, 3)
+  const mezclaBruta = mezclaGruesa + mezclaFina * 0.42
   const mezcla = suavizar(Math.min(1, Math.max(0, mezclaBruta * 1.15 + rNorm * 0.35 - 0.28)))
   const brazoR = interpolar(p.brazoFrio.r, p.brazoCalido.r, mezcla)
   const brazoG = interpolar(p.brazoFrio.g, p.brazoCalido.g, mezcla)
