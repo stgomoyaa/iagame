@@ -153,6 +153,12 @@ import {
 } from '@/game/match/medal-tracker'
 import type { MedalTally } from '@/game/progression/medals'
 import { createMatchBots, stepMatchBotsThink } from '@/game/match/squad'
+import { acotarBotsIniciales, MAX_BOTS, MAX_PARTICIPANTES } from '@/game/match/roster'
+import {
+  agregarBot as agregarBotAlRoster,
+  crearRosterVivo,
+  quitarBot as quitarBotDelRoster,
+} from '@/game/match/roster-vivo'
 import { createMatchTargets, type MatchTargets } from '@/game/match/targeting'
 import { MATCH } from '@/game/match/tuning'
 import { createMatchTuningPanel } from '@/game/match/tuning-panel'
@@ -264,6 +270,37 @@ export interface Game {
   readHud(out: HudSnapshot): void
 
   /**
+   * Mete un bot más, en el equipo con menos gente. Devuelve `false` si no se
+   * pudo (roster lleno, partida terminada, o es una ranked -- ahí el roster
+   * está cerrado a propósito, ver match/configuracion.ts).
+   *
+   * La llama la UI desde una tecla (ui/GameCanvas.tsx). Vive en el motor y
+   * no en la UI porque quién entra y en qué equipo es una decisión de
+   * partida, no de presentación.
+   */
+  agregarBot(): boolean
+  /** Saca al último bot que entró. `false` si ya está en el piso de un bot,
+   *  si la partida terminó, o si es ranked. */
+  quitarBot(): boolean
+  /** Bots en cancha ahora mismo. Lo lee la UI para el aviso de la tecla y
+   *  para saber qué filas del marcador tienen a alguien jugando. */
+  readonly botsActivos: number
+  /**
+   * Participantes que el marcador y el resumen deben MOSTRAR: el jugador más
+   * todo bot que alguna vez estuvo en cancha (incluido el que ya salió), y
+   * ninguno de los slots que nunca entraron. Es `1 + marca de agua` del
+   * roster (ver match/roster-vivo.ts).
+   *
+   * `matchState.participants` siempre tiene el tamaño del roster completo
+   * (hace falta para indexar por id a cualquier bot que pueda entrar), así
+   * que la UI corta con esto antes de dibujar -- sin el corte, el marcador
+   * mostraría filas fantasma de bots que nunca jugaron.
+   */
+  readonly participantesVisibles: number
+  /** ¿Esta partida deja tocar el roster? Falso en ranked. */
+  readonly rosterEditable: boolean
+
+  /**
    * Congela la simulación Y el render. Con `true`, frame() sale antes de
    * simular nada: el último cuadro dibujado se queda en pantalla como fondo
    * del menú (el compositor conserva lo último presentado mientras nadie
@@ -318,8 +355,8 @@ function sensibilidadBase(): number {
  *  `?debug=1` en weapons/viewmodel/tuning-panel.ts). Default MATCH.botCount
  *  (match/tuning.ts) -- vive ahí, no acá, para que el panel de tuning de
  *  partida (match/tuning-panel.ts) pueda ajustarlo sin recompilar.
- *  Clampeado a [0,20] contra un valor absurdo en la URL. */
-const MAX_BOT_COUNT = 20
+ *  Clampeado contra un valor absurdo en la URL por `acotarBotsIniciales`
+ *  (match/roster.ts), que es donde vive el tope real del motor. */
 
 /** Cuánto se corre la boca aproximada respecto del ojo, en metros. */
 const BOCA_ADELANTE = 0.45
@@ -374,10 +411,17 @@ function getBotCount(): number {
   // disparándote. `?bots=N` explícito sigue mandando -- practicar con un
   // par de bots sueltos al lado de las dianas es un caso legítimo, sólo
   // no es lo que pasa si no lo pedís.
-  if (raw === null) return esModoPractica() ? 0 : MATCH.botCount
+  if (raw === null) return acotarBotsIniciales(esModoPractica() ? 0 : MATCH.botCount)
   const n = Number.parseInt(raw, 10)
-  if (!Number.isFinite(n)) return esModoPractica() ? 0 : MATCH.botCount
-  return Math.max(0, Math.min(MAX_BOT_COUNT, n))
+  if (!Number.isFinite(n)) return acotarBotsIniciales(esModoPractica() ? 0 : MATCH.botCount)
+  return acotarBotsIniciales(n)
+}
+
+/** ¿Esta partida deja agregar y sacar bots con el teclado? La ranked no
+ *  (match/configuracion.ts): su roster es parte de lo que hace comparables
+ *  dos partidas rankeadas entre sí. */
+function getPermiteEditarRoster(): boolean {
+  return new URLSearchParams(window.location.search).get('ranked') !== '1'
 }
 
 /** Override explícito de dificultad 0..1 (bots/difficulty.ts) vía
@@ -546,24 +590,57 @@ export function createGame(
   const carreraInicial = careerFromProgress(progress)
 
   const matchMode = getMatchMode()
+  // ROSTER COMPLETO CONTRA ROSTER ACTIVO
+  //
+  // El motor construye SIEMPRE el roster máximo (match/roster.ts
+  // MAX_PARTICIPANTES) -- estadísticas, hitboxes, posiciones, personajes
+  // dibujados, mixers de animación -- y después juega con un PREFIJO de él.
+  // `rosterCompleto` no cambia nunca de largo; `bots` sí, y es el que ve
+  // todo el resto de este archivo: los bucles de frame ya iteraban
+  // `bots.length`, así que agregar y sacar en caliente no necesitó tocar ni
+  // uno solo de ellos.
+  //
+  // Por qué reservar de más en vez de crecer cuando hace falta: crecer
+  // significa asignar (arrays de estadísticas, cargar un personaje nuevo,
+  // rearmar las listas de hitboxes enemigas) en medio de una partida, y este
+  // motor tiene guards que detectan fugas de 8 bytes por frame. Reservando
+  // arriba, la tecla sólo enciende un slot que ya existía.
+  //
+  // Y por qué el activo es un PREFIJO y no un conjunto cualquiera: el equipo
+  // sale de la paridad del id, así que activar en orden pone al bot nuevo en
+  // el equipo con menos gente sin necesidad de una tabla de equipos que
+  // pudiera discrepar del puntaje o del color del personaje. La derivación
+  // completa está en la cabecera de match/roster.ts.
   const botCount = getBotCount()
-  const botArchetypes = assignBotArchetypes(botCount)
+  const botArchetypes = assignBotArchetypes(MAX_BOTS)
   // Arma concreta de cada bot. El arquetipo sigue decidiendo las
   // estadísticas; el slug existe SÓLO para que el disparo del bot suene a un
   // arma y no a una familia entera (ver match/loadouts.ts). Se resuelve una
   // vez acá y no por disparo: el catálogo no cambia durante la partida.
   const botWeaponSlugs = assignBotWeaponSlugs(botArchetypes.map((a) => a.id))
-  const botDifficultyRanks = resolveDifficultyRanks(botCount, careerDifficulty(carreraInicial))
+  // Para el roster COMPLETO, no sólo para los que arrancan: un bot que entra
+  // a mitad de partida tiene que traer su arquetipo, su arma y su dificultad
+  // ya resueltos, sin recalcular nada con la partida corriendo. Las tres
+  // asignaciones son cíclicas por índice (`i % n` en match/loadouts.ts y en
+  // resolveDifficultyRanks), así que los primeros N de una tanda de 15 son
+  // exactamente los mismos que los N de una tanda de N -- el roster inicial
+  // no cambia por reservar de más.
+  const botDifficultyRanks = resolveDifficultyRanks(MAX_BOTS, careerDifficulty(carreraInicial))
   // Los bots toman los spawns 1..N del MISMO plan que ubicó al jugador
   // (spawnPlan, arriba), no `spawns.slice(1)`. El slice repartía en el
   // orden en que el mapper los escribió, que en nuketown es "los 16 de una
   // casa primero": con 5 bots, cuatro arrancaban a menos de 5 m del
   // jugador. El plan los separa lo más posible entre sí.
-  const bots: BotState[] = createMatchBots(
+  const rosterCompleto: BotState[] = createMatchBots(
     spawnPlan.slice(1).map((i) => mapaActual.spawns[i]),
     botArchetypes,
     botDifficultyRanks,
   )
+  // El prefijo activo. Es un array MUTABLE (push/pop) y es el que ve el
+  // resto del archivo -- de ahí que agregar y sacar bots no haya requerido
+  // cambiar ningún bucle de frame. Nunca se reasigna ni se copia: el
+  // push/pop pasa sólo al apretar una tecla, jamás por frame.
+  const bots: BotState[] = rosterCompleto.slice(0, botCount)
 
   // Navgrid horneado UNA vez desde la arena real -- nunca se recalcula en
   // frame().
@@ -573,8 +650,16 @@ export function createGame(
   // (match/types.ts): el color que ve el jugador y el bando que decide si
   // hay fuego amigo no pueden salir de dos fuentes distintas o el juego
   // mentiría sobre a quién se le puede disparar.
-  const botTeams = bots.map((_, i) => teamForParticipant(matchMode, i + 1))
-  const botsRenderer = createBotsRenderer(gfx.scene, bots, botTeams)
+  //
+  // Se arma para el roster COMPLETO: el personaje y su tinte de equipo se
+  // cargan una vez al arrancar, así que un bot que entra a mitad de partida
+  // ya tiene su malla lista y no dispara ninguna carga con el juego
+  // corriendo. `sync()` dibuja los primeros `bots.length` y esconde el resto
+  // -- ese bucle final ya existía en bots/renderer.ts para los bots que
+  // sobran, y es exactamente el comportamiento que hacía falta acá, así que
+  // ese archivo no se tocó.
+  const botTeams = rosterCompleto.map((_, i) => teamForParticipant(matchMode, i + 1))
+  const botsRenderer = createBotsRenderer(gfx.scene, rosterCompleto, botTeams)
 
   // Participantes de la partida: 0 = jugador (PLAYER_ID), 1..N = bots por
   // índice+1 (match/types.ts). El jugador reusa bots/health.ts tal cual --
@@ -586,7 +671,15 @@ export function createGame(
   // hace falta tocarlo para dársela: cada golpe resta a ambos por el mismo
   // monto, y el respawn resetea ambos, así que quedan sincronizados sin
   // fusionarlos.
-  const participantCount = 1 + bots.length
+  // Dimensionado por el roster COMPLETO, no por el que está en cancha: todo
+  // lo que se indexa por id de participante (estadísticas, posiciones,
+  // invulnerabilidad, historial de spawns, medallas) tiene que tener slot
+  // para un bot que todavía no entró Y conservar el del que ya salió. Ésa es
+  // la razón de que el marcador sobreviva a que cambie la cantidad de
+  // jugadores a mitad de partida: los kills de un bot que se fue siguen
+  // estando en `matchState.participants[su id]`, porque ese array nunca se
+  // reindexa ni se compacta.
+  const participantCount = MAX_PARTICIPANTES
   const playerHealth = createBotHealthState(BOTS.maxHealth)
   const matchState: MatchState = createMatchState(matchMode, participantCount, MATCH)
   const matchTargets: MatchTargets = createMatchTargets(matchMode, participantCount)
@@ -596,10 +689,10 @@ export function createGame(
   const medalTracker = createMedalTracker(matchMode, participantCount, PLAYER_ID)
   const medalKill = createKillContext()
   const invulnerableUntilS: number[] = new Array(participantCount).fill(-Infinity) as number[]
-  const botWasAlive: boolean[] = new Array(bots.length).fill(true) as boolean[]
+  const botWasAlive: boolean[] = new Array(MAX_BOTS).fill(true) as boolean[]
   // Spawn elegido por cada bot muerto, para anotarlo en el historial recién
   // cuando revive. Int32Array preasignado: se escribe por tick, nunca asigna.
-  const botSpawnIndex = new Int32Array(bots.length)
+  const botSpawnIndex = new Int32Array(MAX_BOTS)
   // Scratch de posiciones enemigas para pickFarthestSpawn (match/respawn.ts):
   // tamaño máximo (participantCount - 1), reusado cada tick sin reasignar
   // -- ver fillEnemyPositions más abajo.
@@ -671,12 +764,12 @@ export function createGame(
   const targetCount = targetsState.targets.length
   playerHitboxes[0].owner = targetCount + PLAYER_ID
   playerHitboxes[1].owner = targetCount + PLAYER_ID
-  bots.forEach((bot, i) => {
+  rosterCompleto.forEach((bot, i) => {
     for (const hitbox of bot.hitboxes) hitbox.owner = targetCount + (i + 1)
   })
 
   const allCombatantHitboxes: Hitbox[] = [playerHitboxes[0], playerHitboxes[1]]
-  for (const bot of bots) allCombatantHitboxes.push(...bot.hitboxes)
+  for (const bot of rosterCompleto) allCombatantHitboxes.push(...bot.hitboxes)
 
   // Lista de hitboxes ENEMIGAS por participante, construida UNA vez acá
   // (referencias reusadas cada frame, cero asignaciones en frame()): en TDM
@@ -691,6 +784,26 @@ export function createGame(
   // El jugador además puede pegarle a las dianas de práctica (targets/,
   // fase 1) -- no participan del puntaje, sólo están para plinkear.
   const playerShotHitboxes: Hitbox[] = [...targetsState.hitboxes, ...enemyHitboxesFor[PLAYER_ID]]
+
+  // ---- Bots que entran y salen a mitad de partida ----
+  //
+  // La lógica vive en match/roster-vivo.ts, no acá: `createGame` necesita un
+  // canvas y una GPU, así que nada definido adentro se puede ejercitar en un
+  // test -- y el borde que esta tarea tenía que cuidar (que el marcador
+  // sobreviva a que cambie la cantidad de jugadores) es justo el que hay que
+  // poder probar a mano. `bots` es el mismo array que `rosterVivo.activos`,
+  // por referencia: los bucles de frame de más abajo lo siguen recorriendo
+  // sin enterarse de que ahora puede crecer y encogerse.
+  //
+  // Ranked no deja tocarlo: su roster es parte de lo que hace comparables
+  // dos partidas rankeadas entre sí (ver match/configuracion.ts).
+  const rosterVivo = crearRosterVivo(
+    rosterCompleto,
+    bots,
+    matchTargets,
+    botWasAlive,
+    getPermiteEditarRoster(),
+  )
 
   // Sistema de feedback (sección 5 del spec de fase 1): un solo estado
   // preasignado, una capa de DOM imperativo para pintarlo y un controlador
@@ -2218,6 +2331,42 @@ export function createGame(
               superficie: i.superficie,
             })),
         })
+
+        // Estado del roster en caliente, sólo lectura. Verificar en el
+        // navegador que agregar/sacar bots reparte bien los equipos y que el
+        // marcador sobrevive requiere leer el reparto real y las
+        // estadísticas por id, no mirarlo a ojo -- este hook responde eso sin
+        // abrir un canal de control (las teclas + y - son el único canal, en
+        // ui/GameCanvas.tsx). Mismo gate ?debug=1 que el resto: no existe en
+        // producción.
+        ;(
+          window as unknown as {
+            __rosterDebug?: () => {
+              botsActivos: number
+              participantesVisibles: number
+              equipoA: number
+              equipoB: number
+              stats: { id: number; kills: number; deaths: number }[]
+            }
+          }
+        ).__rosterDebug = () => {
+          let equipoA = 0
+          let equipoB = 0
+          for (let id = 0; id <= bots.length; id++) {
+            if (teamForParticipant(matchMode, id) === 0) equipoA++
+            else equipoB++
+          }
+          const visibles = 1 + rosterVivo.maxBotsActivos
+          return {
+            botsActivos: bots.length,
+            participantesVisibles: visibles,
+            equipoA,
+            equipoB,
+            stats: matchState.participants
+              .slice(0, visibles)
+              .map((p) => ({ id: p.id, kills: p.kills, deaths: p.deaths })),
+          }
+        }
       }
     },
     stop(): void {
@@ -2288,6 +2437,22 @@ export function createGame(
       out.slot = currentSlot
       out.primaryName = hudPrimaryName
       out.secondaryName = hudSecondaryName
+    },
+
+    agregarBot(): boolean {
+      return agregarBotAlRoster(rosterVivo, matchState.phase === 'ended')
+    },
+    quitarBot(): boolean {
+      return quitarBotDelRoster(rosterVivo, matchState.phase === 'ended')
+    },
+    get botsActivos() {
+      return bots.length
+    },
+    get participantesVisibles() {
+      return 1 + rosterVivo.maxBotsActivos
+    },
+    get rosterEditable() {
+      return rosterVivo.editable
     },
 
     setPaused(value: boolean): void {

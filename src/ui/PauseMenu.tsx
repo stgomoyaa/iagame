@@ -37,6 +37,10 @@ export interface PauseMenuProps {
   loadout: Loadout
   slotEquipado: LoadoutSlot
   nivelCuenta: number
+  /** ¿Esta partida deja agregar y sacar bots con + y -? Falso en ranked, y
+   *  entonces la ayuda de controles no menciona esas teclas: prometer una
+   *  tecla que no hace nada es peor que no nombrarla. */
+  rosterEditable: boolean
   onReanudar: () => void
   onEquipar: (slot: LoadoutSlot, slug: string) => void
 }
@@ -46,6 +50,7 @@ export function PauseMenu({
   loadout,
   slotEquipado,
   nivelCuenta,
+  rosterEditable,
   onReanudar,
   onEquipar,
 }: PauseMenuProps) {
@@ -161,6 +166,7 @@ export function PauseMenu({
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--arm-linea-tenue)] px-4 py-3">
           <p className="arm-mono text-[0.5625rem] text-[var(--arm-apagado)]">
             Esc abre este menú · Tab muestra el marcador · 1 y 2 cambian de arma
+            {rosterEditable ? ' · + y - agregan o sacan un bot' : ''}
           </p>
           <div className="flex flex-wrap items-center gap-4">
             <Link href="/armory" className="arm-enlace arm-mono text-[0.6875rem]">

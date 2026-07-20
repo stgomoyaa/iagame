@@ -225,7 +225,8 @@ body {
   outline-offset: -1px;
 }
 
-.arm-tab[aria-selected='true'] {
+.arm-tab[aria-selected='true'],
+.arm-tab[aria-pressed='true'] {
   color: var(--arm-texto);
   border-color: var(--arm-acento);
 }
@@ -256,6 +257,140 @@ body {
   .arm-enlace {
     transition: none;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Configuración de partida (ui/MatchSetup.tsx). Reusa los tokens --arm-* de
+   la armería: es el mismo juego, no una pantalla aparte. Lo propio de acá es
+   el INSTRUMENTO DE EQUIPOS, que dice el reparto A contra B en el mismo
+   lenguaje de barra segmentada que la armería usa para las estadísticas.
+   ------------------------------------------------------------------------ */
+
+/* Botón grande de lanzar. El acento se gana el relleno acá (es LA acción de
+   la pantalla), a diferencia de las pestañas, que sólo lo usan de borde. */
+.setup-jugar {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--arm-space-sm) var(--arm-space-xl);
+  background: color-mix(in oklch, var(--arm-acento), transparent 86%);
+  border: 1px solid var(--arm-acento);
+  color: var(--arm-texto);
+  cursor: pointer;
+  transition:
+    background-color 140ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-color 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.setup-jugar:hover {
+  background: color-mix(in oklch, var(--arm-acento), transparent 78%);
+}
+
+.setup-jugar:focus-visible {
+  outline: 1px solid var(--arm-acento);
+  outline-offset: 2px;
+}
+
+/* Botón de paso (más/menos). Cuadrado, mismo borde que las pestañas; el
+   estado deshabilitado en el tope/piso lo apaga en vez de esconderlo. */
+.setup-paso {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--arm-linea);
+  background: transparent;
+  color: var(--arm-texto);
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 140ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-color 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.setup-paso:hover:not(:disabled) {
+  background: var(--arm-panel-alto);
+  border-color: var(--arm-acento);
+}
+
+.setup-paso:focus-visible {
+  outline: 1px solid var(--arm-acento);
+  outline-offset: -1px;
+}
+
+.setup-paso:active:not(:disabled) {
+  background: color-mix(in oklch, var(--arm-panel-alto), var(--arm-acento) 8%);
+}
+
+.setup-paso:disabled {
+  cursor: not-allowed;
+  color: var(--arm-apagado);
+  border-color: var(--arm-linea-tenue);
+}
+
+/* Punto de tamaño del mapa: un cuadrito que crece con el tamaño. Refuerza la
+   etiqueta de texto sin inventar un ícono. */
+.setup-tamano {
+  display: block;
+  flex-shrink: 0;
+  width: 0.5rem;
+  height: 0.5rem;
+  background: var(--arm-acento);
+}
+
+.setup-tamano[data-tamano='pequeno'] {
+  opacity: 0.45;
+}
+
+.setup-tamano[data-tamano='mediano'] {
+  width: 0.6875rem;
+  height: 0.6875rem;
+  opacity: 0.7;
+}
+
+.setup-tamano[data-tamano='grande'] {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* Instrumento de equipos: hileras de muescas. Cada muesca es un jugador; tu
+   lugar va marcado. Mismo instrumento segmentado que .arm-barra. */
+.setup-equipos {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.setup-hilera {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.setup-muesca {
+  display: block;
+  width: 0.75rem;
+  height: 0.5rem;
+  background: var(--arm-linea);
+}
+
+/* Los dos equipos comparten el acento pero en dos intensidades, para leerse
+   como dos bandos sin meter un segundo hue (el acento es uno solo en toda la
+   pantalla, regla del sistema). */
+.setup-muesca[data-equipo='a'] {
+  background: var(--arm-acento);
+}
+
+.setup-muesca[data-equipo='b'] {
+  background: color-mix(in oklch, var(--arm-acento), var(--arm-panel) 55%);
+}
+
+/* Tu lugar: un anillo, no un relleno distinto, para que se lea "este eres tú"
+   sin cambiar de color. */
+.setup-muesca[data-tu='1'] {
+  outline: 1px solid var(--arm-texto);
+  outline-offset: 1px;
 }
 
 /* ---------------------------------------------------------------------------
