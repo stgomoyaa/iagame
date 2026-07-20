@@ -38,7 +38,20 @@ describe('presupuesto de asignaciones de match/', () => {
     global.gc?.()
     const antes = process.memoryUsage().heapUsed
 
-    for (let i = 0; i < 60_000; i++) beat(i)
+    // Derivación (mismo estilo que movement/tuning.ts): el guard tiene que
+    // detectar una fuga tan chica como UN number retenido por beat (~8 bytes
+    // en V8), no sólo el objeto {x,y,z} con el que se calibró originalmente
+    // el umbral de 4.5MB. Para superarlo con un margen holgado (3x o más):
+    // beats >= 3 * umbral_bytes / 8 = 3 * 4.5 * 1_048_576 / 8 = 1_769_472.
+    // A los 60_000 beats anteriores, una fuga de 8 bytes/beat daba sólo
+    // 0.46MB, muy por debajo del umbral -- ni cerca de cruzarlo. 1_800_000
+    // redondea hacia arriba y deja ~3.05x de margen (13.73MB de fuga
+    // esperada contra el umbral). Confirmado a mano: con un array a nivel de
+    // módulo que hace push de un number por llamada en stepMatch()
+    // (match/match.ts), este guard con 1_800_000 beats pasó de verde a rojo
+    // -- ver el informe de cierre de la tarea para el crecimiento medido
+    // exacto.
+    for (let i = 0; i < 1_800_000; i++) beat(i)
 
     global.gc?.()
     const despues = process.memoryUsage().heapUsed
@@ -63,7 +76,18 @@ describe('presupuesto de asignaciones de match/', () => {
     global.gc?.()
     const antes = process.memoryUsage().heapUsed
 
-    for (let i = 0; i < 200_000; i++) resolveNearestEnemy(targets, i % 9, out)
+    // Derivación (mismo estilo que movement/tuning.ts): iteraciones >=
+    // 3 * umbral_bytes / 8 = 3 * 1_048_576 / 8 = 393_216 para que una fuga de
+    // un number por llamada (~8 bytes) supere el umbral de 1MB con ~3x de
+    // margen. Las 200_000 anteriores ya daban 1.6MB (cruzaban el umbral,
+    // pero con sólo ~1.5x de margen -- un filo de cuchillo, no el "3x o más"
+    // pedido). 400_000 deja ~3.05x de margen (3.05MB de fuga esperada contra
+    // el umbral de 1MB). Confirmado a mano: con un array a nivel de módulo
+    // que hace push de un number por llamada en resolveNearestEnemy()
+    // (match/targeting.ts), este guard con 400_000 iteraciones pasó de verde
+    // a rojo -- ver el informe de cierre de la tarea para el crecimiento
+    // medido exacto.
+    for (let i = 0; i < 400_000; i++) resolveNearestEnemy(targets, i % 9, out)
 
     global.gc?.()
     const despues = process.memoryUsage().heapUsed
@@ -89,7 +113,15 @@ describe('presupuesto de asignaciones de match/', () => {
     global.gc?.()
     const antes = process.memoryUsage().heapUsed
 
-    for (let i = 0; i < 100_000; i++) pickFarthestSpawn(ARENA.spawns, scratch, fill(i))
+    // Misma derivación que el test de resolveNearestEnemy de arriba: umbral
+    // de 1MB, margen 3x o más -> iteraciones >= 393_216. Las 100_000
+    // anteriores daban sólo 0.76MB, por debajo del umbral -- ni lo cruzaban.
+    // 400_000 deja ~3.05x de margen. Confirmado a mano: con un array a nivel
+    // de módulo que hace push de un number por llamada en pickFarthestSpawn()
+    // (match/respawn.ts), este guard con 400_000 iteraciones pasó de verde a
+    // rojo -- ver el informe de cierre de la tarea para el crecimiento
+    // medido exacto.
+    for (let i = 0; i < 400_000; i++) pickFarthestSpawn(ARENA.spawns, scratch, fill(i))
 
     global.gc?.()
     const despues = process.memoryUsage().heapUsed
