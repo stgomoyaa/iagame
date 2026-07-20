@@ -33,6 +33,7 @@ import {
   type WebGLRenderer,
 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { instalarRigDeLuz } from '@/game/weapons/viewmodel/lighting'
 import { createSkinHandle, type SkinHandle } from '@/game/skins/material'
 import type { Skin } from '@/game/skins/generator'
 import { getWeaponVisual, weaponAssetUrl } from '@/game/weapons/registry'
@@ -373,6 +374,13 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
   // modelRoot: hijo estático dentro de weapon, sólo para la corrección de
   // orientación del modelo crudo (rotationOffset) y scaleAdjust del panel de
   // tuning: ver el comentario de rotationOffset en registry.ts.
+  // Rig de iluminación propio. La escena del viewmodel está separada de la del
+  // mundo, así que ni las luces del mapa ni su environment llegan hasta acá:
+  // sin esto el arma sale negra con material iluminado. Cuelga de la CÁMARA
+  // para que las luces acompañen cualquier movimiento futuro del punto de
+  // vista. Ver lighting.ts.
+  const luces = instalarRigDeLuz(scene, camera, sharedRenderer)
+
   const weapon = new Group()
   camera.add(weapon)
   const modelRoot = new Group()
@@ -665,6 +673,9 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
       magCache.clear()
       animCache.clear()
       skinHandles.clear()
+      // El environment del rig es un render target propio: si no se suelta,
+      // sobrevive a la escena entera.
+      luces.dispose()
       magSkinHandles.clear()
     },
 

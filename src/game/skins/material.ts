@@ -47,7 +47,32 @@
  * pura (skins/generator.ts), y la escena.
  */
 
-import { Color, type Mesh, MeshBasicMaterial, SRGBColorSpace, Vector3 } from 'three'
+import {
+  Color,
+  type Mesh,
+  MeshBasicMaterial,
+  MeshStandardMaterial,
+  SRGBColorSpace,
+  Vector3,
+} from 'three'
+
+/**
+ * Materiales a los que este módulo le sabe inyectar el camuflaje.
+ *
+ * Son dos y no uno porque las armas conviven en dos formatos: las 39 de
+ * Source ya salen del pipeline con textura y se dibujan con
+ * `MeshStandardMaterial` (iluminadas), y las 40 CC0 siguen viniendo con color
+ * por vértice sobre `MeshBasicMaterial`. Los dos exponen los mismos puntos de
+ * inyección (`common`, `begin_vertex`, `color_fragment`), así que el shader de
+ * camuflaje es literalmente el mismo para ambos.
+ *
+ * Esto es una costura sensible: `materialOf` devolvía null para todo lo que no
+ * fuera `MeshBasicMaterial`, y como `createSkinHandle` trata el null como
+ * "esta malla no lleva camuflaje", cambiar el material del arma apagaba los 79
+ * camuflajes EN SILENCIO, sin un error ni un warning. Hay un test que fija
+ * justamente eso.
+ */
+export type SkinnableMaterial = MeshBasicMaterial | MeshStandardMaterial
 import { CAMO_FAMILY_INDEX, ESCALA_FAMILIA } from '@/game/skins/camo-families'
 import type { Skin } from '@/game/skins/generator'
 import { PATTERN_INDEX } from '@/game/skins/patterns'
@@ -781,7 +806,21 @@ vec3 skinEntorno( vec3 R ) {
 `
 
 const FRAGMENT_BODY = /* glsl */ `
-#if defined( USE_COLOR_ALPHA )
+// "skinBaked" es el color PROPIO del arma: el que tiene sin camuflaje. De él
+// salen la luminancia y la saturación que más abajo deciden qué parte del arma
+// se lleva el acento, y por eso hay que sacarlo de la mejor fuente disponible.
+//
+// Las armas de Source ahora traen TEXTURA (pipeline convert-source-viewmodels),
+// y las 40 CC0 siguen trayendo color por vértice: los dos caminos tienen que
+// funcionar, así que se eligen por define en vez de asumir uno.
+#if defined( USE_MAP )
+  // Con textura no hay nada que muestrear acá: <map_fragment> ya corrió —va
+  // ANTES de <color_fragment> tanto en el shader basic como en el standard— y
+  // dejó el albedo en diffuseColor. Leerlo de ahí sale gratis y además da la
+  // anatomía POR PÍXEL en vez de por vértice, que es bastante más fino que lo
+  // que jamás dio el horneado.
+  vec3 skinBaked = diffuseColor.rgb;
+#elif defined( USE_COLOR_ALPHA )
   vec3 skinBaked = vColor.rgb;
   diffuseColor.a *= vColor.a;
 #elif defined( USE_COLOR )
@@ -792,7 +831,13 @@ const FRAGMENT_BODY = /* glsl */ `
 
 if ( uSkinEnabled < 0.5 ) {
 
+#if defined( USE_MAP )
+  // El albedo de la textura YA está en diffuseColor. Multiplicarlo por
+  // skinBaked —que acá es él mismo— lo elevaría al cuadrado y dejaría el arma
+  // notablemente más oscura sin camuflaje que con él.
+#else
   diffuseColor.rgb *= skinBaked;
+#endif
 
 } else {
 
@@ -1087,7 +1132,7 @@ if ( uSkinEnabled < 0.5 ) {
  * descarta con dispose(); con WeakMap, el registro se va con ellas sin que
  * nadie tenga que acordarse de limpiarlo.
  */
-const REGISTRY = new WeakMap<MeshBasicMaterial, SkinUniforms>()
+const REGISTRY = new WeakMap<SkinnableMaterial, SkinUniforms>()
 
 function createUniforms(): SkinUniforms {
   return {
@@ -1131,7 +1176,7 @@ function fillExtent(mesh: Mesh, out: Vector3): void {
  * cambio de arma es un tirón visible, y todo el diseño de este archivo
  * existe para no tener que hacerlo.
  */
-function patch(material: MeshBasicMaterial): SkinUniforms {
+function patch(material: SkinnableMaterial): SkinUniforms {
   const existing = REGISTRY.get(material)
   if (existing) return existing
 
@@ -1148,10 +1193,18 @@ function patch(material: MeshBasicMaterial): SkinUniforms {
       .replace('#include <color_fragment>', FRAGMENT_BODY)
   }
   // Clave de caché de programas: sin esto, three reusaría el programa
-  // compilado de cualquier otro MeshBasicMaterial con los mismos parámetros
+  // compilado de cualquier otro material con los mismos parámetros
   // y el arma saldría sin el código de skin inyectado.
   // v2: entraron las seis familias de camuflaje al mismo programa.
-  material.customProgramCacheKey = () => 'skin-v2'
+  // v3: el arma de Source pasó a MeshStandardMaterial con textura y el código
+  // inyectado cambió con ella (ahora lee el albedo del mapa).
+  //
+  // No hace falta meter el TIPO de material en la clave aunque el mismo código
+  // se compile contra dos shaders base distintos: three ya antepone el
+  // `shaderID` —'meshbasic' vs 'meshphysical'— al armar la clave de programa
+  // (WebGLPrograms.getProgramCacheKey), así que un basic y un standard nunca
+  // comparten programa por más que compartan esta cadena.
+  material.customProgramCacheKey = () => 'skin-v3'
   material.needsUpdate = true
 
   return uniforms
@@ -1172,15 +1225,17 @@ export interface SkinHandle {
   setTime(seconds: number): void
 }
 
-function materialOf(mesh: Mesh): MeshBasicMaterial | null {
+function materialOf(mesh: Mesh): SkinnableMaterial | null {
   const material = mesh.material
   if (Array.isArray(material)) return null
-  return material instanceof MeshBasicMaterial ? material : null
+  if (material instanceof MeshBasicMaterial) return material
+  if (material instanceof MeshStandardMaterial) return material
+  return null
 }
 
 /**
  * Prepara una malla para llevar skins y devuelve su handle, o null si la
- * malla no tiene un `MeshBasicMaterial` único (nunca debería pasar con el
+ * malla no tiene un material inyectable único (nunca debería pasar con el
  * pipeline actual, que produce exactamente eso; si pasara, el arma se sigue
  * viendo con su material crudo en vez de reventar).
  */
