@@ -102,6 +102,28 @@ describe('con índice local presente (la máquina de desarrollo)', () => {
     expect(porOrigen).toEqual({ cc0: CC0, local: SOURCE_WEAPONS.length })
   })
 
+  it('la armería muestra el nombre real con su etiqueta de juego: "AK-47 (CS)"', async () => {
+    await loadLocalWeapons(async () => indiceLocalFalso())
+    const ak = weaponIndex().find((e) => e.slug === 'ak47')
+    expect(ak?.name).toBe('AK-47 (CS)')
+    // Y todas las locales llevan etiqueta, no sólo la emblemática.
+    for (const entry of weaponIndex().filter((e) => e.origin === 'local')) {
+      expect(entry.name, entry.slug).toContain('(CS)')
+    }
+  })
+
+  it('el nombre lo manda el CATÁLOGO, no el índice en disco (que puede ser de una corrida vieja)', async () => {
+    // Un index.json escrito antes del renombrado traía "Cárpato". El registry
+    // tiene que ignorarlo y usar el nombre del catálogo igual, o renombrar un
+    // arma obligaría a reconvertir los 39 modelos.
+    await loadLocalWeapons(async () =>
+      indiceLocalFalso().map((e) =>
+        (e as { slug: string }).slug === 'ak47' ? { ...(e as object), name: 'Cárpato' } : e,
+      ),
+    )
+    expect(weaponIndex().find((e) => e.slug === 'ak47')?.name).toBe('AK-47 (CS)')
+  })
+
   it('el .glb de cada arma se pide a la carpeta de SU procedencia', async () => {
     await loadLocalWeapons(async () => indiceLocalFalso())
 

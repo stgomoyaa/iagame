@@ -15,6 +15,7 @@
  */
 
 import type { WeaponArchetype } from '@/game/weapons/archetypes'
+import type { RecoilPattern } from '@/game/weapons/recoil-patterns'
 import { clampPitch } from '@/game/engine/input'
 
 export interface RecoilState {
@@ -96,11 +97,10 @@ const scratchOffset: [number, number] = [0, 0]
  * devolver un array nuevo: cero asignaciones por disparo.
  */
 function interpolatedRecoilOffset(
-  archetype: WeaponArchetype,
+  pattern: RecoilPattern,
   shotIndex: number,
   out: [number, number],
 ): void {
-  const { pattern } = archetype.recoil
   const clamped = Math.max(0, shotIndex)
   const lowerWhole = Math.floor(clamped)
   const fraction = clamped - lowerWhole
@@ -123,9 +123,20 @@ function interpolatedRecoilOffset(
  * a mitad de recuperación (13.7) no "redondea" antes de avanzar, sigue
  * siendo 14.7 -- la recuperación parcial de antes del disparo se respeta
  * también después.
+ *
+ * `pattern` es un parámetro y no se lee del arquetipo porque el patrón es POR
+ * ARMA, no por arquetipo: varias armas comparten arquetipo (el AK-47 y la M4A4
+ * son las dos `ar-1`) y justamente lo que las distingue al dispararlas es su
+ * dibujo de retroceso (ver weapons/recoil-patterns.ts). Por defecto cae al del
+ * arquetipo, que es lo que corresponde a las armas sin patrón propio — las 40
+ * CC0 y las de cadencia demasiado baja para acumular una forma.
  */
-export function applyRecoilShot(state: RecoilState, archetype: WeaponArchetype): void {
-  interpolatedRecoilOffset(archetype, state.shotIndex, scratchOffset)
+export function applyRecoilShot(
+  state: RecoilState,
+  archetype: WeaponArchetype,
+  pattern: RecoilPattern = archetype.recoil.pattern,
+): void {
+  interpolatedRecoilOffset(pattern, state.shotIndex, scratchOffset)
   // y = subida del cañón. Un arma real levanta el cañón al disparar, así
   // que la cámara tiene que mirar más ARRIBA con cada disparo. En la
   // convención de pitch de engine/input.ts (mover el mouse hacia abajo

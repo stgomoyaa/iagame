@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { ARCHETYPES, type ArchetypeId } from '@/game/weapons/archetypes'
 import { weaponIndex } from '@/game/weapons/registry'
-import { SOURCE_WEAPONS, SOURCE_WEAPONS_BY_SLUG } from '@/game/weapons/source-catalog'
+import {
+  SOURCE_WEAPONS,
+  SOURCE_WEAPONS_BY_SLUG,
+  sourceWeaponDisplayName,
+} from '@/game/weapons/source-catalog'
 
 /**
  * Marcas y designaciones de armas reales que NO pueden aparecer en nada que
@@ -32,6 +36,7 @@ const MARCAS_PROHIBIDAS = [
   'mp5', 'mp7', 'mp9', 'mac10', 'mac-10', 'ump45', 'ump-45',
   'p90', 'bizon', 'negev', 'm249', 'minimi',
   'xm1014', 'mag7', 'mag-7', 'nova',
+  'r8 revolver',
   'tec9', 'tec-9', 'cz75', 'cz-75', 'five-seven', 'fiveseven',
   'usp', 'p2000', 'p250', 'ssg08', 'ssg 08', 'scar20', 'scar-20', 'g3sg1',
   'heckler', 'koch', 'sig sauer', 'steyr', 'benelli', 'ithaca', 'beretta',
@@ -97,33 +102,105 @@ describe('catálogo de armas derivadas de Source', () => {
   })
 })
 
-describe('lista negra de marcas', () => {
-  it('ningún nombre mostrado del catálogo de Source contiene una marca', () => {
+describe('lista negra de marcas: la separación publicable / local', () => {
+  /**
+   * La regla YA NO es "ninguna marca en ningún lado": las 39 locales llevan su
+   * nombre real a propósito (ver el encabezado de source-catalog.ts). Lo que
+   * este bloque protege es la SEPARACIÓN, que es lo que de verdad importa y lo
+   * único que puede erosionarse en silencio:
+   *
+   * - Lo PUBLICABLE (las CC0 de public/assets/weapons/, que se commitean) no
+   *   puede tener ni una marca. Acá el guard sigue teniendo los mismos dientes
+   *   que antes.
+   * - Lo LOCAL (gitignoreado, nunca publicado) tiene que tener nombre real y
+   *   etiqueta de juego. Se afirma en positivo: si alguien "arreglara" el
+   *   catálogo volviendo a nombres inventados, este test lo agarra igual que
+   *   agarraría una marca del lado publicable.
+   */
+
+  it('ningún nombre PUBLICABLE (CC0) contiene una marca', () => {
+    // `origin` es el filtro, no "las que no están en SOURCE_WEAPONS": si otro
+    // test de la misma corrida ya cargó el índice local, weaponIndex() trae
+    // las 79 y este test tiene que seguir mirando sólo las publicables.
+    const publicables = weaponIndex().filter((e) => e.origin === 'cc0')
+    expect(publicables.length).toBeGreaterThan(0)
+
+    for (const entry of publicables) {
+      const nombre = normalizar(entry.name)
+      for (const marca of MARCAS_PROHIBIDAS) {
+        expect(nombre, `"${entry.name}" (${entry.slug}) contiene "${marca}"`).not.toContain(marca)
+      }
+    }
+  })
+
+  it('el catálogo LOCAL sí está lleno de marcas reales', () => {
+    // El complemento del test de arriba, y la mitad que impide que alguien
+    // "arregle" esto volviendo a los nombres inventados. No se exige una marca
+    // por arma: unas cuantas se llaman de verdad con una palabra genérica
+    // ("Nova", "Sawed-Off"), y ésas no son marca ni acá ni en el pack CC0 — es
+    // la misma razón por la que la lista negra no las incluye.
+    const conMarca = SOURCE_WEAPONS.filter((entry) => {
+      const nombre = normalizar(entry.name)
+      return MARCAS_PROHIBIDAS.some((marca) => nombre.includes(marca))
+    })
+    expect(conMarca.length).toBeGreaterThan(SOURCE_WEAPONS.length * 0.75)
+
+    // Y las emblemáticas, uno por uno: si el AK-47 dejara de llamarse AK-47,
+    // el porcentaje de arriba podría seguir dando bien y el pedido estaría
+    // igualmente incumplido.
+    const esperados: Record<string, string> = {
+      ak47: 'ak-47',
+      m4a4: 'm4a4',
+      m4a1s: 'm4a1',
+      awp: 'awp',
+      deagle: 'desert eagle',
+      famas: 'famas',
+      glock18: 'glock',
+    }
+    for (const [slug, marca] of Object.entries(esperados)) {
+      const entry = SOURCE_WEAPONS_BY_SLUG.get(slug)
+      expect(entry, slug).toBeDefined()
+      expect(normalizar(entry!.name), `${slug} perdió su nombre real`).toContain(marca)
+    }
+  })
+
+  it('no sobrevive ninguno de los nombres inventados viejos', () => {
+    // La tabla anterior usaba nombres propios ("Cárpato" para el AK-47). Si
+    // alguno reapareciera sería una fila revertida a mano.
+    const inventados = ['carpato', 'halcon', 'mazo', 'chispa', 'sirocco', 'alud', 'penasco']
+    const nombres = SOURCE_WEAPONS.map((e) => normalizar(e.name))
+    for (const viejo of inventados) {
+      expect(nombres, `volvió el nombre inventado "${viejo}"`).not.toContain(viejo)
+    }
+  })
+
+  it('toda arma local lleva etiqueta de juego, y el nombre mostrado la incluye', () => {
     for (const entry of SOURCE_WEAPONS) {
-      const nombre = normalizar(entry.name)
-      for (const marca of MARCAS_PROHIBIDAS) {
-        expect(nombre, `"${entry.name}" (${entry.slug}) contiene "${marca}"`).not.toContain(marca)
-      }
+      expect(entry.game, `${entry.slug} sin etiqueta de juego`).toBe('CS')
+      expect(sourceWeaponDisplayName(entry)).toBe(`${entry.name} (${entry.game})`)
+      expect(sourceWeaponDisplayName(entry)).toContain('(CS)')
     }
   })
 
-  it('tampoco lo contiene ningún nombre del catálogo CC0 que ya está en el juego', () => {
-    // La regla es sobre TODO lo que se muestra, no sólo sobre lo nuevo: si
-    // mañana alguien renombra un arma CC0, este guard también lo agarra.
-    for (const entry of weaponIndex()) {
-      const nombre = normalizar(entry.name)
-      for (const marca of MARCAS_PROHIBIDAS) {
-        expect(nombre, `"${entry.name}" (${entry.slug}) contiene "${marca}"`).not.toContain(marca)
-      }
-    }
+  it('nombre + etiqueta es único: es lo que distingue armas homónimas de dos packs', () => {
+    // El nombre real solo PUEDE repetirse entre juegos (un M4 de CS y uno de
+    // COD). Lo que no puede repetirse es la combinación, que es lo que se
+    // muestra.
+    const mostrados = SOURCE_WEAPONS.map(sourceWeaponDisplayName)
+    expect(new Set(mostrados).size).toBe(mostrados.length)
   })
 
-  it('la lista negra de verdad detecta una marca (si no, los dos tests de arriba pasan vacíos)', () => {
+  it('la lista negra de verdad detecta una marca (si no, el test de las CC0 pasa vacío)', () => {
     // Sin esto, un error de tipeo en `normalizar` o una lista negra vacía
-    // dejarían los dos tests anteriores en verde para siempre sin comprobar
+    // dejarían el guard de las publicables en verde para siempre sin comprobar
     // nada. Acá se le da de comer un nombre prohibido a propósito.
     const nombreMalo = normalizar('AK-47 Redline')
     const detectada = MARCAS_PROHIBIDAS.some((marca) => nombreMalo.includes(marca))
     expect(detectada).toBe(true)
+  })
+
+  it('normalizar esquiva el truco de la tilde (una marca con acento sigue siendo una marca)', () => {
+    expect(normalizar('Á')).toBe('a')
+    expect(normalizar('AK-47').includes('ak-47')).toBe(true)
   })
 })
