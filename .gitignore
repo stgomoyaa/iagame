@@ -115,3 +115,17 @@ workshop-assets/
 # OJO: por lo mismo, un deploy tiene que correr el generador antes del build.
 # Ver docs/SKYBOX.md, sección "Cómo se aplica".
 /public/assets/skybox/
+
+# Patrones de camuflaje en escala de grises que consume la vía por textura
+# (src/game/skins/texturas.ts). Mismo criterio que el skybox de acá arriba:
+# los de PRUEBA son salida determinista de un script commiteado
+# (scripts/patrones-camo-prueba.ts) y se regeneran con un comando, así que no
+# se versionan; y los que genere el dueño con docs/PROMPTS-CAMOS.md tampoco
+# van al repo, porque son contenido de catálogo y no código.
+#
+# El navegador sólo baja archivos de /public, y estar en esa carpeta no los
+# convierte en algo que haya que versionar. Si la carpeta no existe, el
+# catálogo de camos por textura simplemente queda vacío y el juego arranca
+# con los seis camuflajes procedurales de siempre: no hay bandera que se
+# pueda dejar mal puesta.
+/public/assets/camos/

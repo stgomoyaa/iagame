@@ -26,10 +26,23 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 
 const COLOR_TYPE_RGB = 2
 const COLOR_TYPE_RGBA = 6
+/**
+ * Gris de un canal (tipo 0) y gris+alfa (tipo 4).
+ *
+ * Entraron con los patrones de camuflaje (scripts/patrones-camo-prueba.ts,
+ * docs/PROMPTS-CAMOS.md): esos PNG son gris de 8 bits de UN canal a
+ * propósito, porque pesan la cuarta parte que RGBA y el peso del catálogo es
+ * el argumento entero de esa vía. Sin esto, el verificador de teselado no
+ * puede leer los archivos que tiene que verificar.
+ */
+const COLOR_TYPE_GRAY = 0
+const COLOR_TYPE_GRAY_ALPHA = 4
 
 /** Canales por píxel según el tipo de color del IHDR. */
 const CHANNELS_BY_COLOR_TYPE: Record<number, number> = {
+  [COLOR_TYPE_GRAY]: 1,
   [COLOR_TYPE_RGB]: 3,
+  [COLOR_TYPE_GRAY_ALPHA]: 2,
   [COLOR_TYPE_RGBA]: 4,
 }
 
@@ -127,7 +140,9 @@ export function decodePng(png: Buffer): DecodedPng {
   }
   const channels = CHANNELS_BY_COLOR_TYPE[colorType]
   if (channels === undefined) {
-    throw new Error(`decodePng: tipo de color ${colorType} no soportado (sólo 2=RGB y 6=RGBA)`)
+    throw new Error(
+      `decodePng: tipo de color ${colorType} no soportado (0=gris, 2=RGB, 4=gris+alfa, 6=RGBA)`,
+    )
   }
 
   const raw = inflateSync(Buffer.concat(idat))
@@ -152,13 +167,25 @@ export function decodePng(png: Buffer): DecodedPng {
     const out = y * width * 4
     if (channels === 4) {
       rgba.set(current, out)
-    } else {
+    } else if (channels === 3) {
       // RGB -> RGBA: alfa opaco. No hay canal de transparencia que perder.
       for (let x = 0; x < width; x++) {
         rgba[out + x * 4] = current[x * 3]
         rgba[out + x * 4 + 1] = current[x * 3 + 1]
         rgba[out + x * 4 + 2] = current[x * 3 + 2]
         rgba[out + x * 4 + 3] = 255
+      }
+    } else {
+      // Gris (1 canal) y gris+alfa (2): el nivel se replica en R, G y B. Que
+      // los tres canales salgan IGUALES no es una simplificación, es lo que
+      // el archivo dice: un PNG de tipo 0 no tiene color que perder. De ahí
+      // que el croma que mide scripts/lib/teselado.ts dé exactamente 0.
+      for (let x = 0; x < width; x++) {
+        const v = current[x * channels]
+        rgba[out + x * 4] = v
+        rgba[out + x * 4 + 1] = v
+        rgba[out + x * 4 + 2] = v
+        rgba[out + x * 4 + 3] = channels === 2 ? current[x * 2 + 1] : 255
       }
     }
 
