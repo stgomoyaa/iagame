@@ -164,6 +164,27 @@ const RAW_AXES_BY_GAME: Record<SourceGame, RawAxes> = {
 }
 
 /**
+ * Armas cuya silueta NO puede confirmar el eje vertical declarado, con el
+ * número que lo justifica. Son ametralladoras con la caja de cinta montada al
+ * costado: quedan tan anchas como altas, así que el invariante "un arma es más
+ * alta que gruesa" que usa `assertDeclaredAxes` no las decide.
+ *
+ *   mw3e_pkp   alto 0,2213  ancho 0,2859  (Z de -0,189 a +0,097)
+ *   mw3e_mk46  alto 0,1981  ancho 0,2348  (Z de -0,184 a +0,051)
+ *
+ * Para éstas el eje vertical se apoya en lo mismo que el resto del pack —el
+ * exportador de Blender es uno solo y las 69 salen Y-up— y en mirarlas en el
+ * navegador, que es lo que la lista de abajo NO reemplaza. Se sigue chequeando
+ * el eje del cañón, que en las dos es inequívoco.
+ *
+ * Esto es una lista corta y con nombre a propósito. Bajarle el margen al guard
+ * para que estas dos pasaran habría apagado el chequeo para las 67 restantes;
+ * exentar por clase ("las lmg no se chequean") habría apagado 8. Nombrarlas
+ * cuesta dos líneas y deja el agujero exactamente del tamaño del problema.
+ */
+const SILUETA_LATERAL_ANCHA: ReadonlySet<string> = new Set(['mw3e_pkp', 'mw3e_mk46'])
+
+/**
  * Nombres de las dos partes que produce `scripts/blender/mdl-to-glb.py`. Son
  * el contrato entre los tres eslabones de este pipeline: Blender los escribe,
  * este script los preserva (ver `KEEP_PARTS` abajo) y
@@ -407,7 +428,9 @@ async function convertOne(
   // orientación declarada mal no falla ruidosamente —el arma sale, pesa lo
   // mismo y tiene el color bien, sólo que acostada— así que sin este chequeo
   // el único detector es mirar 69 capturas. Ver `assertDeclaredAxes`.
-  assertDeclaredAxes(positions, axes.barrelAxis, axes.upAxis, `${entry.slug} (${entry.game})`)
+  assertDeclaredAxes(positions, axes.barrelAxis, axes.upAxis, `${entry.slug} (${entry.game})`, {
+    verificarVertical: !SILUETA_LATERAL_ANCHA.has(entry.slug),
+  })
   const matrix = buildNormalizeMatrix(
     positions,
     axes.barrelAxis,

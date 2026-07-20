@@ -696,3 +696,31 @@ describe('assertDeclaredAxes', () => {
     expect(() => assertDeclaredAxes(casiCuadrada, 0, 1, 'raro')).toThrow(/vertical/)
   })
 })
+
+describe('assertDeclaredAxes con la silueta lateral ancha exenta', () => {
+  /** Extensiones reales de mw3e_pkp: una LMG con la caja de cinta al costado. */
+  const PKP = (() => {
+    const pts: number[] = []
+    for (const x of [-0.4739, 0.4739]) {
+      for (const y of [-0.1107, 0.1107]) {
+        for (const z of [-0.143, 0.143]) pts.push(x, y, z)
+      }
+    }
+    return Float32Array.from(pts)
+  })()
+
+  it('sin la exención, la PKP falla el invariante de silueta', () => {
+    expect(() => assertDeclaredAxes(PKP, 0, 1, 'mw3e_pkp')).toThrow(/vertical/)
+  })
+
+  it('con la exención pasa, pero SIGUE chequeando el eje del cañón', () => {
+    expect(() =>
+      assertDeclaredAxes(PKP, 0, 1, 'mw3e_pkp', { verificarVertical: false }),
+    ).not.toThrow()
+    // La exención apaga el invariante 2, no el 1: un cañón declarado en el eje
+    // equivocado tiene que seguir explotando aunque el arma esté exenta.
+    expect(() =>
+      assertDeclaredAxes(PKP, 1, 0, 'mw3e_pkp', { verificarVertical: false }),
+    ).toThrow(/cañón/)
+  })
+})

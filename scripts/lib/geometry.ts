@@ -278,6 +278,19 @@ export function detectUpAxis(
  * `tag_clip` (cargador debajo), que sí son datos del archivo. Este guard
  * atrapa la confusión de EJE, que es la que nadie tenía forma de ver.
  *
+ * **Dónde deja de valer el invariante 2, medido y no supuesto.** Una
+ * ametralladora con bípode desplegado y caja de cinta al costado puede ser
+ * tan ancha como alta: de las 69 de COD, `mw3e_pkp` mide 0,221 de alto contra
+ * 0,286 de ancho y `mw3e_mk46` 0,198 contra 0,235 — las dos con la masa
+ * corrida a UN lado (la caja de munición: la Z de la PKP va de -0,189 a
+ * +0,097). No es ruido que se pueda promediar: probado con percentiles 2-98 y
+ * 5-95, la caja de cinta no son cuatro vértices sueltos y el orden se
+ * mantiene invertido. Para esos casos existe `verificarVertical: false`, que
+ * apaga SÓLO el invariante 2 y deja el 1 en pie. La exención se declara por
+ * arma y con el número medido al lado (ver `SILUETA_LATERAL_ANCHA` en
+ * `convert-source-weapons.ts`), no se infiere: una exención silenciosa
+ * devolvería justo el agujero que este guard vino a tapar.
+ *
  * `margen` es la separación relativa mínima entre las dos extensiones que se
  * comparan. Con 0 un arma de sección cuadrada pasaría por casualidad; el
  * default (0,15) exige que el eje declarado sea al menos un 15% más extenso
@@ -291,8 +304,9 @@ export function assertDeclaredAxes(
   barrelAxis: 0 | 1 | 2,
   upAxis: 0 | 1 | 2,
   etiqueta: string,
-  margen = 0.15,
+  opciones: { margen?: number; verificarVertical?: boolean } = {},
 ): void {
+  const { margen = 0.15, verificarVertical = true } = opciones
   if (barrelAxis === upAxis) {
     throw new Error(`${etiqueta}: el eje del cañón y el vertical no pueden ser el mismo (${barrelAxis})`)
   }
@@ -309,6 +323,8 @@ export function assertDeclaredAxes(
       )
     }
   }
+
+  if (!verificarVertical) return
 
   const tercero = ([0, 1, 2] as const).find((a) => a !== barrelAxis && a !== upAxis)
   if (tercero === undefined) throw new Error(`${etiqueta}: ejes declarados inconsistentes`)
