@@ -5,6 +5,7 @@ import {
   colorDelCielo,
   CROMA_ESTRUCTURA_PISO,
   marcoGalaxia,
+  type MarcoGalaxia,
   direccionDeTexel,
   fbm,
   hornearCara,
@@ -445,6 +446,106 @@ describe('estructura de la galaxia (el defecto que se estaba arreglando)', () =>
     }
     // Medido: 0.20. Un disco liso sin brazos daría ~0.
     expect(max - min).toBeGreaterThan(0.1)
+  })
+
+  // Los tres tests que siguen se agregaron después de hacer mutation testing
+  // sobre los de arriba: se rompió la galaxia a propósito de siete maneras y
+  // tres roturas pasaron en verde. O sea que tres de los rasgos que el dueño
+  // pidió explícitamente de la referencia -- variación azul/magenta, grano en
+  // los brazos y núcleo -- no tenían ningún guard y se podían perder en una
+  // refactorización sin que nada avisara.
+
+  /** Punto del domo a `thetaGrados` del eje del disco, girado `t` alrededor. */
+  function enDisco(marco: MarcoGalaxia, thetaGrados: number, t: number): Vec3 {
+    const a = (thetaGrados * Math.PI) / 180
+    const c = Math.cos(a)
+    const s = Math.sin(a)
+    return normalizar({
+      x: marco.ax * c + (marco.ux * Math.cos(t) + marco.vx * Math.sin(t)) * s,
+      y: marco.ay * c + (marco.uy * Math.cos(t) + marco.vy * Math.sin(t)) * s,
+      z: marco.az * c + (marco.uz * Math.cos(t) + marco.vz * Math.sin(t)) * s,
+    })
+  }
+
+  const SIN_ESTRELLAS_DISCO: ParamsCielo = { ...PARAMS_POR_DEFECTO, densidadEstrellas: 0 }
+
+  it('los brazos van de azul adentro a magenta afuera', () => {
+    // La variación azul/magenta de la referencia. Se mide SOBRE LOS BRAZOS
+    // (el tercio más brillante de cada anillo) y no sobre el cielo entero:
+    // la primera versión de esta métrica miraba el rango global de b-r y
+    // SUBÍA al romper la variación, porque pintar todos los brazos de magenta
+    // aleja el brazo del fondo aunque los brazos entre sí queden iguales.
+    // Conditioning en el brazo es lo que la vuelve una medición de lo que
+    // dice el nombre del test.
+    const marco = marcoGalaxia(SIN_ESTRELLAS_DISCO)
+
+    const medioDeBrazos = (th0: number, th1: number): number => {
+      const ms: { br: number; l: number }[] = []
+      for (let ti = 0; ti < 400; ti++) {
+        for (let ri = 0; ri < 12; ri++) {
+          const v = enDisco(marco, th0 + (ri / 12) * (th1 - th0), (ti / 400) * 2 * Math.PI)
+          const col = color(v, SIN_ESTRELLAS_DISCO)
+          const r = linealASrgb(col.r)
+          const g = linealASrgb(col.g)
+          const b = linealASrgb(col.b)
+          ms.push({ br: b - r, l: luminanciaSrgb(r, g, b) })
+        }
+      }
+      // Los brazos son lo brillante del anillo; las calles de polvo, lo oscuro.
+      ms.sort((a, b) => b.l - a.l)
+      const brazos = ms.slice(0, Math.floor(ms.length / 3))
+      return brazos.reduce((s, m) => s + m.br, 0) / brazos.length
+    }
+
+    // Medido: interior 0.233, exterior 0.176, separación 0.058. Con los dos
+    // colores de brazo iguales da -0.046 (se da vuelta el signo) y con los
+    // brazos en gris da 0.008.
+    expect(medioDeBrazos(14, 24) - medioDeBrazos(40, 55)).toBeGreaterThan(0.03)
+  })
+
+  it('los brazos son granulares y no lisos', () => {
+    // La "estructura granular" de la referencia, como número: recorrer un
+    // anillo adentro del disco tiene que dar saltos de brillo de un paso al
+    // siguiente. Con los brazos lisos el anillo varía igual (brazo -> calle
+    // de polvo) pero DESPACIO, así que lo que discrimina es la diferencia
+    // entre muestras CONSECUTIVAS y no el rango del anillo.
+    const marco = marcoGalaxia(SIN_ESTRELLAS_DISCO)
+    const N = 720 // ~0.25 grados entre muestras: por debajo del grano fino.
+    const lum = (t: number): number => {
+      const col = color(enDisco(marco, 25, t), SIN_ESTRELLAS_DISCO)
+      return luminanciaSrgb(linealASrgb(col.r), linealASrgb(col.g), linealASrgb(col.b))
+    }
+    let suma = 0
+    let previo = lum(0)
+    for (let i = 1; i <= N; i++) {
+      const l = lum((i / N) * 2 * Math.PI)
+      suma += Math.abs(l - previo)
+      previo = l
+    }
+    // Medido: 0.00142. Con el grano constante da 0.00056 y sin disco 0.00004.
+    expect(suma / N).toBeGreaterThan(0.001)
+  })
+
+  it('el núcleo es más brillante que el disco', () => {
+    // Lo que hace que se lea como galaxia y no como una nube: tiene centro.
+    // Es además el único aporte que gasta luminancia a propósito, así que
+    // este test y el techo de luminancia se aprietan el uno al otro -- subir
+    // el núcleo rompe el techo, bajarlo rompe esto.
+    const marco = marcoGalaxia(SIN_ESTRELLAS_DISCO)
+    const medio = (angulos: number[], pasos: number): number => {
+      let suma = 0
+      let n = 0
+      for (let ti = 0; ti < pasos; ti++) {
+        for (const th of angulos) {
+          const col = color(enDisco(marco, th, (ti / pasos) * 2 * Math.PI), SIN_ESTRELLAS_DISCO)
+          suma += luminanciaSrgb(linealASrgb(col.r), linealASrgb(col.g), linealASrgb(col.b))
+          n++
+        }
+      }
+      return suma / n
+    }
+    // Medido: núcleo 0.426, disco 0.265, razón 1.61. Sin núcleo da 0.97.
+    expect(medio([0.5, 2, 4], 60) / medio([32, 38, 44], 120)).toBeGreaterThan(1.25)
   })
 })
 
