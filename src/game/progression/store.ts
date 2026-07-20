@@ -23,6 +23,7 @@ import { defaultLoadout, normalizeLoadout, type Loadout } from '@/game/progressi
 import { levelForXp, NIVEL_INICIAL } from '@/game/progression/unlocks'
 import { createDefaultCareer, type CareerData } from '@/game/progression/career'
 import { createPlacementState, PLACEMENT, type PlacementState } from '@/game/progression/placement'
+import { HISTORIAL_MAX, type MatchHistoryEntry } from '@/game/progression/history'
 import { RANK_MAX, RANK_MIN, RR_MAXIMO } from '@/game/progression/ranks'
 import { RR, type RankState } from '@/game/progression/rr'
 
@@ -54,6 +55,18 @@ export interface ProgressData {
   partidasJugadas: number
   victorias: number
   derrotas: number
+  /**
+   * Últimas partidas, la más reciente primero (progression/history.ts).
+   *
+   * NO sube `PROGRESS_VERSION` aunque agregue un campo, y es a propósito:
+   * subir la versión hace que `parseProgress` descarte el guardado entero
+   * (ver más abajo), o sea que agregar el historial le borraría a un jugador
+   * su rango, su nivel y sus skins. Un campo que **falta** se lee como `[]`,
+   * que es exactamente lo que corresponde a un guardado anterior al
+   * historial: no tenía ninguna partida registrada. Un guardado v2 viejo
+   * sigue cargando entero.
+   */
+  historial: MatchHistoryEntry[]
 }
 
 /**
@@ -114,6 +127,7 @@ export function createDefaultProgress(): ProgressData {
     partidasJugadas: 0,
     victorias: 0,
     derrotas: 0,
+    historial: [],
   }
 }
 
@@ -157,6 +171,43 @@ function leerRank(raw: unknown): RankState | null {
     rr: clamp(Math.floor(numeroSeguro(obj.rr, 0)), 0, RR_MAXIMO),
     cushion: clamp(numeroSeguro(obj.cushion, RR.colchon), 0, RR.colchon),
   }
+}
+
+/** Lee una fila del historial, o null si no es una fila entendible. */
+function leerEntradaHistorial(raw: unknown): MatchHistoryEntry | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const o = raw as Record<string, unknown>
+  if (typeof o.partida !== 'number' || !Number.isFinite(o.partida)) return null
+  return {
+    partida: Math.max(0, Math.floor(o.partida)),
+    fecha: Math.max(0, Math.floor(numeroSeguro(o.fecha, 0))),
+    mapa: typeof o.mapa === 'string' ? o.mapa : null,
+    modo: typeof o.modo === 'string' ? o.modo : null,
+    win: o.win === true,
+    kills: Math.max(0, Math.floor(numeroSeguro(o.kills, 0))),
+    deaths: Math.max(0, Math.floor(numeroSeguro(o.deaths, 0))),
+    headshots: Math.max(0, Math.floor(numeroSeguro(o.headshots, 0))),
+    damage: Math.max(0, Math.round(numeroSeguro(o.damage, 0))),
+    // null y 0 son distintos acá: null es "fue colocación, no hubo RR", 0 es
+    // "hubo RR y no se movió". Por eso no se cae a 0 con `numeroSeguro`.
+    rrChange: typeof o.rrChange === 'number' && Number.isFinite(o.rrChange)
+      ? Math.round(o.rrChange)
+      : null,
+    rank: typeof o.rank === 'number' && Number.isFinite(o.rank)
+      ? clamp(Math.floor(o.rank), RANK_MIN, RANK_MAX)
+      : null,
+  }
+}
+
+function leerHistorial(raw: unknown): MatchHistoryEntry[] {
+  if (!Array.isArray(raw)) return []
+  const filas: MatchHistoryEntry[] = []
+  for (const item of raw) {
+    const fila = leerEntradaHistorial(item)
+    if (fila !== null) filas.push(fila)
+    if (filas.length >= HISTORIAL_MAX) break
+  }
+  return filas
 }
 
 function leerPlacement(raw: unknown): PlacementState {
@@ -203,6 +254,7 @@ export function parseProgress(raw: unknown): ProgressData {
     partidasJugadas: Math.max(0, Math.floor(numeroSeguro(obj.partidasJugadas, 0))),
     victorias: Math.max(0, Math.floor(numeroSeguro(obj.victorias, 0))),
     derrotas: Math.max(0, Math.floor(numeroSeguro(obj.derrotas, 0))),
+    historial: leerHistorial(obj.historial),
   }
 }
 
@@ -220,6 +272,7 @@ export function careerFromProgress(data: ProgressData): CareerData {
     derrotas: data.derrotas,
     xp: data.xp,
     skins: data.skins,
+    historial: data.historial,
   }
 }
 
@@ -239,6 +292,7 @@ export function progressWithCareer(data: ProgressData, career: CareerData): Prog
     partidasJugadas: career.partidasJugadas,
     victorias: career.victorias,
     derrotas: career.derrotas,
+    historial: [...career.historial],
     loadout: normalizeLoadout(data.loadout, levelForXp(career.xp), career.skins),
   }
 }

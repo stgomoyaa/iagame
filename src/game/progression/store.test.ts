@@ -15,6 +15,7 @@ import {
   PROGRESS_VERSION,
   SKINS_INICIALES,
 } from '@/game/progression/store'
+import { HISTORIAL_MAX } from '@/game/progression/history'
 import { generateSkin } from '@/game/skins/generator'
 import { NIVEL_INICIAL, xpParaNivel } from '@/game/progression/unlocks'
 import { weaponIndex } from '@/game/weapons/registry'
@@ -195,5 +196,59 @@ describe('lectura de datos guardados', () => {
     expect(data.xp).toBe(0)
     expect(data.skins).toEqual([...SKINS_INICIALES])
     expect(data.loadout.primary.slug).not.toBeNull()
+  })
+})
+
+/**
+ * El historial se sumó a `ProgressData` SIN subir `PROGRESS_VERSION`,
+ * justamente para no descartarle el guardado a un jugador que ya venía
+ * jugando (ver el comentario del campo en store.ts). Estos tests son los que
+ * hacen que eso sea cierto y no una intención.
+ */
+describe('compatibilidad con guardados anteriores al historial', () => {
+  const guardadoViejo = {
+    version: PROGRESS_VERSION,
+    xp: xpParaNivel(9),
+    skins: [...SKINS_INICIALES],
+    loadout: defaultLoadout(9),
+    rank: { rank: 11, rr: 62, cushion: 0 },
+    placement: { played: 5, skill: 0.5 },
+    partidasJugadas: 40,
+    victorias: 22,
+    derrotas: 18,
+  }
+
+  it('un guardado sin los campos nuevos conserva rango, XP y partidas', () => {
+    const data = parseProgress(guardadoViejo)
+    expect(data.rank).toEqual({ rank: 11, rr: 62, cushion: 0 })
+    expect(data.xp).toBe(xpParaNivel(9))
+    expect(data.partidasJugadas).toBe(40)
+    expect(data.victorias).toBe(22)
+  })
+
+  it('el campo que falta se lee como vacío, no como default de cuenta nueva', () => {
+    expect(parseProgress(guardadoViejo).historial).toEqual([])
+  })
+
+  it('el historial descarta filas ilegibles y respeta el tope', () => {
+    const fila = (partida: number) => ({
+      partida, fecha: 1, mapa: 'Arena', modo: 'tdm', win: true,
+      kills: 5, deaths: 2, headshots: 1, damage: 900, rrChange: 4, rank: 7,
+    })
+    const data = parseProgress({
+      ...guardadoViejo,
+      historial: [fila(1), null, 'basura', { sinPartida: true }, fila(2)],
+    })
+    expect(data.historial.map((e) => e.partida)).toEqual([1, 2])
+
+    const largo = parseProgress({
+      ...guardadoViejo,
+      historial: Array.from({ length: 40 }, (_, i) => fila(i + 1)),
+    })
+    expect(largo.historial).toHaveLength(HISTORIAL_MAX)
+  })
+
+  it('un historial que no es lista no rompe la carga', () => {
+    expect(parseProgress({ ...guardadoViejo, historial: { no: 'es lista' } }).historial).toEqual([])
   })
 })

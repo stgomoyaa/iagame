@@ -24,6 +24,12 @@
 import { combatScore, expectedCombatScore, type MatchPerformance } from '@/game/progression/combat-score'
 import { rollDrop, type SkinDrop } from '@/game/progression/drop'
 import {
+  crearEntradaHistorial,
+  pushHistorial,
+  type MatchContext,
+  type MatchHistoryEntry,
+} from '@/game/progression/history'
+import {
   applyPlacement,
   createPlacementState,
   enColocacion,
@@ -50,6 +56,8 @@ export interface CareerData {
   derrotas: number
   xp: number
   skins: string[]
+  /** Las últimas 10 partidas, la más reciente primero (history.ts). */
+  historial: readonly MatchHistoryEntry[]
 }
 
 export function createDefaultCareer(): CareerData {
@@ -61,6 +69,7 @@ export function createDefaultCareer(): CareerData {
     derrotas: 0,
     xp: 0,
     skins: [],
+    historial: [],
   }
 }
 
@@ -118,7 +127,11 @@ export interface CareerResult {
  * una partida como cualquier otra en todo lo que no sea el rango, y una
  * derrota de colocación igual tiene que soltar su skin.
  */
-export function applyMatchResult(data: CareerData, perf: MatchPerformance): CareerResult {
+export function applyMatchResult(
+  data: CareerData,
+  perf: MatchPerformance,
+  contexto?: MatchContext,
+): CareerResult {
   const difficulty = careerDifficulty(data)
   const score = combatScore(perf)
   const expected = expectedCombatScore(difficulty)
@@ -148,6 +161,16 @@ export function applyMatchResult(data: CareerData, perf: MatchPerformance): Care
   const drop = rollDrop(partidaNumero, perf, data.skins)
   const skins = drop.nueva ? [...data.skins, drop.skin.seed] : [...data.skins]
 
+  // El historial corre por las dos ramas, igual que XP y drop: una colocación
+  // es una partida como cualquier otra en todo lo que no sea el rango.
+  const entrada = crearEntradaHistorial({
+    partida: partidaNumero,
+    perf,
+    rrChange: rrOutcome?.change ?? null,
+    rank: rank?.rank ?? null,
+    contexto,
+  })
+
   return {
     data: {
       rank,
@@ -157,6 +180,7 @@ export function applyMatchResult(data: CareerData, perf: MatchPerformance): Care
       derrotas: data.derrotas + (perf.win ? 0 : 1),
       xp: xp.xp,
       skins,
+      historial: pushHistorial(data.historial, entrada),
     },
     progress: {
       perf,
