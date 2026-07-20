@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { createMatchTargets, resolveNearestEnemy } from '@/game/match/targeting'
+import {
+  createMatchTargets,
+  resolveNearestEnemy,
+  resolveNearestNeighbour,
+} from '@/game/match/targeting'
 import { vec3 } from '@/game/math/vec3'
 
 describe('resolución del enemigo más cercano', () => {
@@ -138,5 +142,55 @@ describe('preferencia por el enemigo dentro del cono', () => {
     const out = vec3()
     expect(resolveNearestEnemy(targets, 0, out, YAW_HACIA_MENOS_Z, RANGO, SEMI)).toBe(true)
     expect(out.z).toBe(12)
+  })
+})
+
+describe('resolución del vecino más cercano (espacio personal)', () => {
+  it('no mira equipos: un compañero pegado gana a un enemigo lejano', () => {
+    const targets = createMatchTargets('tdm', 4)
+    targets.positions[0] = vec3(0, 0, 0) // self, equipo 0
+    targets.positions[2] = vec3(1, 0, 0) // equipo 0 (compañero) -- pegado
+    targets.positions[1] = vec3(30, 0, 0) // equipo 1
+    targets.positions[3] = vec3(10, 0, 0) // equipo 1
+
+    const out = vec3()
+    // resolveNearestEnemy ignoraría al compañero; éste NO: un cuerpo encima
+    // estorba aunque sea del mismo bando (es la captura que motivó la tarea).
+    const d = resolveNearestNeighbour(targets, 0, out)
+    expect(out).toEqual({ x: 1, y: 0, z: 0 })
+    expect(d).toBeCloseTo(1)
+  })
+
+  it('ignora al propio bot y a los muertos', () => {
+    const targets = createMatchTargets('ffa', 3)
+    targets.positions[0] = vec3(0, 0, 0)
+    targets.positions[1] = vec3(2, 0, 0)
+    targets.positions[2] = vec3(9, 0, 0)
+    targets.alive[1] = false // el más cercano está muerto: un cadáver no estorba
+
+    const out = vec3()
+    const d = resolveNearestNeighbour(targets, 0, out)
+    expect(out).toEqual({ x: 9, y: 0, z: 0 })
+    expect(d).toBeCloseTo(9)
+  })
+
+  it('solo en el mapa: Infinity, para que el término de separación se apague', () => {
+    const targets = createMatchTargets('ffa', 3)
+    targets.positions[0] = vec3(0, 0, 0)
+    targets.alive[1] = false
+    targets.alive[2] = false
+
+    expect(resolveNearestNeighbour(targets, 0, vec3())).toBe(Infinity)
+  })
+
+  it('sólo XZ: alguien justo encima en Y sigue siendo el vecino más cercano', () => {
+    const targets = createMatchTargets('ffa', 3)
+    targets.positions[0] = vec3(0, 0, 0)
+    targets.positions[1] = vec3(0, 20, 0) // mismo XZ, 20m más arriba
+    targets.positions[2] = vec3(5, 0, 0)
+
+    const out = vec3()
+    expect(resolveNearestNeighbour(targets, 0, out)).toBeCloseTo(0)
+    expect(out.y).toBe(20)
   })
 })

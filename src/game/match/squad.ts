@@ -15,7 +15,11 @@ import { createBotState, stepBotThink, type BotState, type BotWorld } from '@/ga
 import { BOTS } from '@/game/bots/tuning'
 import type { WeaponArchetype } from '@/game/weapons/archetypes'
 import type { Vec3 } from '@/game/math/vec3'
-import { resolveNearestEnemy, type MatchTargets } from '@/game/match/targeting'
+import {
+  resolveNearestEnemy,
+  resolveNearestNeighbour,
+  type MatchTargets,
+} from '@/game/match/targeting'
 
 /**
  * Crea `archetypes.length` bots repartidos por `spawns` (round-robin si hay
@@ -78,6 +82,12 @@ export function stepMatchBotsThink(
           BOTS.visionRangeM,
           (BOTS.visionHalfAngleDeg * Math.PI) / 180,
         )
+        // Vecino más cercano SIN mirar equipos: es lo que usa el bot para no
+        // quedarse clavado encima de otro cuerpo (bots/tuning.ts
+        // personalSpaceM). Va acá y no adentro de bots/bot.ts por la misma
+        // razón que targetEye: bots/ no sabe que existe una partida con
+        // participantes, sólo recibe el mundo ya resuelto.
+        world.neighbourDistM = resolveNearestNeighbour(targets, i + 1, world.neighbourPos)
       }
       stepBotThink(bot, world, interval)
     }

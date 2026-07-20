@@ -48,6 +48,57 @@ export function createMatchTargets(mode: MatchMode, participantCount: number): M
 const FAR_AWAY = 1e6
 
 /**
+ * Escribe en `out` la posición del participante vivo más cercano a `selfId`
+ * y devuelve su distancia XZ (Infinity si `selfId` está solo en el mapa).
+ *
+ * A diferencia de `resolveNearestEnemy`, este NO mira equipos ni conos: no
+ * pregunta a quién hay que dispararle, pregunta quién está ocupando el mismo
+ * pedazo de vereda. Un compañero encima estorba igual que un enemigo encima
+ * -- la captura que motivó esta tarea es un bot rojo y tres azules parados en
+ * fila, o sea las dos cosas mezcladas.
+ *
+ * Sólo XZ, igual que el resto de las distancias de bots/: la altura no
+ * cambia si dos cuerpos se están pisando.
+ *
+ * Cero asignaciones: `out` es el mismo Vec3 preasignado del llamador
+ * (BotWorld.neighbourPos), y adentro sólo hay escalares.
+ */
+export function resolveNearestNeighbour(
+  targets: MatchTargets,
+  selfId: number,
+  out: Vec3,
+): number {
+  const self = targets.positions[selfId]
+  let best = Infinity
+  let bestIndex = -1
+
+  for (let i = 0; i < targets.positions.length; i++) {
+    if (i === selfId || !targets.alive[i]) continue
+    const p = targets.positions[i]
+    const dx = p.x - self.x
+    const dz = p.z - self.z
+    const d = Math.sqrt(dx * dx + dz * dz)
+    if (d < best) {
+      best = d
+      bestIndex = i
+    }
+  }
+
+  if (bestIndex < 0) {
+    out.x = FAR_AWAY
+    out.y = FAR_AWAY
+    out.z = FAR_AWAY
+    return Infinity
+  }
+
+  const p = targets.positions[bestIndex]
+  out.x = p.x
+  out.y = p.y
+  out.z = p.z
+  return best
+}
+
+/**
  * Escribe en `out` la posición del enemigo vivo más cercano a
  * `targets.positions[selfId]` (excluyendo al propio `selfId` y a cualquier
  * participante del mismo equipo). Devuelve `false` (y deja `out` en el
