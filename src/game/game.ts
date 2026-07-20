@@ -41,9 +41,17 @@ import {
   careerFromProgress,
   createProgressStore,
   progressWithCareer,
+  progressWithWeaponXp,
 } from '@/game/progression/store'
 import { applyMatchResult, careerDifficulty, type MatchProgress } from '@/game/progression/career'
 import { performanceFromStats } from '@/game/progression/combat-score'
+import {
+  applyWeaponXp,
+  createWeaponTally,
+  registrarDano,
+  registrarKill,
+  type WeaponXpOutcome,
+} from '@/game/progression/weapon-xp'
 import { getWeaponVisual, resolveArchetypeId, weaponIndex } from '@/game/weapons/registry'
 import { resolveRecoilPattern } from '@/game/weapons/recoil-patterns'
 import { createRigWeapon, syncRigWeapon } from '@/game/weapons/viewmodel/adapt'
@@ -205,6 +213,17 @@ export interface Game {
    *  drop de skin. `null` mientras la partida sigue viva; se llena una sola
    *  vez, al terminar. */
   readonly matchProgress: MatchProgress | null
+
+  /**
+   * XP ganada por cada arma que el jugador usó en la partida, con su ascenso
+   * de nivel y los camos de maestría que desbloqueó
+   * (progression/weapon-xp.ts). Vacío mientras la partida sigue viva y
+   * mientras el jugador no haya hecho daño con ninguna arma.
+   *
+   * Va aparte de `matchProgress` a propósito: la XP de arma no es parte de
+   * la carrera y no toca el rango.
+   */
+  readonly weaponXp: readonly WeaponXpOutcome[]
 
   /**
    * Rellena `out` con el estado de combate del jugador. Lectura pura: no
@@ -763,6 +782,17 @@ export function createGame(
   let matchProgress: MatchProgress | null = null
 
   /**
+   * Acumulado de XP por arma de ESTA partida (progression/weapon-xp.ts). Se
+   * crea una sola vez y se llena desde el camino del disparo, que por eso no
+   * puede asignar: los buffers ya están reservados acá.
+   */
+  const weaponTally = createWeaponTally()
+
+  /** Qué le pasó a cada arma usada en la partida. Lo lee la UI del resumen
+   *  para mostrar la barra del arma y los camos de maestría ganados. */
+  let weaponXp: WeaponXpOutcome[] = []
+
+  /**
    * Cobra la partida terminada: aplica RR (o colocación), XP y drop sobre
    * el guardado, y persiste. Se llama exactamente una vez por partida
    * (ver el guard en frame()).
@@ -788,7 +818,15 @@ export function createGame(
       modo: summary.mode,
     })
     matchProgress = resultado.progress
-    progressStore.save(progressWithCareer(progress, resultado.data))
+
+    // XP de arma: va aparte de la carrera a propósito. No toca rango ni RR
+    // (son ejes separados), así que se aplica sobre el guardado ya
+    // actualizado por la carrera en vez de mezclarse con applyMatchResult.
+    const armas = applyWeaponXp(progress.armas, weaponTally)
+    weaponXp = armas.outcomes
+    progressStore.save(
+      progressWithWeaponXp(progressWithCareer(progress, resultado.data), armas.armas),
+    )
 
     // Soltar el puntero al terminar la partida. El resumen (ui/MatchSummary)
     // tiene botones y una caja que se abre con un click: con el mouse
@@ -1599,8 +1637,20 @@ export function createGame(
         const victimId = shotResult.owner - targetCount
         killed = damageBot(bots[victimId - 1], shotResult.damage)
         recordDamage(matchState, PLAYER_ID, shotResult.damage)
+        const headshot = shotResult.part === 'head'
         if (killed) {
-          recordKill(matchState, PLAYER_ID, victimId, weaponLabel(combatArchetypeId ?? 'ar-1'), shotResult.part === 'head')
+          recordKill(matchState, PLAYER_ID, victimId, weaponLabel(combatArchetypeId ?? 'ar-1'), headshot)
+        }
+
+        // XP del ARMA EN MANO (progression/weapon-xp.ts). Se atribuye acá y
+        // no en el resumen porque `currentSlug` es lo único que sabe con qué
+        // se disparó ESTE tiro: el menú de pausa deja cambiar de arma en
+        // vivo, así que el loadout del final de la partida no dice quién
+        // hizo qué. Cero asignaciones: los buffers del acumulado ya están
+        // reservados (createWeaponTally, arriba).
+        if (currentSlug !== null) {
+          registrarDano(weaponTally, currentSlug, shotResult.damage)
+          if (killed) registrarKill(weaponTally, currentSlug, headshot)
         }
       }
 
@@ -2086,6 +2136,9 @@ export function createGame(
     },
     get matchState() {
       return matchState
+    },
+    get weaponXp() {
+      return weaponXp
     },
     get matchProgress() {
       return matchProgress
