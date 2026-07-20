@@ -5,6 +5,7 @@ import {
   Color,
   Mesh,
   MeshBasicMaterial,
+  MeshDepthMaterial,
   MeshStandardMaterial,
 } from 'three'
 import { CAMO_FAMILY_INDEX, ESCALA_FAMILIA } from '@/game/skins/camo-families'
@@ -231,9 +232,49 @@ describe('material de skin', () => {
     expect(shaderB.uniforms.uSkinEnabled.value).toBe(0)
   })
 
-  it('devuelve null si la malla no tiene un material unlit único', () => {
+  // Este test afirmaba lo contrario —que un array de materiales devolvía
+  // `null`— y esa afirmación ERA el bug: las armas de COD con varias
+  // primitivas se fusionan en una malla con array de materiales, así que
+  // caían justo en esa rama y se quedaban sin camuflaje sin ningún error.
+  it('parcha TODOS los materiales de una malla fusionada, no sólo el primero', () => {
     const mesh = mallaDeArma()
-    mesh.material = [new MeshBasicMaterial(), new MeshBasicMaterial()]
+    const cuerpo = new MeshBasicMaterial()
+    const hierros = new MeshBasicMaterial()
+    mesh.material = [cuerpo, hierros]
+
+    const handle = createSkinHandle(mesh)
+    expect(handle).not.toBeNull()
+
+    const shaderCuerpo = compilar(cuerpo)
+    const shaderHierros = compilar(hierros)
+    handle!.setSkin(generateSkin('fusionada:7'))
+
+    // Las dos piezas encendidas: si sólo se parchara la primera, los hierros
+    // quedarían del color de fábrica al lado de un cuerpo camuflado.
+    expect(shaderCuerpo.uniforms.uSkinEnabled.value).toBe(1)
+    expect(shaderHierros.uniforms.uSkinEnabled.value).toBe(1)
+    // Y con el MISMO patrón y la misma escala, o el camuflaje no se
+    // continuaría de una pieza a la otra.
+    expect(shaderHierros.uniforms.uSkinPattern.value).toBe(
+      shaderCuerpo.uniforms.uSkinPattern.value,
+    )
+    expect(shaderHierros.uniforms.uSkinPatternScale.value).toBe(
+      shaderCuerpo.uniforms.uSkinPatternScale.value,
+    )
+    // uSkinExtent es el tamaño del arma ENTERA, igual en las dos: medido por
+    // pieza, los hierros llevarían el patrón ampliado como si fueran un arma
+    // completa del tamaño de un dedo.
+    expect(shaderHierros.uniforms.uSkinExtent.value.toArray()).toEqual(
+      shaderCuerpo.uniforms.uSkinExtent.value.toArray(),
+    )
+
+    handle!.setTime(1.5)
+    expect(shaderHierros.uniforms.uSkinTime.value).toBe(1.5)
+  })
+
+  it('devuelve null si la malla no tiene ningún material inyectable', () => {
+    const mesh = mallaDeArma()
+    mesh.material = new MeshDepthMaterial()
     expect(createSkinHandle(mesh)).toBeNull()
   })
 

@@ -33,6 +33,7 @@ import {
   type WebGLRenderer,
 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { instalarRigDeLuz } from '@/game/weapons/viewmodel/lighting'
 import { createSkinHandle, type SkinHandle } from '@/game/skins/material'
 import type { Skin } from '@/game/skins/generator'
@@ -295,26 +296,90 @@ interface WeaponParts {
  * camino degradado explícito.
  */
 function isolateParts(root: Object3D): WeaponParts | null {
-  let body: Mesh | null = null
+  // Se juntan TODAS las mallas del cuerpo, no la primera.
+  //
+  // Por qué: una malla glTF con varias primitivas llega a three como un Group
+  // con una `Mesh` por primitiva (GLTFLoader), y los `c_` de COD tienen hasta
+  // 5 — cuerpo, hierros, guardamanos, bípode, cada una con SU textura, porque
+  // el camino PBR conserva un material por primitiva en vez de hornear todo a
+  // un color por vértice.
+  //
+  // Quedarse con la primera dibujaba un pedazo del arma y tiraba el resto. En
+  // 28 de las 69 de COD eso significaba, por ejemplo, un M4A1 sin hierros, sin
+  // guardamanos y sin cañón: no reventaba, no había error, simplemente faltaba
+  // media arma. Y como los hierros son una primitiva aparte, el ADS apuntaba
+  // con una mira que no estaba dibujada.
+  //
+  // Es el mismo error que el pipeline de CS ya documenta al fusionar mallas
+  // antes de exportar; el camino PBR lo reintrodujo del lado del runtime
+  // porque ahí no se puede fusionar (materiales distintos), así que se
+  // resuelve acá.
+  const bodies: Mesh[] = []
   let mag: Mesh | null = null
 
   root.traverse((child) => {
     if (!(child instanceof Mesh)) return
     if (child.name === MAG_NODE_NAME) {
       if (mag === null) mag = child
-    } else if (body === null) {
-      body = child
+    } else {
+      bodies.push(child)
     }
   })
 
-  if (body === null) return null
+  if (bodies.length === 0) return null
 
-  const foundBody: Mesh = body
+  const foundBody = bodies.length === 1 ? bodies[0] : mergeBodies(bodies)
   resetTransform(foundBody)
   const foundMag: Mesh | null = mag
   if (foundMag !== null) resetTransform(foundMag)
 
   return { body: foundBody, mag: foundMag }
+}
+
+/**
+ * Fusiona varias primitivas en UNA malla con array de materiales.
+ *
+ * Se fusiona en vez de devolver una lista porque todo lo que viene después
+ * —caché por slug, `attach`, el handle de camuflaje, el pivote del cargador—
+ * está escrito contra UNA malla. Fusionar mantiene ese contrato intacto y
+ * además baja las primitivas a una sola llamada de dibujo por arma, que es lo
+ * que pide el presupuesto de 2,5 ms.
+ *
+ * `mergeGeometries(..., true)` genera un grupo por geometría, que es
+ * justamente lo que hace que un array de materiales se dibuje bien: grupo `i`
+ * usa material `i`. Por eso el orden de las dos listas tiene que ser el mismo.
+ *
+ * Si la fusión no se puede hacer (atributos distintos entre primitivas)
+ * `mergeGeometries` devuelve null: en ese caso se cae a la primera malla, que
+ * es el comportamiento viejo. Es peor que fusionar pero sigue dibujando algo,
+ * y el aviso queda en consola en vez de reventar la carga del arma.
+ */
+function mergeBodies(bodies: Mesh[]): Mesh {
+  // Las primitivas vienen con la transformada del nodo padre puesta encima;
+  // hay que hornearla ANTES de fusionar o cada pieza queda donde estaba en el
+  // espacio del nodo y el arma sale desarmada.
+  const geometries = bodies.map((m) => {
+    m.updateWorldMatrix(true, false)
+    const g = m.geometry.clone()
+    g.applyMatrix4(m.matrixWorld)
+    return g
+  })
+
+  const merged = mergeGeometries(geometries, true)
+  if (!merged) {
+    console.warn(
+      `viewmodel: no se pudieron fusionar las ${bodies.length} primitivas del cuerpo; ` +
+        'se dibuja sólo la primera',
+    )
+    for (const g of geometries) g.dispose()
+    return bodies[0]
+  }
+
+  const materials = bodies.map((m) => (Array.isArray(m.material) ? m.material[0] : m.material))
+  const mesh = new Mesh(merged, materials)
+  mesh.name = bodies[0].name
+  for (const g of geometries) g.dispose()
+  return mesh
 }
 
 /**

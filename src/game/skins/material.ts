@@ -1225,66 +1225,99 @@ export interface SkinHandle {
   setTime(seconds: number): void
 }
 
-function materialOf(mesh: Mesh): SkinnableMaterial | null {
-  const material = mesh.material
-  if (Array.isArray(material)) return null
-  if (material instanceof MeshBasicMaterial) return material
-  if (material instanceof MeshStandardMaterial) return material
-  return null
+function esSkinnable(material: unknown): material is SkinnableMaterial {
+  return material instanceof MeshBasicMaterial || material instanceof MeshStandardMaterial
 }
 
 /**
- * Prepara una malla para llevar skins y devuelve su handle, o null si la
- * malla no tiene un material inyectable único (nunca debería pasar con el
- * pipeline actual, que produce exactamente eso; si pasara, el arma se sigue
- * viendo con su material crudo en vez de reventar).
+ * TODOS los materiales parchables de una malla, no uno.
+ *
+ * Devolvía un material suelto y `null` ante un array, y eso dejaba sin
+ * camuflaje a las armas de COD con varias primitivas: `isolateParts` las
+ * fusiona en una malla con array de materiales (cuerpo, hierros,
+ * guardamanos...), así que caían justo en la rama que devolvía `null` y se
+ * quedaban con su textura cruda para siempre. No fallaba: simplemente la skin
+ * no aparecía.
+ *
+ * Se filtra lo no parchable en vez de rechazar la malla entera: si una
+ * primitiva trajera un material raro, el resto del arma igual lleva camuflaje.
+ */
+function materialsOf(mesh: Mesh): SkinnableMaterial[] {
+  const material = mesh.material
+  if (Array.isArray(material)) return material.filter(esSkinnable)
+  return esSkinnable(material) ? [material] : []
+}
+
+/**
+ * Prepara una malla para llevar skins y devuelve su handle, o null si no tiene
+ * ningún material inyectable (el arma se sigue viendo con su material crudo en
+ * vez de reventar).
+ *
+ * Parcha TODOS los materiales de la malla, no el primero: un arma de COD
+ * fusionada trae uno por pieza y hay que escribirles los uniforms a todos, o
+ * el camuflaje entraría sólo en el cuerpo y los hierros quedarían del color de
+ * fábrica — que es peor que no tener camuflaje, porque se ve como un error de
+ * render y no como una decisión.
+ *
+ * `uSkinExtent` se calcula UNA vez sobre la malla ya fusionada y se copia al
+ * uniform de cada material: es el tamaño del arma ENTERA, y es lo que hace que
+ * el patrón tenga la misma escala en todas sus piezas. Calculado por pieza,
+ * los hierros saldrían con el camuflaje ampliado como si fueran un arma
+ * completa del tamaño de un dedo.
  */
 export function createSkinHandle(mesh: Mesh): SkinHandle | null {
-  const material = materialOf(mesh)
-  if (!material) return null
+  const materiales = materialsOf(mesh)
+  if (materiales.length === 0) return null
 
-  const uniforms = patch(material)
-  fillExtent(mesh, uniforms.uSkinExtent.value)
+  const todos = materiales.map((m) => patch(m))
+  const extent = new Vector3()
+  fillExtent(mesh, extent)
+  for (const u of todos) u.uSkinExtent.value.copy(extent)
 
   return {
     setSkin(skin: Skin | null): void {
-      if (!skin) {
-        uniforms.uSkinEnabled.value = 0
-        return
+      for (const uniforms of todos) {
+        if (!skin) {
+          uniforms.uSkinEnabled.value = 0
+          continue
+        }
+        uniforms.uSkinEnabled.value = 1
+        // setRGB con SRGBColorSpace: las paletas se escriben en hex sRGB
+        // (skins/palettes.ts) y el render trabaja en lineal. Sin la
+        // conversión, todas las skins salen lavadas.
+        uniforms.uSkinBase.value.setRGB(
+          skin.colorBase.r,
+          skin.colorBase.g,
+          skin.colorBase.b,
+          SRGBColorSpace,
+        )
+        uniforms.uSkinAccent.value.setRGB(
+          skin.colorAccent.r,
+          skin.colorAccent.g,
+          skin.colorAccent.b,
+          SRGBColorSpace,
+        )
+        uniforms.uSkinPattern.value = PATTERN_INDEX[skin.pattern]
+        uniforms.uSkinFamily.value = CAMO_FAMILY_INDEX[skin.family]
+        // La escala de la familia se premultiplica acá y no en el shader: una
+        // familia puede caer sobre patrones anfitriones con rangos de escala muy
+        // distintos (hidrografico va de 2.5 a 6, degradado de 0.8 a 1.6), y sin
+        // corregir saldría con cuatro veces más repeticiones en un anfitrión que
+        // en otro. Como familia y patrón clásico son excluyentes por skin, el
+        // mismo uniform sirve para los dos sin ambigüedad.
+        uniforms.uSkinPatternScale.value = skin.patternScale * ESCALA_FAMILIA[skin.family]
+        uniforms.uSkinWear.value = skin.wear
+        uniforms.uSkinMetal.value = skin.metalness
+        uniforms.uSkinEmissive.value = skin.emissive
+        uniforms.uSkinAnim.value = ANIMATION_INDEX[skin.animation]
       }
-      uniforms.uSkinEnabled.value = 1
-      // setRGB con SRGBColorSpace: las paletas se escriben en hex sRGB
-      // (skins/palettes.ts) y el render trabaja en lineal. Sin la
-      // conversión, todas las skins salen lavadas.
-      uniforms.uSkinBase.value.setRGB(
-        skin.colorBase.r,
-        skin.colorBase.g,
-        skin.colorBase.b,
-        SRGBColorSpace,
-      )
-      uniforms.uSkinAccent.value.setRGB(
-        skin.colorAccent.r,
-        skin.colorAccent.g,
-        skin.colorAccent.b,
-        SRGBColorSpace,
-      )
-      uniforms.uSkinPattern.value = PATTERN_INDEX[skin.pattern]
-      uniforms.uSkinFamily.value = CAMO_FAMILY_INDEX[skin.family]
-      // La escala de la familia se premultiplica acá y no en el shader: una
-      // familia puede caer sobre patrones anfitriones con rangos de escala muy
-      // distintos (hidrografico va de 2.5 a 6, degradado de 0.8 a 1.6), y sin
-      // corregir saldría con cuatro veces más repeticiones en un anfitrión que
-      // en otro. Como familia y patrón clásico son excluyentes por skin, el
-      // mismo uniform sirve para los dos sin ambigüedad.
-      uniforms.uSkinPatternScale.value = skin.patternScale * ESCALA_FAMILIA[skin.family]
-      uniforms.uSkinWear.value = skin.wear
-      uniforms.uSkinMetal.value = skin.metalness
-      uniforms.uSkinEmissive.value = skin.emissive
-      uniforms.uSkinAnim.value = ANIMATION_INDEX[skin.animation]
     },
 
+    // Se llama una vez por frame. El bucle recorre un array ya existente y
+    // escribe un número en cada uno: cero asignaciones, igual que antes. En
+    // el 80% del arsenal el array tiene un solo elemento.
     setTime(seconds: number): void {
-      uniforms.uSkinTime.value = seconds
+      for (const uniforms of todos) uniforms.uSkinTime.value = seconds
     },
   }
 }
