@@ -16,7 +16,7 @@ la receta y de las trampas que tiene.
 | Qué | Dónde |
 |---|---|
 | Generador (lógica pura + análisis) | `scripts/lib/skybox.ts` |
-| Tests del generador | `scripts/lib/skybox.test.ts` (21 tests) |
+| Tests del generador | `scripts/lib/skybox.test.ts` (28 tests) |
 | CLI de horneado | `scripts/generate-skybox.ts` |
 | Asset horneado | `public/assets/skybox/galaxia-purpura/{px,nx,py,ny,pz,nz}.png` |
 
@@ -27,11 +27,11 @@ que sí está commiteado. Se regenera con
 node scripts/generate-skybox.ts
 ```
 
-en ~4.5 s, byte por byte idéntico mientras no cambien semilla ni paleta
+en ~11 s, byte por byte idéntico mientras no cambien semilla ni paleta
 (verificado con `shasum`, no asumido). **Un deploy tiene que correr ese comando
 antes del build**, o el juego pide seis PNG que no existen.
 
-Formato: 6 PNG de 1024x1024, RGBA8, **1.1 MB en total**. Los consume
+Formato: 6 PNG de 1024x1024, RGBA8, **1.7 MB en total** (era 1.1 MB con el cielo viejo: la galaxia tiene mucha más estructura y comprime peor). Los consume
 `THREE.CubeTextureLoader` sin ninguna librería extra.
 
 ---
@@ -76,8 +76,10 @@ De ahí salen dos números, los dos verificados por tests:
   los colores de equipo claros (`0xffd21e`) siguen destacándose *contra* el
   cielo, no sólo las siluetas oscuras.
 
-El cielo entero vive entonces entre **0.226 y 0.313** de luminancia: un rango
-de 0.09 sobre 1. Eso es lo que obligó al hallazgo central del diseño:
+El cielo entero vive entonces entre **0.226 y 0.437** de luminancia: un rango
+de 0.21 sobre 1 (el techo lo gasta casi entero el núcleo de la espiral, que es
+el único aporte que se permite gastar luminancia). Eso es lo que obligó al
+hallazgo central del diseño:
 
 > **La riqueza visual es de TONO, no de brillo.** El ojo separa magenta de
 > índigo aunque los dos tengan la misma luminancia, y la detección de siluetas
@@ -232,10 +234,18 @@ Capas, en orden:
 
 ```
 base    = degradado vertical horizonte/cenit/nadir   (siempre >= piso)
-banda   = pertenencia a un gran círculo inclinado 38 grados, ondulado con fBm
-polvo   = fBm que MULTIPLICA el aporte de la banda (nunca al base)
-color   = base + banda * (1-polvo) * paleta + estrellas
+disco   = espiral logarítmica de 2 brazos alrededor del eje de la galaxia,
+          con grano de dos escalas y calles de polvo entre brazos
+núcleo  = dos gaussianas concéntricas en theta (una ancha + una angosta)
+banda   = galaxia secundaria de canto: gran círculo con OTRO eje que el disco
+polvo   = fBm que MULTIPLICA el aporte del disco y de la banda (nunca al base)
+color   = base + disco * (1-polvo) * colorBrazo + núcleo + banda + estrellas
 ```
+
+El disco reemplazó a la banda única como rasgo principal: con una sola banda
+inclinada el cielo se leía como fondo y no como galaxia, que es lo que el dueño
+rechazó por "muy baja calidad". La banda quedó como rasgo de reparto — es el
+segundo brazo que cruza en diagonal en la referencia.
 
 El detalle que sostiene el piso de luminancia: **el polvo multiplica el aporte
 de la nebulosa en vez de restarse del total.** Restándolo — que es como se
@@ -247,7 +257,14 @@ que lo rescate.
 Las estrellas son una grilla 3D de puntos característicos evaluada desde la
 dirección, no salpicaduras sobre las caras: así una estrella sobre una arista
 se ve igual desde las dos caras y la densidad por ángulo sólido queda pareja.
-Son ~1600 en todo el domo, del orden de las ~3000 que se ven a ojo desnudo.
+Son ~4600 en todo el domo, y dentro de los brazos su brillo se refuerza hasta
+6.5x: en la referencia los brazos SON granos de estrellas, así que reforzarlas
+ahí es lo que integra el campo estelar a la galaxia en vez de dejarlo como un
+fondo pegado detrás. Se pudo casi triplicar la cantidad (eran ~1600) porque al
+mismo tiempo se afinó el radio de cada una: la métrica de contraste local se
+dispara con el TAMAÑO de los puntos brillantes, no con su cantidad, y las
+estrellas gordas de la primera versión se comían 0.039 de un presupuesto de
+0.05 ellas solas.
 
 ---
 
@@ -328,3 +345,108 @@ cuerpo son píxeles MEZCLA de cuerpo y cielo; contarlos como cielo daba un
 mínimo de 0.1765 y hacía parecer que el piso de luminancia se violaba cuando
 no. Descartando todo píxel de cielo con un vecino no-cielo a 3 px, el mínimo
 sube a 0.2346, que es el número honesto.
+
+---
+
+## Segunda pasada: de banda a galaxia espiral
+
+El cielo de arriba cumplía todo el presupuesto y aun así el dueño lo rechazó
+por "muy baja calidad": era un degradado índigo con una banda magenta, y se
+leía como fondo, no como galaxia. La referencia pedida es una espiral casi de
+frente, con brazos granulares, calles de polvo oscuras, núcleo brillante y
+variación azul/magenta.
+
+### El gate que faltaba: un piso, no otro techo
+
+El presupuesto original son **todos techos** (techo de luminancia, techo de
+contraste local) más un piso de luminancia. Un degradado liso sin galaxia los
+cumple todos con holgura — o sea que el conjunto de tests **no podía
+distinguir el cielo bueno del malo**, y una regresión a lavanda plano pasaba
+en verde.
+
+Por eso se agregó `CROMA_ESTRUCTURA_PISO`: el mismo pasa-banda del contraste
+local pero sobre los ejes oponentes de color, y aplicado como PISO. Medido con
+la misma función sobre los dos cubemaps:
+
+| | contraste luminancia | contraste croma |
+|---|---|---|
+| cielo viejo (banda) | 0.0389 | 0.0155 |
+| cielo nuevo (espiral) | 0.0401 | 0.0808 |
+
+**5.2x más estructura cromática por +3% de luminancia.** Es la estrategia
+entera del archivo en un renglón: mover el tono y no el brillo. La galaxia se
+lee por color, el enemigo por brillo, cada uno en su canal.
+
+### Los tests se verificaron rompiendo la galaxia a propósito
+
+Un test que no puede fallar es peor que no tener test. Se rompió el generador
+de ocho maneras distintas y se corrió la suite contra cada mutante:
+
+| Mutante | ¿Lo caza? | Test que falla |
+|---|---|---|
+| disco apagado | sí | brazos + grano |
+| calles de polvo borradas (`anchoBrazos` 0.99) | sí | color-no-brillo |
+| sin variación azul/magenta | sí | brazos azul→magenta |
+| grano constante | sí | brazos granulares |
+| núcleo apagado | sí | núcleo más brillante |
+| espiral desenroscada (anillos) | sí | brazos |
+| brazos en gris | sí | 5 tests |
+| banda secundaria apagada | sí (incidental) | tolerancia de costura |
+
+Las tres primeras corridas **no** cazaban tres de esos mutantes: variación de
+tono, grano y núcleo no tenían guard, o sea que tres rasgos que la referencia
+pide explícitamente se podían perder en una refactorización sin que nada
+avisara. Los tres tests que faltaban se escribieron a partir de ese hallazgo.
+
+Detalle de método que costó una iteración: la primera versión del guard de
+variación azul/magenta medía el rango global de `b - r` sobre el disco, y
+**subía** al romper la variación — pintar todos los brazos de magenta aleja el
+brazo del fondo aunque los brazos entre sí queden iguales. Hay que condicionar
+la medición a los brazos (el tercio más brillante de cada anillo) para que mida
+lo que dice el nombre del test.
+
+### Re-medido en el juego después de integrar
+
+CDP contra un Chrome aislado, `gl.readPixels` sobre el framebuffer real,
+1280x633, mirando arriba en dos mapas:
+
+| Mapa / vista | Mín cielo (erosionado) | Media cielo | Silueta | Contraste |
+|---|---|---|---|---|
+| arena / arriba | 0.2363 | 0.2679 | — | — |
+| arena / borde | 0.2363 | 0.2581 | 0.0177 | **0.2404** |
+| torre / arriba | 0.2363 | 0.2679 | — | — |
+| torre / núcleo | 0.2363 | 0.2717 | 0.1040 | **0.1677** |
+| torre / borde | 0.2397 | 0.2520 | 0.0219 | **0.2301** |
+
+Todo por encima del piso 0.22 y del contraste 0.12 de diseño. El mínimo
+erosionado da idéntico en los dos mapas porque es una propiedad del cubemap y
+no del mapa, que es exactamente lo que uno espera si la medición está bien.
+
+**La trampa del antialiasing se volvió a ver, y es grande:** en la vista
+`borde` el mínimo SIN erosionar da 0.1507 — muy por debajo del piso — y con
+erosión de 3 px da 0.2363. Sin erosionar se reporta una violación del gate que
+no existe.
+
+### Resolución: se queda en 1024
+
+| | 512 | 1024 | 2048 |
+|---|---|---|---|
+| Peso de descarga | 616 KB | **1.7 MB** | 4.8 MB |
+| VRAM (RGBA8, 6 caras) | 6 MB | **24 MB** | 96 MB |
+| Generación (`prebuild`) | 2.9 s | **11.2 s** | 50.4 s |
+| GPU, mediana de 90 muestras | 1.18 ms | 1.04 / 2.08 ms | 1.71 / 1.21 ms |
+
+El GPU se midió mirando arriba (peor caso: el cielo ocupa ~90% del frame) con
+el timer del propio juego, que ya corre sobre
+`EXT_disjoint_timer_query_webgl2`. **La resolución no se distingue del ruido:**
+dos corridas de 1024 dieron 1.04 y 2.08 ms, o sea que la varianza entre
+corridas de la MISMA resolución es mayor que cualquier diferencia entre
+resoluciones. Confirma la medición previa.
+
+Como el costo de render no decide, decide la memoria — y 2048 no la justifica:
+recortando la misma región angular de las dos caras, 2048 se ve apenas más
+nítido en el borde de las estrellas y **no aporta ningún detalle nuevo**. El
+rasgo más fino del generador es el grano de frecuencia 48, que cubre ~1.2
+grados; a 1024 eso son ~14 texels, o sea que la señal ya está completamente
+resuelta y 2048 sólo la vuelve a muestrear. 4x de VRAM y 4.5x de tiempo de
+build por nada.
