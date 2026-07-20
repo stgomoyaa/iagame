@@ -146,8 +146,11 @@ describe('apuntado integrado: converge, nunca snapea, y el cono de error cierra 
       yaws.push(bot.aimMotor.yaw)
     }
 
-    // Nunca un salto mayor al máximo permitido por tick.
-    const maxStepRad = (BOTS.aimMaxAngularSpeedDegPerSec * Math.PI) / 180 * TICK_DT
+    // Nunca un salto mayor al máximo permitido por tick. La velocidad de
+    // giro ahora es POR TRAMO (bots/difficulty.ts aimSpeedDegPerSec), no la
+    // constante única de antes: este bot es dificultad 1 (Experto), así que
+    // el tope es el suyo.
+    const maxStepRad = (bot.difficulty.aimSpeedDegPerSec * Math.PI) / 180 * TICK_DT
     for (let i = 1; i < yaws.length; i++) {
       let delta = yaws[i] - yaws[i - 1]
       while (delta > Math.PI) delta -= Math.PI * 2
@@ -204,13 +207,19 @@ describe('combate integrado: el bot dispara por el mismo camino que el jugador',
 
     stepBotThink(bot, world, 1 / BOTS.aiTickHz)
     expect(bot.fsm.current).toBe('engage')
-    expect(bot.combatInput.triggerHeld).toBe(true)
-
+    // Ya NO se puede exigir triggerHeld en el primer think: la demora de
+    // ataque (bots/difficulty.ts attackDelayS) hace que el bot espere a
+    // reaccionar antes de apretar el gatillo -- ese retardo es justamente la
+    // palanca de dificultad que antes no existía. Lo que se afirma es el
+    // resultado: siguiendo el bucle de la partida (think a 15Hz vía
+    // stepAllBotsThink), termina disparando y gastando munición.
     const ammoInicial = bot.combat.fireControl.ammo
     const playerHitboxes: Hitbox[] = []
     let shotsTotal = 0
     for (let i = 0; i < 200; i++) {
-      stepBotMotor(bot, world, TICK_DT)
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
       shotsTotal += stepBotCombat(bot, playerHitboxes, TICK_DT)
     }
     expect(shotsTotal).toBeGreaterThan(0)
@@ -598,6 +607,7 @@ describe('Enfrentar se acerca en vez de quedarse clavado a distancia', () => {
   it('acercándose sigue disparando y no esprinta', () => {
     const { world, bot } = mundoDeDueloLargo()
     let avanzoAlgunaVez = false
+    let disparoAvanzando = false
 
     for (let tick = 0; tick < 900; tick++) {
       world.simTimeS += TICK_DT
@@ -606,13 +616,19 @@ describe('Enfrentar se acerca en vez de quedarse clavado a distancia', () => {
       if (bot.fsm.current !== 'engage') continue
       if (bot.engageAdvancing) {
         avanzoAlgunaVez = true
-        // Avanza disparando: acercarse no es dejar de pelear.
-        expect(bot.combatInput.triggerHeld || bot.combat.recoil.pitchOffset > 0).toBe(true)
+        // Avanza disparando: acercarse no es dejar de pelear. NO se exige
+        // en CADA tick -- la demora de ataque (attackDelayS) y los cortes
+        // momentáneos de línea de vista al navegar dejan ticks sin gatillo
+        // que son correctos. Lo que no puede pasar es avanzar con el arma
+        // guardada TODO el tramo: se afirma que disparó EN ALGÚN momento
+        // mientras avanzaba.
+        if (bot.combatInput.triggerHeld || bot.combat.recoil.pitchOffset > 0) disparoAvanzando = true
       }
       expect(bot.input.sprint, 'un bot en combate no esprinta ni acercándose').toBe(false)
     }
 
     expect(avanzoAlgunaVez, 'nunca entró en modo de avance').toBe(true)
+    expect(disparoAvanzando, 'avanzó todo el tramo con el arma guardada').toBe(true)
   })
 
   it('llegado a distancia de duelo re-ancla y vuelve a bailar en el sitio', () => {
@@ -660,13 +676,13 @@ describe('Enfrentar se acerca en vez de quedarse clavado a distancia', () => {
   })
 })
 
-describe('Enfrentar strafea en vez de disparar plantado', () => {
-  function mundoDeDuelo() {
+describe('Enfrentar: el movimiento lateral responde a una intención, no a un temblor', () => {
+  function mundoDeDuelo(rank = 0.5) {
     const grid = buildNavGrid(ARENA, 1, 1.8)
     const world = createBotWorld(ARENA.boxes, raycastMap, grid)
     // Junto a la cobertura baja del carril izquierdo (map/arena.ts), con
     // línea de vista limpia hacia el objetivo.
-    const bot = createBotState(vec3(-16, 0.1, 6), 0.5, ARCHETYPE, 51)
+    const bot = createBotState(vec3(-16, 0.1, 6), rank, ARCHETYPE, 51)
     bot.aimMotor.yaw = 0
     world.targetEye.x = -16
     world.targetEye.y = 1.6
@@ -674,23 +690,97 @@ describe('Enfrentar strafea en vez de disparar plantado', () => {
     return { world, bot }
   }
 
-  it('un bot en Enfrentar se mueve lateralmente, no se queda clavado', () => {
-    const { world, bot } = mundoDeDuelo()
-    const inicioX = bot.player.position.x
-    const inicioZ = bot.player.position.z
-
-    let lateralMaximo = 0
-    for (let tick = 0; tick < 640; tick++) {
+  /** Corre el duelo y resume el movimiento lateral (eje X, que es el lateral
+   *  en esta geometría): recorrido total y cuántas veces invirtió el sentido
+   *  mientras estaba en Enfrentar. El conteo de inversiones es la lectura
+   *  directa del zigzag -- un umbral de 1cm/tick descarta el ruido del
+   *  integrador de física. */
+  function recorrerLateral(
+    world: BotWorld,
+    bot: ReturnType<typeof createBotState>,
+    ticks: number,
+  ): { recorrido: number; cambiosDeSentido: number } {
+    let recorrido = 0
+    let cambiosDeSentido = 0
+    let sentidoPrev = 0
+    let xPrev = bot.player.position.x
+    for (let tick = 0; tick < ticks; tick++) {
       world.simTimeS += TICK_DT
       stepAllBotsThink([bot], world, TICK_DT)
       stepAllBotsMotor([bot], world, TICK_DT)
-      if (bot.fsm.current !== 'engage') continue
-      const d = Math.hypot(bot.player.position.x - inicioX, bot.player.position.z - inicioZ)
-      if (d > lateralMaximo) lateralMaximo = d
+      if (bot.fsm.current !== 'engage') {
+        xPrev = bot.player.position.x
+        continue
+      }
+      const paso = bot.player.position.x - xPrev
+      xPrev = bot.player.position.x
+      if (Math.abs(paso) < 0.01) continue
+      recorrido += Math.abs(paso)
+      const sentido = paso > 0 ? 1 : -1
+      if (sentidoPrev !== 0 && sentido !== sentidoPrev) cambiosDeSentido++
+      sentidoPrev = sentido
     }
+    return { recorrido, cambiosDeSentido }
+  }
+
+  it('un bot en Enfrentar se mueve lateralmente, no se queda clavado', () => {
+    // Un bot AGRESIVO (dificultad 1) busca ángulo: se mueve de lado. Pero lo
+    // que se afirma NO es sólo "se movió" -- eso era lo que afirmaba la
+    // versión vieja de esta prueba, que sin querer consagraba el zigzag como
+    // invariante. Se afirma que el movimiento es COMPROMETIDO: pocos cambios
+    // de sentido. Un metrónomo (el bug que esta tarea saca) daría decenas.
+    const { world, bot } = mundoDeDuelo(1)
+    const muestras = recorrerLateral(world, bot, 640)
 
     expect(bot.fsm.current).toBe('engage')
-    expect(lateralMaximo, `el bot en Enfrentar se movió ${lateralMaximo.toFixed(2)}m`).toBeGreaterThan(0.8)
+    expect(muestras.recorrido, 'un bot agresivo no busca ángulo').toBeGreaterThan(0.8)
+    // La barra anti-zigzag: en ~5s de duelo, un rodeo con intención cambia de
+    // sentido un puñado de veces (rodea, se planta, rodea al otro lado), no
+    // en cada tick. El metrónomo viejo daba ~20 en 12s -> ~8 en 5s; exigir
+    // <= 6 lo mata sin ser frágil ante el ruido del integrador.
+    expect(muestras.cambiosDeSentido, 'se mueve como metrónomo, no con intención').toBeLessThanOrEqual(6)
+  })
+
+  it('un bot defensivo, junto a cobertura y sin que le disparen, se planta: no tiembla', () => {
+    // Éste es el corazón del arreglo del zigzag. Dificultad 0.5 (Normal, no
+    // rodea) pegado a cobertura y con un objetivo que NO le dispara: no hay
+    // NINGUNA intención lateral que nombrar, así que el bot se queda quieto y
+    // dispara, como un bot de CS 1.6. La versión vieja de estos bots temblaba
+    // acá 4.86 m/s por nada.
+    const { world, bot } = mundoDeDuelo(0.5)
+    const muestras = recorrerLateral(world, bot, 640)
+
+    expect(bot.fsm.current).toBe('engage')
+    // Ni recorre lateralmente de forma apreciable ni cambia de sentido: las
+    // dos caras de "no tiembla".
+    expect(muestras.cambiosDeSentido, 'un bot sin intención no debería oscilar').toBeLessThanOrEqual(2)
+  })
+
+  it('un bot al que le están disparando rompe la línea de tiro, aunque no sea agresivo', () => {
+    // Dificultad 0 (Fácil, agresividad 0.2: NO rodea). Junto a cobertura, así
+    // que tampoco busca cubrirse. La ÚNICA intención que puede moverlo es
+    // 'romper-linea', y sólo se enciende porque le están pegando.
+    const { world, bot } = mundoDeDuelo(0)
+
+    // Control: el mismo bot SIN recibir daño se queda plantado.
+    const control = recorrerLateral(world, bot, 320)
+    expect(control.recorrido, 'sin que le disparen no debería moverse de lado').toBeLessThan(0.4)
+
+    // Ahora sí: un impacto leve por tick (no lo mata) mantiene sinDanoS en 0
+    // y con eso la intención 'romper-linea' viva.
+    const { world: world2, bot: bot2 } = mundoDeDuelo(0)
+    let recorrido = 0
+    let xPrev = bot2.player.position.x
+    for (let tick = 0; tick < 320; tick++) {
+      world2.simTimeS += TICK_DT
+      stepAllBotsThink([bot2], world2, TICK_DT)
+      stepAllBotsMotor([bot2], world2, TICK_DT)
+      if (bot2.health.alive) damageBot(bot2, 1) // le disparan: 1 de daño/tick
+      if (bot2.fsm.current !== 'engage') continue
+      recorrido += Math.abs(bot2.player.position.x - xPrev)
+      xPrev = bot2.player.position.x
+    }
+    expect(recorrido, 'bajo fuego debería romper la línea moviéndose de lado').toBeGreaterThan(0.8)
   })
 
   it('el strafe no se aleja del punto donde entró en Enfrentar: busca ángulo, no emigra', () => {

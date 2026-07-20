@@ -108,18 +108,38 @@ export function lookAt(
 /**
  * Radio del cono de error en el instante `timeSinceAcquiredS` desde que se
  * adquirió el objetivo actual: `errorConeRad` en t=0, decreciendo LINEAL
- * (monótono, sin rebote) hasta 0 en t=reactionTimeS y de ahí en adelante.
- * `reactionTimeS<=0` cierra el cono de inmediato (0) en vez de dividir por
- * cero -- caso límite, no debería darse con los tiers reales (0.12s-0.4s).
+ * (monótono, sin rebote) hasta `steadyRad` en t=reactionTimeS, y de ahí en
+ * adelante ESTABLE en `steadyRad`.
+ *
+ * El piso es la corrección central de la tarea de dificultad. Antes esta
+ * función bajaba a 0 y se quedaba ahí: pasado el tiempo de reacción, CUALQUIER
+ * bot -- Hierro incluido -- apuntaba perfecto mientras siguiera viendo al
+ * objetivo. En un tiroteo de 12 s eso deja ~11.7 s de puntería impecable en
+ * todos los tramos, y es por lo que la dificultad medía exactamente igual de
+ * punta a punta de la tabla (ver bots/difficulty.ts para los números).
+ *
+ * Counter-Strike no hace converger el error a cero: lo re-siembra
+ * (cs_bot_weapon.cpp, `m_aimFocus = MAX(m_aimFocus, fNewMaxFocus)` con
+ * `fRadius = RandomFloat(0, m_aimFocus)`), así que un bot flojo tiembla para
+ * siempre. `steadyRad` es ese temblor permanente.
+ *
+ * `reactionTimeS<=0` asienta el cono de inmediato en `steadyRad` en vez de
+ * dividir por cero -- caso límite, no debería darse con los tramos reales
+ * (0.18 s - 0.5 s).
  */
 export function currentErrorConeRadius(
   errorConeRad: number,
   reactionTimeS: number,
   timeSinceAcquiredS: number,
+  steadyRad = 0,
 ): number {
-  if (reactionTimeS <= 0) return 0
+  // El piso nunca puede quedar por encima del cono inicial: si alguien
+  // configura steadyRad > errorConeRad, el error CRECERÍA con el tiempo, que
+  // es lo contrario de "asentarse". Se toma el menor de los dos.
+  const piso = Math.min(steadyRad, errorConeRad)
+  if (reactionTimeS <= 0) return piso
   const t = Math.min(1, Math.max(0, timeSinceAcquiredS / reactionTimeS))
-  return errorConeRad * (1 - t)
+  return errorConeRad + (piso - errorConeRad) * t
 }
 
 /** Estado del PRNG del cono de error, un mulberry32 por bot -- mismo patrón

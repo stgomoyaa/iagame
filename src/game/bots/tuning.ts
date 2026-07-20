@@ -3,11 +3,12 @@
  * apuntado y estados. Mismo patrón mutable que movement/tuning.ts,
  * feedback/tuning.ts y targets/tuning.ts.
  *
- * Los TRES números de dificultad (tiempo de reacción, cono de error, calidad
- * de reposicionamiento) NO viven acá -- son datos por-tier, interpolados en
- * bots/difficulty.ts. Todo lo demás en este archivo es constante para
- * cualquier bot sea cual sea su dificultad, tal como pide el spec ("la
- * dificultad escala tres números y nada más").
+ * Los números que SÍ escalan con la dificultad (reacción, demora de ataque,
+ * cono de error y su residual, velocidad de mira, agresividad, control de
+ * retroceso, calidad de reposicionamiento) NO viven acá -- son datos
+ * por-tier, interpolados en bots/difficulty.ts. Todo lo de este archivo es
+ * constante para cualquier bot sea cual sea su dificultad; lo que cambia
+ * entre Fácil y Experto vive en difficulty.ts, no acá.
  */
 
 export interface BotsTuning {
@@ -29,11 +30,6 @@ export interface BotsTuning {
 
   /** Frecuencia del tick de IA (percepción + FSM + pathfinding), Hz. */
   aiTickHz: number
-
-  /** Velocidad angular máxima del apuntado, grados/segundo. Fija: no varía
-   *  con la dificultad (spec sección 8: "nada más varía"). Separada del cono
-   *  de error, que sí varía por tier. */
-  aimMaxAngularSpeedDegPerSec: number
 
   /**
    * Grados de retroceso vertical ya acumulado (combat/recoil.ts
@@ -199,6 +195,38 @@ export interface BotsTuning {
    *  poder cambiarlo. Sin esto el bot vibra izquierda-derecha cada tick de
    *  IA, que se lee peor que quedarse quieto. */
   engageStrafeHoldS: number
+  /**
+   * Segundos que el bot sigue rompiendo la línea de tiro después de recibir
+   * un impacto (bots/bot.ts, intención 'romper-linea'). Corto a propósito: es
+   * una reacción a que te peguen, no un modo de andar. Si te siguen pegando
+   * se renueva sola, porque `sinDanoS` se reinicia con cada impacto.
+   */
+  breakLineS: number
+  /**
+   * Metros de distancia a cobertura por encima de los cuales el bot se
+   * considera AL DESCUBIERTO y vale la pena gastar un paso lateral en
+   * taparse. Por debajo ya está lo bastante cerca de algo y moverse sólo lo
+   * expondría más.
+   */
+  coverSeekDistanceM: number
+  /**
+   * Mejora MÍNIMA de distancia a cobertura, metros, para que valga la pena
+   * dar el paso. Es un margen anti-empate: sin él, dos lados casi iguales se
+   * alternan tick a tick y "buscar cobertura" se convierte en el temblor que
+   * esta tarea saca.
+   */
+  coverSeekGainM: number
+  /** Agresividad mínima (bots/difficulty.ts) para que un bot se moleste en
+   *  rodear buscando ángulo. Los bots fáciles no rodean: se plantan y
+   *  disparan, que es justamente lo que se les pide. */
+  flankMinAggression: number
+  /** Segundos máximos de un rodeo antes de plantarse. Acota el único
+   *  movimiento lateral que nadie está forzando. */
+  flankMaxS: number
+  /** Segundos plantado antes de poder iniciar OTRO rodeo. Es lo que impide
+   *  que "termina el rodeo" y "empieza el rodeo contrario" se encadenen y
+   *  reconstruyan el péndulo por otro camino. */
+  flankCooldownS: number
   /** Holgura, metros, sobre la distancia a cobertura actual: un candidato de
    *  strafe que quede más lejos de la cobertura que esto se rechaza y el bot
    *  invierte el sentido. Es lo que evita que buscar ángulo termine en
@@ -303,11 +331,6 @@ export const BOTS: BotsTuning = {
 
   aiTickHz: 15,
 
-  // Vuelta completa (360°) en 0.6s a tope: rápido para un humano pero lejos
-  // de instantáneo -- sigue siendo "seguimiento", nunca snap, sea cual sea
-  // el tamaño del giro que el objetivo pida.
-  aimMaxAngularSpeedDegPerSec: 600,
-
   // Deja pasar el "climb inicial casi plano" de cualquier arma del arsenal
   // (archetypes.ts: los primeros disparos apenas se mueven) sin cortar la
   // ráfaga de entrada, pero corta bastante antes de que el climb total de
@@ -390,6 +413,22 @@ export const BOTS: BotsTuning = {
   // más o menos el ancho de una cobertura de la arena -- se lee como un
   // jugador buscando ángulo, no como un temblor.
   engageStrafeHoldS: 0.9,
+  // 0.7s: alcanza para salir del punto donde el tirador te tenía encuadrado
+  // (~3.5m a velocidad de caminata) sin convertirse en un modo de andar.
+  breakLineS: 0.7,
+  // 2.0m: más lejos que esto de una caja ya no te tapa de nada. Es el mismo
+  // orden que engageStrafeProbeM (1.5m), así que un solo paso lateral puede
+  // de verdad cambiar la respuesta -- un umbral que ningún paso alcanza a
+  // cruzar no guiaría nada.
+  coverSeekDistanceM: 2.0,
+  // 0.35m de mejora mínima: por debajo de eso las dos opciones son la misma
+  // y elegir entre ellas es tirar una moneda cada tick.
+  coverSeekGainM: 0.35,
+  // 0.7 = de Difícil para arriba (bots/difficulty.ts: Difícil 0.75,
+  // Experto 1.0). Fácil (0.2) y Normal (0.5) no rodean.
+  flankMinAggression: 0.7,
+  flankMaxS: 1.6,
+  flankCooldownS: 1.2,
   engageStrafeCoverSlackM: 1.0,
   // 1.0m = la cobertura BAJA de la arena (map/arena.ts LOW). Por debajo de
   // eso no tapa a nadie ni agachado.
