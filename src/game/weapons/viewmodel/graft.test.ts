@@ -5,6 +5,7 @@ import {
   BufferGeometry,
   Mesh,
   MeshBasicMaterial,
+  Object3D,
   Skeleton,
   SkinnedMesh,
   Vector3,
@@ -16,6 +17,7 @@ import {
   alignmentMatrix,
   donorSlugs,
   dominantBoneIndex,
+  findBodyMeshes,
   graftArms,
   selectDonor,
 } from '@/game/weapons/viewmodel/graft'
@@ -224,6 +226,30 @@ describe('graftArms', () => {
     expect(centro.x).toBeCloseTo(esperado.x, 5)
     expect(centro.y).toBeCloseTo(esperado.y, 5)
     expect(centro.z).toBeCloseTo(esperado.z, 5)
+  })
+
+  it('encuentra el cuerpo cuando viene partido en varias primitivas', () => {
+    // Regresión: una malla glTF con varias primitivas llega a Three como un
+    // Group llamado `weapon_body` con una SkinnedMesh por primitiva adentro,
+    // no como una SkinnedMesh. Exigir que `weapon_body` FUERA la SkinnedMesh
+    // encontraba el Group y devolvía null, y así se caían 4 de los 10
+    // donantes: awp, nova, g3sg1 y sg553 — o sea el francotirador, la
+    // escopeta, el tirador designado y el fusil de batalla, enteros.
+    const { mesh: donorBody } = skinnedBox(
+      Array.from({ length: 8 }, () => [1, 0, 0, 0] as const),
+      Array.from({ length: 8 }, () => [1, 0, 0, 0] as const),
+    )
+    // Se replica la forma que arma GLTFLoader: el nombre pasa al grupo y la
+    // malla queda adentro.
+    const grupo = new Object3D()
+    grupo.name = 'weapon_body'
+    donorBody.name = 'weapon_body_1'
+    const raiz = new Object3D()
+    raiz.add(grupo)
+    grupo.add(donorBody)
+
+    expect(findBodyMeshes(raiz)).toHaveLength(1)
+    expect(graftArms(raiz, rigidBox([1, 1, 1], [0, 0, 0]))).not.toBeNull()
   })
 
   it('devuelve null si el donante no tiene weapon_body skinneado', () => {

@@ -123,13 +123,19 @@ export function dominantBoneIndex(mesh: SkinnedMesh): number {
  * por eje: estirar el arma para que su caja calce exacto con la del donante la
  * deformaría, y un AK aplastado se ve peor que un AK dos centímetros corrido.
  *
- * La rotación es fija y vale `yaw`, que el llamador pasa como -SOURCE_VIEWMODEL_YAW.
- * El motivo: los `.glb` de COD ya salen orientados para dibujarse SIN el cuarto
- * de vuelta que renderer.ts le aplica a los viewmodels de Source (por eso el
- * camino estático usa yaw 0). Al colgarlos adentro de la jerarquía del donante
- * van a comerse ese cuarto de vuelta igual, así que hay que descontarlo acá.
- * Deducirlo de la caja es imposible: una caja es simétrica y no distingue
- * "cañón adelante" de "culata adelante".
+ * La rotación es un parámetro y NO se deduce de las cajas: una caja envolvente
+ * es simétrica y no distingue "cañón adelante" de "culata adelante".
+ *
+ * `graftArms` le pasa CERO, y eso está medido, no supuesto. La tentación era
+ * descontar el cuarto de vuelta que renderer.ts le aplica a los viewmodels de
+ * Source (SOURCE_VIEWMODEL_YAW), y probarlo dejó el arma cruzada de lado. El
+ * motivo por el que no hay que descontar nada: la alineación pasa en espacio de
+ * BIND, y ahí las dos mallas ya están en la misma convención — el `weapon_body`
+ * del donante y el de COD tienen los dos su nodo en identidad y el eje largo
+ * sobre Z. El cuarto de vuelta del renderer se aplica después y sobre la
+ * jerarquía ENTERA, así que le toca igual a los brazos y al arma y no las
+ * separa. Lo mismo la pose de reposo: mueve el hueso, y el arma injertada
+ * cuelga del hueso.
  *
  * La escala sale del EJE LARGO y no del volumen ni del promedio de los tres
  * ejes: lo que tiene que coincidir para que las manos caigan en la empuñadura
@@ -171,11 +177,25 @@ export function alignmentMatrix(donorBox: Box3, codBox: Box3, yaw: number): Matr
     .multiply(rotation)
 }
 
-/** La malla `weapon_body` de una escena, o null si no está. */
-export function findBody(scene: Object3D): Mesh | null {
-  let found: Mesh | null = null
+/**
+ * Las mallas skinneadas que forman el arma del donante.
+ *
+ * Devuelve una LISTA y no una malla, y mira también el nombre del PADRE, por
+ * cómo carga glTF: una malla con varias primitivas no llega a Three como una
+ * `SkinnedMesh`, llega como un `Group` con ese nombre y una `SkinnedMesh` por
+ * primitiva adentro. Buscar `weapon_body` y exigir que sea `SkinnedMesh`
+ * encontraba el Group y fallaba.
+ *
+ * No es un caso raro: de los 10 donantes, 4 tienen el cuerpo en varias
+ * primitivas (awp y nova en 2, g3sg1 en 2, sg553 en 4), o sea que fallaban el
+ * francotirador de cerrojo, la escopeta, el fusil de batalla y el tirador
+ * designado — cuatro clases enteras del catálogo, no una excepción.
+ */
+export function findBodyMeshes(scene: Object3D): SkinnedMesh[] {
+  const found: SkinnedMesh[] = []
   scene.traverse((child) => {
-    if (found === null && child instanceof Mesh && child.name === BODY_NODE_NAME) found = child
+    if (!(child instanceof SkinnedMesh)) return
+    if (child.name === BODY_NODE_NAME || child.parent?.name === BODY_NODE_NAME) found.push(child)
   })
   return found
 }
@@ -211,8 +231,9 @@ export function graftArms(
    */
   extras: readonly Mesh[] = [],
 ): GraftResult | null {
-  const donorBody = findBody(donorScene)
-  if (donorBody === null || !(donorBody instanceof SkinnedMesh)) return null
+  const donorParts = findBodyMeshes(donorScene)
+  const donorBody = donorParts[0]
+  if (!donorBody) return null
 
   const skeleton = donorBody.skeleton
   if (!skeleton) return null
@@ -228,13 +249,20 @@ export function graftArms(
   // que el esqueleto los mueva). Por eso se usa la geometría cruda de las dos
   // y no `setFromObject`, que aplicaría los transforms de nodo y mezclaría
   // espacios distintos.
-  donorBody.geometry.computeBoundingBox()
+  // La caja del donante UNE todas sus primitivas. Con el cuerpo partido en
+  // varias (la mira del awp es una primitiva aparte del cuerpo), quedarse con
+  // la primera mediría un pedazo del arma y sacaría de ahí la escala y el
+  // centro: el arma injertada saldría con el tamaño de la mira.
+  const donorBox = new Box3()
+  for (const part of donorParts) {
+    part.geometry.computeBoundingBox()
+    if (part.geometry.boundingBox) donorBox.union(part.geometry.boundingBox)
+  }
   codBody.geometry.computeBoundingBox()
-  const donorBox = donorBody.geometry.boundingBox
   const codBox = codBody.geometry.boundingBox
-  if (!donorBox || !codBox) return null
+  if (donorBox.isEmpty() || !codBox) return null
 
-  const align = alignmentMatrix(donorBox, codBox, -Math.PI / 2)
+  const align = alignmentMatrix(donorBox, codBox, 0)
 
   // El transform local del hijo respecto del hueso. La identidad que lo
   // justifica: colgado del hueso, el mundo de la malla es
@@ -254,7 +282,9 @@ export function graftArms(
   // El arma del donante se esconde en vez de borrarse: es una SkinnedMesh y su
   // esqueleto es el mismo objeto que mueve los brazos. Sacarla del grafo es lo
   // que en este archivo ya se documenta como el error que rompe el skinning.
-  donorBody.visible = false
+  // Se esconden TODAS sus primitivas: dejar una sola visible deja media arma
+  // del donante flotando adentro de la de COD.
+  for (const part of donorParts) part.visible = false
 
   return { scene: donorScene, body: codBody }
 }
