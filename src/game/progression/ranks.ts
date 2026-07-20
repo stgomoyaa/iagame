@@ -1,6 +1,6 @@
 /**
  * La escalera de rangos (sección 9 del spec): 9 tiers, 3 divisiones cada uno
- * salvo Radiante que tiene una sola. **25 rangos totales**, RR de 0 a 100
+ * salvo Deidad que tiene una sola. **25 rangos totales**, RR de 0 a 100
  * dentro de cada uno.
  *
  * El rango se representa como un **índice plano 0..24**, no como un par
@@ -12,9 +12,9 @@
  * - La dificultad de bots es `índice / 24`, un escalar 0..1 que
  *   `bots/difficulty.ts` ya sabía consumir desde la fase 2 (ese módulo se
  *   escribió con `rank` continuo justamente esperando esto). Hierro 1 da 0
- *   y cae exacto en los 400ms de la tabla del spec; Radiante da 1 y cae
+ *   y cae exacto en los 400ms de la tabla del spec; Deidad da 1 y cae
  *   exacto en los 120ms.
- * - Radiante siendo un tier de una sola división no es un caso especial: es
+ * - Deidad siendo un tier de una sola división no es un caso especial: es
  *   simplemente el último índice de la lista.
  *
  * Tier y división se derivan del índice para mostrarlos, nunca se guardan.
@@ -28,24 +28,24 @@ export const TIERS: readonly string[] = [
   'Oro',
   'Platino',
   'Diamante',
-  'Ascendente',
-  'Inmortal',
-  'Radiante',
+  'Master',
+  'Grand Master',
+  'Deidad',
 ]
 
-/** Divisiones por tier. Radiante es el único con una sola (spec: "3
- *  divisiones cada uno excepto Radiante"). */
+/** Divisiones por tier. Deidad es el único con una sola (spec: "3
+ *  divisiones cada uno excepto Deidad"). */
 const DIVISIONES_POR_TIER = 3
 
-/** Índice de Radiante dentro de TIERS. */
-const TIER_RADIANTE = TIERS.length - 1
+/** Índice de Deidad dentro de TIERS. */
+const TIER_DEIDAD = TIERS.length - 1
 
-/** Cantidad total de rangos: 8 tiers x 3 divisiones + Radiante = 25. */
-export const RANK_COUNT = TIER_RADIANTE * DIVISIONES_POR_TIER + 1
+/** Cantidad total de rangos: 8 tiers x 3 divisiones + Deidad = 25. */
+export const RANK_COUNT = TIER_DEIDAD * DIVISIONES_POR_TIER + 1
 
 /** Primer rango de la escalera (Hierro 1). */
 export const RANK_MIN = 0
-/** Último rango de la escalera (Radiante). */
+/** Último rango de la escalera (Deidad). */
 export const RANK_MAX = RANK_COUNT - 1
 
 /** RR máximo dentro de un rango. Superarlo promociona (ver rr.ts). */
@@ -54,9 +54,9 @@ export const RR_MAXIMO = 100
 export interface RankName {
   /** Nombre del tier, ej. "Oro". */
   tier: string
-  /** 1..3, o 0 para Radiante, que no tiene divisiones. */
+  /** 1..3, o 0 para Deidad, que no tiene divisiones. */
   division: number
-  /** Etiqueta lista para la UI, ej. "Oro 2" o "Radiante". */
+  /** Etiqueta lista para la UI, ej. "Oro 2" o "Deidad". */
   label: string
 }
 
@@ -66,13 +66,13 @@ function clampRank(index: number): number {
 }
 
 /**
- * Descompone un índice plano en tier y división para mostrarlo. Radiante no
- * lleva número: "Radiante 1" no existe, y escribirlo delataría que el tier
+ * Descompone un índice plano en tier y división para mostrarlo. Deidad no
+ * lleva número: "Deidad 1" no existe, y escribirlo delataría que el tier
  * de una sola división es un caso pegado con cinta.
  */
 export function rankName(index: number): RankName {
   const i = clampRank(index)
-  if (i === RANK_MAX) return { tier: 'Radiante', division: 0, label: 'Radiante' }
+  if (i === RANK_MAX) return { tier: 'Deidad', division: 0, label: 'Deidad' }
   const tier = Math.floor(i / DIVISIONES_POR_TIER)
   const division = (i % DIVISIONES_POR_TIER) + 1
   return { tier: TIERS[tier], division, label: `${TIERS[tier]} ${division}` }
@@ -91,7 +91,7 @@ export function rankLabel(index: number): string {
 export function rankIndex(tier: string, division: number): number {
   const t = TIERS.indexOf(tier)
   if (t < 0) throw new Error(`tier desconocido: "${tier}"`)
-  if (t === TIER_RADIANTE) return RANK_MAX
+  if (t === TIER_DEIDAD) return RANK_MAX
   const d = Math.min(DIVISIONES_POR_TIER, Math.max(1, Math.floor(division)))
   return t * DIVISIONES_POR_TIER + (d - 1)
 }
@@ -132,9 +132,9 @@ export const TIER_COLORS: Record<string, string> = {
   Oro: '#d4a02a',
   Platino: '#3fb6c4',
   Diamante: '#8b6fe0',
-  Ascendente: '#3fa86b',
-  Inmortal: '#c8385a',
-  Radiante: '#f2e9c4',
+  Master: '#3fa86b',
+  'Grand Master': '#c8385a',
+  Deidad: '#f2e9c4',
 }
 
 /** Color del rango, derivado de su tier. */
