@@ -93,7 +93,7 @@ import {
 import { directionYaw, vignetteBearing } from '@/game/feedback/vignette'
 import { resetPlayerHealth } from '@/game/feedback/health-vfx'
 import { FEEDBACK, VFX } from '@/game/feedback/tuning'
-import { assignBotArchetypes, weaponLabel } from '@/game/match/loadouts'
+import { assignBotArchetypes, assignBotWeaponSlugs, weaponLabel } from '@/game/match/loadouts'
 import {
   buildSummary,
   createMatchState,
@@ -355,6 +355,11 @@ export function createGame(
   const matchMode = getMatchMode()
   const botCount = getBotCount()
   const botArchetypes = assignBotArchetypes(botCount)
+  // Arma concreta de cada bot. El arquetipo sigue decidiendo las
+  // estadísticas; el slug existe SÓLO para que el disparo del bot suene a un
+  // arma y no a una familia entera (ver match/loadouts.ts). Se resuelve una
+  // vez acá y no por disparo: el catálogo no cambia durante la partida.
+  const botWeaponSlugs = assignBotWeaponSlugs(botArchetypes.map((a) => a.id))
   const botDifficultyRanks = resolveDifficultyRanks(botCount, careerDifficulty(carreraInicial))
   // Los bots toman los spawns 1..N del MISMO plan que ubicó al jugador
   // (spawnPlan, arriba), no `spawns.slice(1)`. El slice repartía en el
@@ -594,12 +599,17 @@ export function createGame(
     currentSlug = slug
     viewmodel.setSkin(skinForSlot(loadout, slot))
     viewmodel.setWeaponSlug(slug)
+    // Bajar el sonido propio del arma al equiparla, no al dispararla: así
+    // el primer tiro ya sale con su firma sonora en vez de con el sample
+    // genérico de la clase (ver feedback/gun-audio.ts).
+    weaponAudio.prewarm(slug)
     startDraw(vmState, rigWeapon)
   }
 
   if (currentSlug) {
     viewmodel.setSkin(skinForSlot(loadout, currentSlot))
     viewmodel.setWeaponSlug(currentSlug)
+    weaponAudio.prewarm(currentSlug)
   }
 
   // El botón derecho del panel de tuning sostiene ADS como acción de prueba
@@ -989,7 +999,9 @@ export function createGame(
         // Audio y VFX del disparo, en el MISMO frame en que el disparo se
         // resolvió: nada de esto se encola ni se difiere. El sample arranca
         // con start() sin offset, así que el sonido sale con el fotograma.
-        weaponAudio.playShot(archetype.class)
+        // El slug elige el sample propio del arma; la clase es la red de
+        // seguridad cuando ese sample no está (ver feedback/gun-audio.ts).
+        weaponAudio.playShot(shownSlug, archetype.class)
         spawnFulgor(vfxState, tiempoVfxS)
 
         // El trazador NO sale de la cámara aunque el hitscan sí (ver
@@ -1114,7 +1126,7 @@ export function createGame(
         const bdz = bot.player.position.z - player.position.z
         const bdist = Math.sqrt(bdx * bdx + bdy * bdy + bdz * bdz)
         const ganancia = gananciaPorDistancia(bdist)
-        if (ganancia > 0) weaponAudio.playShot(bot.archetype.class, ganancia)
+        if (ganancia > 0) weaponAudio.playShot(botWeaponSlugs[i], bot.archetype.class, ganancia)
 
         const br = bot.shotResult
         spawnTrazador(
@@ -1387,6 +1399,13 @@ export function createGame(
       // sí necesita AudioContext, pero bajar no. Así al primer click ya está
       // todo en memoria y no se pierden los primeros disparos de la partida.
       weaponAudio.precargar()
+      // Las armas de los bots también: son ~10 archivos de 10-70 KB que se
+      // van a necesitar sí o sí apenas empiece el tiroteo, y pedirlos acá
+      // (en vez de al primer disparo de cada uno) evita que los primeros
+      // tiros de la partida sean justo los que suenan genéricos.
+      for (const slug of botWeaponSlugs) {
+        if (slug !== null) weaponAudio.prewarm(slug)
+      }
       window.addEventListener('resize', onResize)
       canvas.addEventListener('click', onCanvasClickForAudio)
       window.addEventListener('keydown', onDebugKeyDown)

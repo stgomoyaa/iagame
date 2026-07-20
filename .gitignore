@@ -78,6 +78,20 @@ workshop-assets/
 # puede filtrar. Guardia real en scripts/workshop-guard.test.ts.
 /public/assets/weapons-local/
 
+# Sonidos de disparo por arma, derivados de tres packs del Workshop
+# (scripts/prepare-weapon-sounds.ts). Cuarta puerta al mismo problema que
+# public/assets/maps/ y public/assets/weapons-local/, y por el mismo motivo:
+# el navegador sólo baja archivos de /public.
+#
+# Ojo con la forma del patrón: los ONCE samples por clase que SÍ se
+# commitean viven en public/assets/audio/ a secas (shot-ar.mp3,
+# reload-mag.mp3...). Por eso esta línea apunta a la SUBCARPETA y no a
+# public/assets/audio/: ignorar la carpeta padre dejaría fuera del repo el
+# fallback que garantiza que ningún arma quede muda en un checkout limpio,
+# que es justo lo contrario de lo que se busca. Guardia real en
+# scripts/workshop-guard.test.ts.
+/public/assets/audio/weapons-local/
+
 # Salida del catalogador del Workshop (scripts/workshop-catalog.ts): son
 # datos de trabajo que se regeneran corriendo el script, no código ni
 # assets. No tienen contenido con copyright (sólo metadata pública del

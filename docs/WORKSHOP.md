@@ -85,12 +85,25 @@ probarlo en vivo era más riesgo que valor).
 | ¿Se puede publicar? | Sí | **Nunca** | **Nunca** | **Nunca** |
 | Formato | `.glb` normalizado por `scripts/convert-weapons.ts` | Lo que sea (mallas extraídas, GLBs intermedios) | `.json` de colisión + `.glb` texturizado | `.glb` normalizado por `scripts/convert-source-weapons.ts` |
 
-`public/assets/maps/` y `public/assets/weapons-local/` son la excepción
-incómoda: el navegador sólo puede bajar archivos servidos desde `/public`,
-así que lo convertido tiene que estar ahí. Estar en una carpeta que el resto
-del repo sí publica **no** los convierte en publicables. Por eso están
-gitignoreadas y por eso `scripts/workshop-guard.test.ts` chequea las TRES
-carpetas contra el índice de git, no sólo `workshop-assets/`.
+A esas cuatro se suma **`public/assets/audio/weapons-local/`** (sonidos de
+disparo por arma, sección 6): mismo origen, misma licencia, nunca se
+commitea, nunca se publica; formato `.ogg` (Opus mono 48 kHz) producido por
+`scripts/prepare-weapon-sounds.ts`.
+
+`public/assets/maps/`, `public/assets/weapons-local/` y
+`public/assets/audio/weapons-local/` son la excepción incómoda: el navegador
+sólo puede bajar archivos servidos desde `/public`, así que lo convertido
+tiene que estar ahí. Estar en una carpeta que el resto del repo sí publica
+**no** los convierte en publicables. Por eso están gitignoreadas y por eso
+`scripts/workshop-guard.test.ts` chequea las CUATRO carpetas contra el índice
+de git, no sólo `workshop-assets/`.
+
+La de audio tiene un filo extra: es la única que vive DENTRO de una carpeta
+cuyo contenido sí se commitea (`public/assets/audio/`, donde están los 11
+samples por clase que hacen de fallback). El `.gitignore` apunta a la
+subcarpeta, no a la padre, y hay un test que falla si alguien lo "arregla"
+ignorando la padre — eso dejaría al juego sin fallback y con todas las armas
+mudas en un checkout limpio.
 
 En las armas esa separación además hace de interruptor: el catálogo del juego
 carga siempre el índice CC0 y sólo *intenta* el local, así que un build
@@ -222,7 +235,63 @@ cruceta con una desviación de ±1 px sobre 1280, y ningún cuerpo de arma
 tapando el punto al que se apunta. En el francotirador la cruceta cae dentro
 del tubo del visor, no sobre su techo.
 
-## 6. Lo que NO está construido (ingesta más allá del catálogo)
+## 6. Sonidos de disparo por arma
+
+Tercer pipeline con el mismo patrón y el mismo paso manual de copia. Antes
+había **7 samples de disparo para 79 armas** (uno por clase), así que todas
+las armas de una familia sonaban idéntico; ahora cada arma tiene el suyo.
+
+```bash
+# 1. Preparar: recorta el disparo de cada arma de los tres packs, lo pasa a
+#    Opus/Ogg mono 48 kHz y escribe un index.json con la asignación
+#    arma -> fuente. La tabla de asignación es A MANO y vive en
+#    scripts/lib/weapon-sounds.ts (ASIGNACION).
+node scripts/prepare-weapon-sounds.ts
+
+# 2. PASO MANUAL: copiar a /public para que el navegador pueda bajarlos.
+#    public/assets/audio/weapons-local/ está gitignoreado (ver la tabla de
+#    la sección 3). Ojo con la barra final del origen: se copia el CONTENIDO.
+mkdir -p public/assets/audio/weapons-local
+cp -R workshop-assets/weapon-sounds/. public/assets/audio/weapons-local/
+```
+
+Resultado: **79/79 armas cubiertas, 73 fuentes distintas, 130 archivos, 1,8
+MB**. 16 armas tienen varias grabaciones del mismo disparo, que el juego rota
+para que el fuego sostenido no suene a un bucle de una sola muestra.
+
+**Ojo con la carpeta.** Es la primera carpeta local-only que vive DENTRO de
+una que sí se commitea: `public/assets/audio/` tiene los **11 samples por
+clase** que son el fallback del juego. Ignorar la carpeta padre en vez de la
+subcarpeta dejaría al juego sin ese fallback, que es peor que el bug
+original. `scripts/workshop-guard.test.ts` chequea las dos mitades: que no
+haya nada trackeado bajo `weapons-local/` y que los 11 por clase **sigan**
+trackeados.
+
+**Qué pasa sin los assets.** Exactamente lo mismo que con los mapas y las
+armas: el índice da 404 y el juego cae a los 7 samples por clase, sin ningún
+error visible. Un checkout limpio suena como sonaba antes de esta tarea, que
+es un estado perfectamente jugable. Ningún arma queda muda nunca.
+
+**Estrategia de carga (por qué no se bajan los 130 al arranque).** Se bajan
+los 11 por clase (~120 KB) y el índice (~15 KB); los `.ogg` van **por arma**,
+cuando el juego equipa un arma o arma el escuadrón de bots. Bajar 1,8 MB al
+inicio sería pedir ~10x de lo que una partida usa —se juega con dos armas
+propias y N de bots, no con 79— y competiría con los GLB y el mapa justo
+cuando la latencia importa. La carga perezosa no cuesta el tirón habitual
+porque el sample por clase ya está listo: lo peor que pasa es que **un** tiro
+suene genérico mientras llega el bueno. El detalle está en el encabezado de
+`src/game/feedback/gun-audio.ts`.
+
+**Formato: Opus en Ogg, sin fallback AAC.** Safari soporta Opus-en-Ogg recién
+desde 18.4 (marzo 2025). En un Safari anterior falla el `decodeAudioData`, el
+buffer nunca entra y el disparo cae al sample de la clase — o sea, el mismo
+desenlace que un checkout sin los assets. Duplicar los 130 archivos a AAC (el
+preparador lo soporta con `--formato aac`, verificado) costaría el doble de
+disco y un segundo pipeline para comprar una degradación que ya está cubierta
+y es silenciosa. Si algún día el fallback por clase desaparece, hay que
+revisar esta decisión.
+
+## 7. Lo que NO está construido (ingesta más allá del catálogo)
 
 Esto es deliberadamente honesto sobre lo que falta. Nada de esto se probó:
 

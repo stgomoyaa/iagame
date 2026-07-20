@@ -19,11 +19,16 @@ describe('audio de arma: degrada en silencio sin Web Audio', () => {
 
   it('reproducir no tira con o sin unlock() previo', () => {
     const a = createWeaponAudio()
-    expect(() => a.playShot('ar')).not.toThrow()
+    expect(() => a.playShot('ak47', 'ar')).not.toThrow()
+    // Slug null (un bot sin arma catalogada) y slug desconocido: los dos
+    // tienen que caer a la clase sin ruido, no ser un caso especial.
+    expect(() => a.playShot(null, 'ar')).not.toThrow()
+    expect(() => a.playShot('no-existe-esta-arma', 'ar')).not.toThrow()
+    expect(() => a.prewarm('ak47')).not.toThrow()
     expect(() => a.playReload('shotgun')).not.toThrow()
     expect(() => a.playImpact(SUPERFICIE_HORMIGON)).not.toThrow()
     a.unlock()
-    expect(() => a.playShot('sniper', 0.4)).not.toThrow()
+    expect(() => a.playShot('awp', 'sniper', 0.4)).not.toThrow()
     expect(() => a.playImpact(SUPERFICIE_CARNE)).not.toThrow()
   })
 
