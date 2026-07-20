@@ -336,6 +336,7 @@ describe('invariantes de movimiento de bots bajo fuzz (mismas reglas físicas qu
 
     const speedCeiling = MOVEMENT.bhopSoftCap * 1.5
     const TICKS = 4000
+    let chequeos = 0
 
     for (let tick = 0; tick < TICKS; tick++) {
       world.simTimeS += TICK_DT
@@ -356,24 +357,72 @@ describe('invariantes de movimiento de bots bajo fuzz (mismas reglas físicas qu
       stepAllBotsThink(squad, world, TICK_DT)
       stepAllBotsMotor(squad, world, TICK_DT)
 
+      // Las invariantes se chequean con comparaciones planas y sólo se
+      // convierten en un expect() cuando alguna se rompe. El motivo es de
+      // costo, no de estilo: la versión anterior llamaba a expect() nueve
+      // veces por bot por tick (4000 ticks x 4 bots x 9 = 144.000 llamadas)
+      // y además construía el template literal del mensaje en CADA una,
+      // incluso en el 100% de los casos en que la invariante se cumplía.
+      // Eso dominaba el tiempo del test (1305ms) muy por encima de la
+      // simulación que realmente quiere ejercitar, y lo dejaba a 3.8x del
+      // timeout de 5s por defecto: con la máquina cargada se pasaba y
+      // fallaba por tiempo, no por una invariante rota. Chequear primero y
+      // construir el mensaje sólo al fallar mantiene EXACTAMENTE las mismas
+      // invariantes sobre los mismos ticks (misma semilla, mismo recorrido)
+      // y saca el costo del camino feliz.
       for (const bot of squad) {
         const speed = lengthHorizontal(bot.player.velocity)
-        expect(speed, `tick ${tick} bot ${bot.id}: velocidad ${speed}`).toBeLessThan(speedCeiling)
+        const pos = bot.player.position
+        const salud = bot.health.health
+        const estadoValido =
+          bot.fsm.current === 'idle' ||
+          bot.fsm.current === 'rotate' ||
+          bot.fsm.current === 'engage' ||
+          bot.fsm.current === 'reposition' ||
+          bot.fsm.current === 'retreat'
 
-        expect(bot.player.position.x, `tick ${tick} bot ${bot.id} x`).toBeGreaterThan(ARENA.bounds.min.x)
-        expect(bot.player.position.x, `tick ${tick} bot ${bot.id} x`).toBeLessThan(ARENA.bounds.max.x)
-        expect(bot.player.position.y, `tick ${tick} bot ${bot.id} y`).toBeGreaterThan(ARENA.bounds.min.y)
-        expect(bot.player.position.y, `tick ${tick} bot ${bot.id} y`).toBeLessThan(ARENA.bounds.max.y)
-        expect(bot.player.position.z, `tick ${tick} bot ${bot.id} z`).toBeGreaterThan(ARENA.bounds.min.z)
-        expect(bot.player.position.z, `tick ${tick} bot ${bot.id} z`).toBeLessThan(ARENA.bounds.max.z)
+        const roto =
+          !(speed < speedCeiling) ||
+          !(pos.x > ARENA.bounds.min.x) ||
+          !(pos.x < ARENA.bounds.max.x) ||
+          !(pos.y > ARENA.bounds.min.y) ||
+          !(pos.y < ARENA.bounds.max.y) ||
+          !(pos.z > ARENA.bounds.min.z) ||
+          !(pos.z < ARENA.bounds.max.z) ||
+          !(salud >= 0) ||
+          !(salud <= bot.health.maxHealth) ||
+          !estadoValido
 
-        expect(bot.health.health).toBeGreaterThanOrEqual(0)
-        expect(bot.health.health).toBeLessThanOrEqual(bot.health.maxHealth)
-
-        const validStates = ['idle', 'rotate', 'engage', 'reposition', 'retreat']
-        expect(validStates).toContain(bot.fsm.current)
+        // Sólo en el camino de fallo se paga el costo de expect(): así el
+        // reporte sigue señalando la invariante exacta, el tick y el bot.
+        if (roto) {
+          const donde = `tick ${tick} bot ${bot.id}`
+          expect(speed, `${donde}: velocidad ${speed}`).toBeLessThan(speedCeiling)
+          expect(pos.x, `${donde} x`).toBeGreaterThan(ARENA.bounds.min.x)
+          expect(pos.x, `${donde} x`).toBeLessThan(ARENA.bounds.max.x)
+          expect(pos.y, `${donde} y`).toBeGreaterThan(ARENA.bounds.min.y)
+          expect(pos.y, `${donde} y`).toBeLessThan(ARENA.bounds.max.y)
+          expect(pos.z, `${donde} z`).toBeGreaterThan(ARENA.bounds.min.z)
+          expect(pos.z, `${donde} z`).toBeLessThan(ARENA.bounds.max.z)
+          expect(salud, `${donde} vida`).toBeGreaterThanOrEqual(0)
+          expect(salud, `${donde} vida`).toBeLessThanOrEqual(bot.health.maxHealth)
+          expect(
+            ['idle', 'rotate', 'engage', 'reposition', 'retreat'],
+            `${donde} estado ${bot.fsm.current}`,
+          ).toContain(bot.fsm.current)
+          // Si ninguno de los expect() de arriba falló, la condición `roto`
+          // y estos chequeos no coinciden: es un bug de ESTE test, no del
+          // motor, y hay que enterarse en vez de pasar en verde.
+          throw new Error(`${donde}: invariante rota que los expect() no reprodujeron`)
+        }
+        chequeos++
       }
     }
+
+    // El fuzz sólo vale si de verdad recorrió todos los ticks con todos los
+    // bots: sin esto, un `continue` o un early-return futuro lo dejaría
+    // pasando en verde sin haber chequeado nada.
+    expect(chequeos).toBe(TICKS * squad.length)
   })
 })
 
