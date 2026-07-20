@@ -44,6 +44,14 @@ const PUEDEN_USAR_THREE = [
   // preview.ts dibuja el arma en la armería.
   'skins/material.ts',
   'skins/preview.ts',
+  // Mapas importados de Source: la matemática (map/source-map.ts -- escala,
+  // brushes convexos, validación de spawns) es pura y NO importa three, que
+  // es justo la parte donde esta tarea se podía romper en silencio. Este
+  // archivo es sólo el borde: GLTFLoader para bajar el GLB y el recorrido de
+  // BufferGeometry para hornear los triángulos del BVH de hitscan, dos cosas
+  // que no se pueden hacer sin three real. Mismo criterio que map/mesh.ts.
+  // Es la ÚNICA entrada nueva que suma esta tarea a la lista.
+  'map/external-map.ts',
 ]
 
 function archivosTs(dir: string, base = ''): string[] {

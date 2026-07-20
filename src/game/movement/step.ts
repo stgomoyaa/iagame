@@ -12,10 +12,9 @@ import { PLAYER_CAPSULE, resolveMove, type MoveResult } from '@/game/physics/cap
 const scratchWishDir: Vec3 = vec3()
 const scratchDelta: Vec3 = vec3()
 const scratchResult: MoveResult = { hitGround: false, hitCeiling: false, hitWall: false }
-// Ningún mapa actual trae brushes convexos (eso es de la tarea de
-// integración con BSP, todavía no escrita); constante de módulo y no un
-// literal `[]` en el call site para no asignar por tick.
-const NO_CONVEXES: Convex[] = []
+// Los tres mapas escritos en código son sólo cajas: constante de módulo y
+// no un literal `[]` en el call site para no asignar por tick.
+export const NO_CONVEXES: Convex[] = []
 
 export function createPlayerState(spawn: Vec3): PlayerState {
   return {
@@ -60,11 +59,20 @@ function targetSpeed(input: PlayerInput): number {
   return input.adsSpeedScale === undefined ? base : base * input.adsSpeedScale
 }
 
+/**
+ * `convexes` va DESPUÉS de `dt` y no pegado a `boxes`, que es donde
+ * semánticamente correspondería: es el orden que deja intactos los ~45
+ * llamados existentes (tests de movimiento, bots) en vez de tocarlos todos
+ * para agregar un argumento que en los mapas de código siempre es la lista
+ * vacía. Un cambio de firma masivo en el archivo más caliente del motor es
+ * más riesgo que un parámetro fuera de orden.
+ */
 export function stepPlayer(
   state: PlayerState,
   input: PlayerInput,
   boxes: Box[],
   dt: number = TICK_DT,
+  convexes: Convex[] = NO_CONVEXES,
 ): void {
   // resolveMove (physics/capsule.ts) ya guarda `position` contra un delta no
   // finito, pero eso corre al final del tick: velocity se integra ANTES
@@ -171,7 +179,7 @@ export function stepPlayer(
   scratchDelta.y = state.velocity.y * dt
   scratchDelta.z = state.velocity.z * dt
 
-  resolveMove(state.position, scratchDelta, PLAYER_CAPSULE, boxes, NO_CONVEXES, scratchResult)
+  resolveMove(state.position, scratchDelta, PLAYER_CAPSULE, boxes, convexes, scratchResult)
 
   // Mantle: sólo si chocamos una pared en el aire yendo hacia ella.
   if (!scratchResult.hitGround && scratchResult.hitWall) {

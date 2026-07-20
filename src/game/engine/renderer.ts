@@ -1,4 +1,4 @@
-import { Mesh, MeshBasicMaterial, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three'
+import { Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three'
 import { ARENA } from '@/game/map/arena'
 import { buildArenaGeometry } from '@/game/map/mesh'
 import type { MapDef } from '@/game/map/types'
@@ -76,7 +76,11 @@ export interface GameRenderer {
  * fusionando el mapa entero en UNA geometría -- un draw call por mapa,
  * cualquiera sea.
  */
-export function createRenderer(canvas: HTMLCanvasElement, map: MapDef = ARENA): GameRenderer {
+export function createRenderer(
+  canvas: HTMLCanvasElement,
+  map: MapDef = ARENA,
+  mallaImportada: Object3D | null = null,
+): GameRenderer {
   const renderer = new WebGLRenderer({
     canvas,
     antialias: true,
@@ -96,13 +100,18 @@ export function createRenderer(canvas: HTMLCanvasElement, map: MapDef = ARENA): 
   const scene = new Scene()
   const camera = new PerspectiveCamera(WORLD_FOV, 1, 0.1, 200)
 
+  // Un mapa importado de Source trae su propia malla texturizada
+  // (map/external-map.ts) y su `boxes` va vacío: buildArenaGeometry() no
+  // dibujaría nada. Los mapas escritos en código siguen por el camino de
+  // siempre, sin cambios.
   const geometry = buildArenaGeometry(map)
   const material = new MeshBasicMaterial({ vertexColors: true })
   const arena = new Mesh(geometry, material)
   // La arena nunca se mueve: saltear el recálculo de matrices por frame.
   arena.matrixAutoUpdate = false
   arena.updateMatrix()
-  scene.add(arena)
+  if (mallaImportada === null) scene.add(arena)
+  else scene.add(mallaImportada)
 
   const rawContext = renderer.getContext()
   const gl = rawContext instanceof WebGL2RenderingContext ? rawContext : null

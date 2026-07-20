@@ -21,6 +21,9 @@ const TAM_CABECERA = 8 + 64 * 16
 interface LadoSintetico {
   planeIdx: number
   bevel?: number
+  /** Índice de texinfo del lado. Sólo importa para el filtro de volúmenes de
+   *  trigger (`leerBrushesSolidos` mira el material de cada lado). */
+  texinfo?: number
 }
 interface BrushSintetico {
   contents: number
@@ -83,7 +86,7 @@ function empaquetarBrushes(brushes: BrushSintetico[]): { brushesBuf: Buffer; sid
   todosLados.forEach((l, i) => {
     const o = i * 8
     sidesBuf.writeUInt16LE(l.planeIdx, o)
-    sidesBuf.writeInt16LE(0, o + 2)
+    sidesBuf.writeInt16LE(l.texinfo ?? 0, o + 2)
     sidesBuf.writeInt16LE(-1, o + 4)
     sidesBuf.writeInt16LE(l.bevel ?? 0, o + 6)
   })
@@ -385,6 +388,65 @@ describe('bsp-convert: filtra lo que no es sólido', () => {
     // Es el que corresponde a la caja sólida, no a la de agua: su max en X
     // (antes de la rotación) era 1, no 11.
     expect(colision.brushes[0].max[0]).toBeCloseTo(1 * S, 6)
+  })
+})
+
+describe('bsp-convert: filtra los volúmenes de trigger', () => {
+  it('un brush con todos los lados en TOOLS/TOOLSTRIGGER no aparece, aunque diga CONTENTS_SOLID', async () => {
+    const muro = planosDeCaja([0, 0, 0], [1, 1, 1])
+    const trigger = planosDeCaja([10, 10, 10], [11, 11, 11])
+    const planos = [...muro, ...trigger]
+
+    // texinfo 0 -> texdata 0 -> material 0 ("CONCRETE/FLOOR01")
+    // texinfo 1 -> texdata 1 -> material 1 ("TOOLS/TOOLSTRIGGER")
+    const buf = construirBspSintetico({
+      planos,
+      materiales: ['CONCRETE/FLOOR01', 'TOOLS/TOOLSTRIGGER'],
+      texdatas: [
+        { nameStringTableID: 0, width: 64, height: 64 },
+        { nameStringTableID: 1, width: 64, height: 64 },
+      ],
+      texinfos: [{ texdata: 0 }, { texdata: 1 }],
+      brushes: [
+        { contents: CONTENTS_SOLID, lados: muro.map((_, i) => ({ planeIdx: i, texinfo: 0 })) },
+        {
+          contents: CONTENTS_SOLID,
+          lados: trigger.map((_, i) => ({ planeIdx: muro.length + i, texinfo: 1 })),
+        },
+      ],
+      entidades: [{ classname: 'info_player_start', origin: '0 0 0' }],
+    })
+
+    const { colision } = await convertir(buf, 'test-trigger')
+    // Sólo sobrevive el muro: el trigger es atravesable en el juego real
+    // pese a su CONTENTS_SOLID (ver esVolumenDeTrigger en lib/bsp.ts).
+    expect(colision.brushes).toHaveLength(1)
+    expect(colision.brushes[0].max[0]).toBeCloseTo(1 * S, 6)
+  })
+
+  it('un brush sólido con UN lado de trigger sigue siendo sólido', async () => {
+    // El filtro exige que TODOS los lados sean trigger: si mirara "alguno",
+    // una cara mal texturada borraría un muro real del mapa.
+    const muro = planosDeCaja([0, 0, 0], [1, 1, 1])
+    const buf = construirBspSintetico({
+      planos: muro,
+      materiales: ['CONCRETE/FLOOR01', 'TOOLS/TOOLSTRIGGER'],
+      texdatas: [
+        { nameStringTableID: 0, width: 64, height: 64 },
+        { nameStringTableID: 1, width: 64, height: 64 },
+      ],
+      texinfos: [{ texdata: 0 }, { texdata: 1 }],
+      brushes: [
+        {
+          contents: CONTENTS_SOLID,
+          lados: muro.map((_, i) => ({ planeIdx: i, texinfo: i === 0 ? 1 : 0 })),
+        },
+      ],
+      entidades: [{ classname: 'info_player_start', origin: '0 0 0' }],
+    })
+
+    const { colision } = await convertir(buf, 'test-trigger-parcial')
+    expect(colision.brushes).toHaveLength(1)
   })
 })
 

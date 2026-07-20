@@ -1,5 +1,6 @@
 import type { Box, Convex } from '@/game/map/types'
 import type { Vec3 } from '@/game/math/vec3'
+import { buildConvexGrid, queryConvexGrid, type ConvexGrid } from '@/game/physics/convex-grid'
 
 export interface Capsule {
   radius: number
@@ -40,6 +41,21 @@ const SKIN = 1e-4
  * entrada normal.
  */
 const MAX_SUBSTEPS = 64
+
+/**
+ * Altura máxima de un escalón que se sube caminando, en metros. Es el mismo
+ * número que Source (18 unidades = 0.343 m), a propósito: los mapas
+ * importados están construidos dando por sentado exactamente ese valor --
+ * cordones de vereda, umbrales y escalones de porche caen justo debajo.
+ */
+const MAX_ESCALON = 0.35
+
+/**
+ * Componente Y mínima de la normal de una cara para considerarla PISABLE.
+ * 0.7 es ~45 grados: más empinado que eso ya no es un escalón que se sube
+ * sino una pared inclinada que se rodea.
+ */
+const NORMAL_MINIMA_PISABLE = 0.7
 
 /**
  * Aproximamos la cápsula por su AABB envolvente. Para un mundo de cajas
@@ -143,6 +159,13 @@ function overlapAndResolveConvex(
   let ny = 0
   let nz = 0
 
+  // Mejor candidato a ESCALÓN: de las caras pisables que están a menos de
+  // MAX_ESCALON por encima de los pies, la menos penetrada. Ver abajo.
+  let escalonPenetracion = Infinity
+  let escalonNx = 0
+  let escalonNy = 0
+  let escalonNz = 0
+
   for (let i = 0; i < count; i++) {
     const base = i * 4
     const pnx = planes[base]
@@ -165,6 +188,41 @@ function overlapAndResolveConvex(
       ny = pny
       nz = pnz
     }
+
+    if (
+      pny >= NORMAL_MINIMA_PISABLE &&
+      penetracion <= MAX_ESCALON &&
+      penetracion < escalonPenetracion
+    ) {
+      escalonPenetracion = penetracion
+      escalonNx = pnx
+      escalonNy = pny
+      escalonNz = pnz
+    }
+  }
+
+  // ESCALÓN. Con "empujar por el plano de menor penetración" a secas, un
+  // cordón de vereda de 8 cm es un muro infranqueable: caminando a 128 Hz
+  // cada tick acumula ~3.5 cm de penetración horizontal, SIEMPRE menos que
+  // los 8 cm de la cara de arriba, así que el empuje sale de costado tick
+  // tras tick y el jugador nunca sube. Medido en nuketown: al pasar del
+  // asfalto a la vereda la posición se clavaba.
+  //
+  // Entonces: cuando el empuje natural sería de PARED pero el cuerpo tiene
+  // una cara pisable a menos de MAX_ESCALON por encima de los pies, se
+  // empuja por esa cara y el jugador sube el escalón. Es lo mismo que hace
+  // Source, y por eso sus mapas se construyen dándolo por sentado.
+  //
+  // Un muro de verdad no entra: la penetración de su cara de arriba es su
+  // altura entera sobre los pies, muy por encima de MAX_ESCALON
+  // (capsule.test.ts lo verifica con un muro de 2 m). Y esto sólo afecta a
+  // los cuerpos convexos: los tres mapas escritos en código no tienen
+  // ninguno y siguen pasando por overlapAndResolve, que no cambió.
+  if (escalonPenetracion < Infinity && Math.abs(ny) <= Math.hypot(nx, nz)) {
+    minPenetracion = escalonPenetracion
+    nx = escalonNx
+    ny = escalonNy
+    nz = escalonNz
   }
 
   position.x += nx * minPenetracion
@@ -182,6 +240,64 @@ function overlapAndResolveConvex(
     out.hitWall = true
   }
 }
+
+// Scratch de capsuleOverlapsConvex. A nivel de módulo y no dentro de la
+// función para no asignar por llamada: validar los spawns de un mapa
+// importado la llama 32 x 1467 veces.
+const scratchPos: Vec3 = { x: 0, y: 0, z: 0 }
+const scratchOut: MoveResult = { hitGround: false, hitCeiling: false, hitWall: false }
+
+/**
+ * ¿La cápsula parada en `position` está dentro de `convex`?
+ *
+ * No reimplementa el test de solapamiento: corre el MISMO
+ * overlapAndResolveConvex que usa la colisión real sobre una copia
+ * descartable de la posición, y mira si empujó. Un predicado escrito aparte
+ * se desincronizaría del resolvedor al primer ajuste de umbrales, y ahí
+ * "este spawn es válido" dejaría de significar "acá el jugador no queda
+ * trabado", que es la única razón por la que existe esta función.
+ *
+ * No es para el camino de frame: valida spawns una vez al cargar el mapa.
+ */
+export function capsuleOverlapsConvex(
+  position: Vec3,
+  capsule: Capsule,
+  convex: Convex,
+): boolean {
+  scratchPos.x = position.x
+  scratchPos.y = position.y
+  scratchPos.z = position.z
+  scratchOut.hitGround = false
+  scratchOut.hitCeiling = false
+  scratchOut.hitWall = false
+  overlapAndResolveConvex(scratchPos, capsule, convex, scratchOut)
+  return scratchOut.hitGround || scratchOut.hitCeiling || scratchOut.hitWall
+}
+
+/**
+ * Grilla de descarte espacial por lista de convexos, construida la primera
+ * vez que esa lista llega a resolveMove.
+ *
+ * La cache va acá adentro y NO en `MapDef` a propósito: cómo se acelera la
+ * consulta es asunto de la física, no del que define un mapa ni de los ~45
+ * llamadores de stepPlayer, que no tendrían por qué aprender a pasar un
+ * índice espacial. WeakMap y no Map para que un mapa descargado no quede
+ * retenido por su grilla.
+ *
+ * El contrato que esto asume es que una lista de convexos NO se muta después
+ * de usarla (los mapas se arman una vez al cargar y no cambian). Una lista
+ * mutada seguiría consultando la grilla vieja.
+ */
+const grillaPorLista = new WeakMap<Convex[], ConvexGrid>()
+
+/** Umbral de brushes a partir del cual conviene la grilla. Por debajo, el
+ *  recorrido lineal es más barato que la consulta -- los tests de física y
+ *  cualquier mapa chico no pagan nada. */
+const MIN_CONVEXOS_PARA_GRILLA = 64
+
+/** Resultado reusado de la consulta de broadphase: se vacía y se vuelve a
+ *  llenar en cada llamada, nunca se reasigna (cero asignaciones por tick). */
+const convexosCercanos: Convex[] = []
 
 export function resolveMove(
   position: Vec3,
@@ -211,6 +327,29 @@ export function resolveMove(
   const stepY = delta.y * inv
   const stepZ = delta.z * inv
 
+  // Broadphase: con un mapa importado, mirar los 1467 brushes por substep y
+  // por entidad se comía el presupuesto entero de CPU (ver physics/
+  // convex-grid.ts). La consulta se hace UNA vez por llamada, con la caja
+  // que cubre todo el barrido de este tick -- no por substep: el barrido de
+  // un tick a 128 Hz mide centímetros, así que acotarlo más no descarta casi
+  // nada y sí costaría una consulta por substep.
+  let cercanos = convexes
+  let cercanosCount = convexes.length
+  if (convexes.length >= MIN_CONVEXOS_PARA_GRILLA) {
+    let grilla = grillaPorLista.get(convexes)
+    if (grilla === undefined) {
+      grilla = buildConvexGrid(convexes)
+      grillaPorLista.set(convexes, grilla)
+    }
+    const r = capsule.radius
+    const x0 = position.x - r + (delta.x < 0 ? delta.x : 0)
+    const x1 = position.x + r + (delta.x > 0 ? delta.x : 0)
+    const z0 = position.z - r + (delta.z < 0 ? delta.z : 0)
+    const z1 = position.z + r + (delta.z > 0 ? delta.z : 0)
+    cercanosCount = queryConvexGrid(grilla, convexes, x0, x1, z0, z1, convexosCercanos)
+    cercanos = convexosCercanos
+  }
+
   for (let s = 0; s < substeps; s++) {
     position.x += stepX
     position.y += stepY
@@ -226,8 +365,8 @@ export function resolveMove(
       for (let i = 0; i < boxes.length; i++) {
         overlapAndResolve(position, capsule, boxes[i], out)
       }
-      for (let i = 0; i < convexes.length; i++) {
-        overlapAndResolveConvex(position, capsule, convexes[i], out)
+      for (let i = 0; i < cercanosCount; i++) {
+        overlapAndResolveConvex(position, capsule, cercanos[i], out)
       }
     }
   }

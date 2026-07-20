@@ -24,8 +24,29 @@ export interface MapDef {
   name: string
   /** Geometría sólida. Alimenta tanto la colisión como el mesh visual. */
   boxes: Box[]
+  /**
+   * Geometría sólida que NO es una caja alineada a los ejes: los brushes de
+   * un mapa importado de Source (rampas, techos inclinados, muros en
+   * ángulo). Opcional porque los tres mapas escritos en código no tienen
+   * ninguno -- ahí la lista va indefinida y todo el motor sigue viendo
+   * exactamente el mismo mapa de antes.
+   *
+   * Convive con `boxes` en vez de reemplazarla: una AABB se resuelve con
+   * tres restas y un brush con N planos no, así que a los mapas de código
+   * les sale gratis seguir por la ruta rápida.
+   */
+  convexes?: Convex[]
   spawns: Vec3[]
   bounds: Box
+  /**
+   * Triángulos de la malla visible, no indexados, en metros y ejes de
+   * three.js (9 floats por triángulo). Sólo la traen los mapas importados:
+   * su geometría de colisión son brushes convexos, de los que no se puede
+   * derivar la malla que ve el jugador. El BVH de hitscan
+   * (combat/hitscan.ts) la usa en lugar de `boxes` cuando está presente --
+   * si no, dispararle a una rampa no acertaría a nada.
+   */
+  triangles?: Float32Array
   /**
    * Altura de las superficies que el mapa declara MURO: no plataformas, no
    * se suben, se rodean. Las usa el chequeo de alcanzabilidad

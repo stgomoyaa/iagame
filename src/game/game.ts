@@ -9,7 +9,9 @@ import { createStatsTracker, runBenchmark } from '@/game/engine/stats'
 import type { FrameStats } from '@/game/engine/stats'
 import { createTuningPanel } from '@/game/engine/tuning-panel'
 import { ARENA } from '@/game/map/arena'
-import { MAP_STORAGE_KEY, mapNames, resolveMap } from '@/game/map/registry'
+import { mapNames, resolveMap } from '@/game/map/registry'
+import { fuentesDeMapa } from '@/game/map/seleccion'
+import type { MapaExternoCargado } from '@/game/map/external-map'
 import type { MapDef } from '@/game/map/types'
 import { createPlayerState, stepPlayer } from '@/game/movement/step'
 import {
@@ -280,25 +282,27 @@ function applyQuickMatchOverrides(): void {
  * de los bots y las posiciones de spawn.
  */
 function resolveMapaActual(): MapDef {
-  const fromQuery = new URLSearchParams(window.location.search).get('map')
-  let fromStorage: string | null = null
-  try {
-    fromStorage = window.localStorage.getItem(MAP_STORAGE_KEY)
-  } catch {
-    // localStorage puede tirar en modo privado o con cookies bloqueadas.
-    // Un mapa recordado no vale una pantalla en blanco.
-    fromStorage = null
-  }
+  const { fromQuery, fromStorage } = fuentesDeMapa()
   return resolveMap(fromQuery, fromStorage)
 }
 
-export function createGame(canvas: HTMLCanvasElement): Game {
-  const mapaActual = resolveMapaActual()
+/**
+ * `mapaImportado` llega ya bajado desde ui/GameCanvas.tsx: un mapa de
+ * Source son dos archivos que hay que buscar por red, y este constructor es
+ * sincrónico a propósito -- arma el motor de una sola vez, con el mapa en
+ * mano. null = partida en uno de los tres mapas escritos en código, que es
+ * exactamente el camino de antes.
+ */
+export function createGame(
+  canvas: HTMLCanvasElement,
+  mapaImportado: MapaExternoCargado | null = null,
+): Game {
+  const mapaActual = mapaImportado?.def ?? resolveMapaActual()
   // El BVH de hitscan es estado de módulo (un mapa activo a la vez): hay que
   // apuntarlo al mapa de esta partida ANTES del primer disparo.
   setRaycastMap(mapaActual)
 
-  const gfx = createRenderer(canvas, mapaActual)
+  const gfx = createRenderer(canvas, mapaActual, mapaImportado?.objeto ?? null)
   const viewmodel = createViewmodelRenderer(gfx.renderer)
   const stats = createStatsTracker()
   const gpuTimer = createGpuTimer(gfx.gl)
@@ -353,7 +357,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   // Navgrid horneado UNA vez desde la arena real -- nunca se recalcula en
   // frame().
   const botGrid = buildNavGrid(mapaActual)
-  const botWorld = createBotWorld(mapaActual.boxes, raycastMap, botGrid)
+  const botWorld = createBotWorld(mapaActual.boxes, raycastMap, botGrid, mapaActual.convexes)
   // El equipo de cada bot sale de la MISMA función que usa el puntaje
   // (match/types.ts): el color que ve el jugador y el bando que decide si
   // hay fuego amigo no pueden salir de dos fuentes distintas o el juego
@@ -772,7 +776,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     for (let i = 0; i < ticks; i++) {
       if (playerHealth.alive) {
         profiler.begin('fisica')
-        stepPlayer(player, input.player, mapaActual.boxes)
+        stepPlayer(player, input.player, mapaActual.boxes, TICK_DT, mapaActual.convexes)
         profiler.end('fisica')
       } else {
         // Congelado mientras está muerto -- sin input, sin física nueva
@@ -1374,6 +1378,18 @@ export function createGame(canvas: HTMLCanvasElement): Game {
           archetypeId: combatArchetypeId,
           reloading: vmState.reloading,
           reloadHeld: input.reloadHeld,
+          // Posición y apoyo del jugador: sin esto no hay forma de
+          // verificar en un navegador automatizado (sin pointer lock) que
+          // en un mapa importado el piso frena de verdad. "Se ve el suelo"
+          // y "el suelo es sólido" son cosas distintas, y una captura sola
+          // no distingue caer 200 m de estar parado.
+          player: {
+            x: player.position.x,
+            y: player.position.y,
+            z: player.position.z,
+            grounded: player.grounded,
+          },
+          mapa: mapaActual.name,
           // Loadout y skin equipada (fase 3): para verificar sin pointer
           // lock que el arma con la que se spawnea es la elegida en la
           // armería, y que la skin persistida es la que se aplicó.

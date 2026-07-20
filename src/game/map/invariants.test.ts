@@ -19,7 +19,15 @@ import {
   spawnsDentroDeSolido,
   superficiesInalcanzables,
 } from '@/game/map/invariants'
-import { DEFAULT_MAP_NAME, MAPS, findMap, mapNames, resolveMap } from '@/game/map/registry'
+import {
+  DEFAULT_MAP_NAME,
+  MAPAS_EXTERNOS,
+  MAPS,
+  findMap,
+  findMapaExterno,
+  mapNames,
+  resolveMap,
+} from '@/game/map/registry'
 import { ARENA } from '@/game/map/arena'
 
 describe.each(MAPS.map((m) => [m.name, m] as const))('mapa %s', (_nombre, map) => {
@@ -102,9 +110,16 @@ describe.each(MAPS.map((m) => [m.name, m] as const))('mapa %s', (_nombre, map) =
 })
 
 describe('registry de mapas', () => {
-  it('hay tres mapas con nombres únicos', () => {
+  it('hay tres mapas escritos en código, y mapNames() suma los importados sin repetir', () => {
     expect(MAPS.length).toBe(3)
-    expect(new Set(mapNames()).size).toBe(3)
+    // mapNames() alimenta el desplegable del panel de tuning: además de los
+    // tres de código lista los mapas importados de Source (MAPAS_EXTERNOS).
+    // Los nombres tienen que seguir siendo únicos entre las dos fuentes, o
+    // elegir uno en el panel cargaría el otro.
+    const nombres = mapNames()
+    expect(nombres).toHaveLength(MAPS.length + MAPAS_EXTERNOS.length)
+    expect(new Set(nombres).size).toBe(nombres.length)
+    for (const m of MAPS) expect(findMapaExterno(m.name)).toBeNull()
   })
 
   it('findMap resuelve por nombre y devuelve null si no existe', () => {

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createGame, type Game } from '@/game/game'
+import { cargarMapaExterno, type MapaExternoCargado } from '@/game/map/external-map'
+import { mapaExternoSeleccionado } from '@/game/map/seleccion'
 import { buildSummary } from '@/game/match/match'
 import { MATCH } from '@/game/match/tuning'
 import { Killfeed } from '@/ui/Killfeed'
@@ -39,27 +41,45 @@ export function GameCanvas() {
     const canvas = ref.current
     if (!canvas) return
 
-    try {
-      const g = createGame(canvas)
-      setGame(g)
-      g.start()
-      return () => {
-        setGame(null)
-        g.stop()
-      }
-    } catch (err) {
-      console.error('GameCanvas: no se pudo iniciar el juego', err)
-      // queueMicrotask: setState sincrónico dentro del cuerpo del efecto
-      // dispara cascading renders (regla react-hooks/set-state-in-effect).
-      // Difiere el aviso un microtask, que acá no importa: es un error
-      // fatal de arranque, no un valor que el usuario vaya a notar un
-      // frame más tarde.
-      queueMicrotask(() => {
+    // Un mapa importado de Source son dos archivos que hay que bajar antes
+    // de poder armar el motor (map/external-map.ts). `cancelado` evita que
+    // una carga que termina después de desmontar arranque una partida
+    // huérfana -- en dev, el StrictMode monta y desmonta el efecto dos
+    // veces, así que esto no es un caso teórico.
+    let cancelado = false
+    let juego: Game | null = null
+
+    const externo = mapaExternoSeleccionado()
+    const carga: Promise<MapaExternoCargado | null> =
+      externo === null
+        ? Promise.resolve(null)
+        : cargarMapaExterno(externo).catch((err: unknown) => {
+            // El mapa importado no está o está mal: se juega en el mapa por
+            // defecto en vez de dejar la pantalla negra. Los archivos son
+            // un paso manual (ver docs/WORKSHOP.md), así que faltar es el
+            // caso esperable, no un bug.
+            console.error(`GameCanvas: no se pudo cargar el mapa "${externo.name}"`, err)
+            return null
+          })
+
+    carga
+      .then((mapa) => {
+        if (cancelado) return
+        juego = createGame(canvas, mapa)
+        setGame(juego)
+        juego.start()
+      })
+      .catch((err: unknown) => {
+        console.error('GameCanvas: no se pudo iniciar el juego', err)
         setFatalError(
           'Tu navegador o tu GPU no soportan lo que este juego necesita (WebGL2). Probá actualizar el navegador o los drivers de video.',
         )
       })
-      return
+
+    return () => {
+      cancelado = true
+      setGame(null)
+      juego?.stop()
     }
   }, [])
 

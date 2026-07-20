@@ -361,12 +361,19 @@ function construirMalla(
     }
 
     // Las caras de Source son siempre convexas: un abanico desde el primer
-    // vértice triangula cualquier polígono sin más trabajo. La rotación de
-    // ejes que se aplicó arriba (ejesSourceAThree) es una rotación pura
-    // (determinante +1, no una reflexión), así que preserva el sentido del
-    // winding: no hace falta invertir el orden de los índices acá.
+    // vértice triangula cualquier polígono sin más trabajo.
+    //
+    // El abanico va en orden INVERSO (k+1 antes que k). La rotación de ejes
+    // (ejesSourceAThree) es pura, determinante +1, así que no da vuelta
+    // nada -- el que estaba al revés era el punto de partida: el loop que
+    // arma LUMP_SURFEDGES recorre la cara en el sentido contrario al que
+    // glTF y three consideran "cara de frente" (CCW vista desde afuera).
+    // Con el orden directo el mapa se dibujaba dado vuelta: parado sobre el
+    // piso no se veía el piso (su única cara miraba hacia abajo) y desde
+    // afuera de una casa se le veían las paredes interiores. Verificado
+    // mirando la pantalla, que es la única forma de ver esto.
     for (let k = 1; k < loop.length - 1; k++) {
-      acumulado.indices.push(base, base + k, base + k + 1)
+      acumulado.indices.push(base, base + k + 1, base + k)
       triangulos++
     }
   }

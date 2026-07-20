@@ -16,9 +16,9 @@
  *   stepCombat(). Corre todos los ticks de simulación, como el jugador.
  */
 
-import type { Box } from '@/game/map/types'
+import type { Box, Convex } from '@/game/map/types'
 import { vec3, type Vec3 } from '@/game/math/vec3'
-import { createPlayerState, stepPlayer } from '@/game/movement/step'
+import { NO_CONVEXES, createPlayerState, stepPlayer } from '@/game/movement/step'
 import type { PlayerInput, PlayerState } from '@/game/movement/state'
 import { MOVEMENT } from '@/game/movement/tuning'
 import type { Hitbox } from '@/game/combat/hitboxes'
@@ -107,6 +107,11 @@ export function registerGunshot(registry: GunshotRegistry, position: Vec3, time:
  *  objeto -- cero asignaciones por frame en el llamador). */
 export interface BotWorld {
   boxes: Box[]
+  /** Brushes convexos del mapa (map/types.ts). Los bots corren el MISMO
+   *  stepPlayer que el jugador: sin esto, en un mapa importado de Source
+   *  atravesarían todas las paredes mientras el jugador choca contra
+   *  ellas. */
+  convexes: Convex[]
   raycastMap: RaycastMapFn
   grid: NavGrid
   pathCtx: PathfindingContext
@@ -141,9 +146,11 @@ export function createBotWorld(
   boxes: Box[],
   raycastMap: RaycastMapFn,
   grid: NavGrid,
+  convexes: Convex[] = NO_CONVEXES,
 ): BotWorld {
   return {
     boxes,
+    convexes,
     raycastMap,
     grid,
     pathCtx: createPathfindingContext(grid),
@@ -1006,7 +1013,7 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
 
   bot.input.jump = (steer.moving && steer.wantsJump) || bot.stuckTimeS > BOTS.stuckTimeS
 
-  stepPlayer(bot.player, bot.input, world.boxes, dt)
+  stepPlayer(bot.player, bot.input, world.boxes, dt, world.convexes)
 
   bot.combatInput.origin.x = bot.player.position.x
   bot.combatInput.origin.y = bot.player.position.y + bot.player.eyeHeight
