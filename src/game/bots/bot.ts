@@ -682,7 +682,20 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
   // suelto, así que este chequeo por sí solo ya produce ráfagas cortas con
   // pausas, sin ningún temporizador nuevo.
   const recoilTooHigh = radToDeg(bot.combat.recoil.pitchOffset) >= BOTS.recoilDisciplineDeg
-  bot.combatInput.triggerHeld = state === 'engage' && visible && !recoilTooHigh
+
+  // Acorralado: en Retirarse, pero con el enemigo tan encima que huir es
+  // peor que pelear (BOTS.retreatFightBackM). Retirarse nunca disparaba ni
+  // apuntaba al objetivo -- el apuntado lo resolvía stepBotMotor mirando
+  // hacia el camino de huida -- así que un bot herido con un enemigo a dos
+  // metros se daba vuelta y moría de espaldas sin tirar un tiro. Es la otra
+  // mitad de "no resuelven el cuerpo a cuerpo" de la captura.
+  const acorralado =
+    state === 'retreat' &&
+    visible &&
+    distanceXZ(bot.player.position.x, bot.player.position.z, world.targetEye.x, world.targetEye.z) <=
+      BOTS.retreatFightBackM
+
+  bot.combatInput.triggerHeld = (state === 'engage' || acorralado) && visible && !recoilTooHigh
 
   const errorRadius = currentErrorConeRadius(
     bot.difficulty.errorConeRad,
@@ -690,7 +703,11 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
     bot.targetAwareTimeS,
   )
 
-  if (state === 'engage' || (state === 'reposition' && bot.timeSinceSeenS < BOTS.targetMemoryS)) {
+  if (
+    state === 'engage' ||
+    acorralado ||
+    (state === 'reposition' && bot.timeSinceSeenS < BOTS.targetMemoryS)
+  ) {
     lookAt(eyeX, eyeY, eyeZ, bot.lastKnownTargetPos.x, bot.lastKnownTargetPos.y, bot.lastKnownTargetPos.z, scratchLook)
     sampleErrorOffset(bot.aimBrain, errorRadius, scratchOffset)
     bot.aimTargetYaw = scratchLook.yaw + scratchOffset.yaw

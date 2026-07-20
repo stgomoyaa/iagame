@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  createSpawnHistory,
   invulnerabilityExpiresAt,
   isInvulnerable,
   pickFarthestSpawn,
+  recordSpawnUse,
   spreadInitialSpawns,
 } from '@/game/match/respawn'
 import { vec3 } from '@/game/math/vec3'
@@ -49,6 +51,80 @@ describe('selección de spawn', () => {
     // Spawn 0 (el centro) queda a 10m de ambos: mejor mínimo que los otros
     // dos, que tienen un enemigo literalmente encima (distancia 0).
     expect(pickFarthestSpawn(spawns, enemies)).toBe(0)
+  })
+})
+
+describe('reparto de reapariciones (compañeros + recencia)', () => {
+  // Dos spawns igual de seguros respecto al enemigo: el maximin solo empata
+  // y siempre devuelve el primero. Es exactamente el caso que apilaba a un
+  // equipo entero en el mismo punto.
+  const spawns = [vec3(0, 0, 0), vec3(0, 0, 10)]
+  const enemies = [vec3(100, 0, 5)] // ~100m de los dos, empate práctico
+
+  it('sin compañeros ni historial se comporta igual que antes (empate -> el primero)', () => {
+    expect(pickFarthestSpawn(spawns, enemies)).toBe(0)
+    expect(pickFarthestSpawn(spawns, enemies, 1, null, 0, null, 0)).toBe(0)
+  })
+
+  it('con un compañero encima del spawn empatado, elige el otro', () => {
+    const allies = [vec3(0, 0, 0)] // parado justo en el spawn 0
+    expect(pickFarthestSpawn(spawns, enemies, 1, allies, 1)).toBe(1)
+  })
+
+  it('el término de compañeros no convence de meterse en la mira de un enemigo', () => {
+    // spawn 0 seguro (enemigo a 100m) pero con un compañero encima;
+    // spawn 1 despejado de compañeros pero con un enemigo a 2m.
+    const spawnsAsim = [vec3(0, 0, 0), vec3(0, 0, 10)]
+    const enemigoPegado = [vec3(0, 0, 12)] // 2m del spawn 1, 12m del spawn 0
+    const allies = [vec3(0, 0, 0)]
+    // Sin el tope, +8m de bonus por alejarse del compañero no puede ganarle
+    // a perder 10m de distancia al enemigo.
+    expect(pickFarthestSpawn(spawnsAsim, enemigoPegado, 1, allies, 1)).toBe(0)
+  })
+
+  it('un spawn usado recién pierde contra uno equivalente sin usar', () => {
+    const history = createSpawnHistory(4)
+    expect(pickFarthestSpawn(spawns, enemies, 1, null, 0, history, 0)).toBe(0)
+    recordSpawnUse(history, 0, 0)
+    // 1s después el castigo sigue vigente (ventana de 6s)
+    expect(pickFarthestSpawn(spawns, enemies, 1, null, 0, history, 1)).toBe(1)
+  })
+
+  it('el castigo por recencia se desvanece al vencer la ventana', () => {
+    const history = createSpawnHistory(4)
+    recordSpawnUse(history, 0, 0)
+    // Pasada la ventana completa, el spawn 0 vuelve a estar disponible y el
+    // empate se resuelve otra vez a favor del primero.
+    expect(pickFarthestSpawn(spawns, enemies, 1, null, 0, history, 99)).toBe(0)
+  })
+
+  it('el anillo del historial no crece y pisa lo más viejo', () => {
+    const history = createSpawnHistory(2)
+    recordSpawnUse(history, 0, 0)
+    recordSpawnUse(history, 1, 0)
+    recordSpawnUse(history, 0, 0) // pisa la entrada del 0 original
+    expect(history.indices.length).toBe(2)
+    expect(history.times.length).toBe(2)
+  })
+
+  it('reparte una oleada de reapariciones del mismo bando en puntos distintos', () => {
+    // Cuatro spawns EXACTAMENTE equidistantes del único enemigo (que está
+    // en el centro): el maximin empata en los cuatro y sin los términos
+    // nuevos los cuatro compañeros elegirían el índice 0. Es el caso que
+    // los términos nuevos existen para resolver -- cuando los spawns
+    // difieren mucho en seguridad, la seguridad manda y así debe ser.
+    const cuatro = [vec3(-10, 0, 0), vec3(10, 0, 0), vec3(0, 0, -10), vec3(0, 0, 10)]
+    const lejos = [vec3(0, 0, 0)]
+    const history = createSpawnHistory(4)
+    const colocados: ReturnType<typeof vec3>[] = []
+    const elegidos: number[] = []
+    for (let n = 0; n < 4; n++) {
+      const idx = pickFarthestSpawn(cuatro, lejos, 1, colocados, colocados.length, history, n * 0.5)
+      elegidos.push(idx)
+      recordSpawnUse(history, idx, n * 0.5)
+      colocados.push(vec3(cuatro[idx].x, cuatro[idx].y, cuatro[idx].z))
+    }
+    expect(new Set(elegidos).size).toBe(4)
   })
 })
 

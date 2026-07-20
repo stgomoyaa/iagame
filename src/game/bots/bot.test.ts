@@ -690,3 +690,52 @@ describe('los destinos que elige un bot son alcanzables de verdad', () => {
     ).toBeLessThan(3)
   })
 })
+
+describe('acorralado: en Retirarse, con el enemigo encima, pelea en vez de morir de espaldas', () => {
+  // Bot herido (entra a Retirarse por vida baja) con el enemigo a la vista.
+  // La única variable entre los dos casos es la DISTANCIA al enemigo.
+  function botHeridoConEnemigoA(distanciaM: number) {
+    const { world } = makeWalledWorld()
+    // z=5 deja al bot por delante de la pared (que termina en z=0), así que
+    // hay línea de vista limpia hacia el enemigo.
+    const bot = createBotState(vec3(-10, 0, 5), 0, ARCHETYPE, 1)
+    world.targetEye.x = -10 + distanciaM
+    world.targetEye.y = 1.6
+    world.targetEye.z = 5
+    // Lo deja mirando hacia el enemigo para que caiga dentro del cono.
+    bot.aimMotor.yaw = -Math.PI / 2
+    // Vida por debajo de retreatEnterHealthFraction (0.3) -> Retirarse.
+    damageBot(bot, BOTS.maxHealth * 0.85)
+    for (let i = 0; i < 3; i++) stepBotThink(bot, world, 1 / BOTS.aiTickHz)
+    return bot
+  }
+
+  it('a quemarropa (dentro de retreatFightBackM) aprieta el gatillo aunque esté en Retirarse', () => {
+    const bot = botHeridoConEnemigoA(BOTS.retreatFightBackM - 3)
+    expect(bot.fsm.current).toBe('retreat')
+    expect(bot.combatInput.triggerHeld).toBe(true)
+  })
+
+  it('lejos (fuera de retreatFightBackM) sigue huyendo sin disparar, como antes', () => {
+    const bot = botHeridoConEnemigoA(BOTS.retreatFightBackM + 10)
+    expect(bot.fsm.current).toBe('retreat')
+    expect(bot.combatInput.triggerHeld).toBe(false)
+  })
+
+  it('acorralado apunta al enemigo, no hacia la ruta de huida', () => {
+    const bot = botHeridoConEnemigoA(BOTS.retreatFightBackM - 3)
+    // El enemigo está en +X respecto del bot: mirando hacia él, el yaw
+    // objetivo tiene que apuntar a ese lado y no quedarse en el default.
+    const haciaElEnemigo: YawPitch = { yaw: 0, pitch: 0 }
+    lookAt(
+      bot.player.position.x,
+      bot.player.position.y + bot.player.eyeHeight,
+      bot.player.position.z,
+      bot.player.position.x + 3,
+      bot.player.position.y + bot.player.eyeHeight,
+      bot.player.position.z,
+      haciaElEnemigo,
+    )
+    expect(Math.abs(bot.aimTargetYaw - haciaElEnemigo.yaw)).toBeLessThan(0.35)
+  })
+})
