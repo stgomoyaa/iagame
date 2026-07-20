@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BufferAttribute, BufferGeometry, Color, Mesh, MeshBasicMaterial } from 'three'
+import { CAMO_FAMILY_INDEX, ESCALA_FAMILIA } from '@/game/skins/camo-families'
 import { generateSkin } from '@/game/skins/generator'
 import { createSkinHandle } from '@/game/skins/material'
 import { PATTERN_INDEX } from '@/game/skins/patterns'
@@ -116,6 +117,85 @@ describe('material de skin', () => {
     expect(shader.uniforms.uSkinEnabled.value).toBe(0)
   })
 
+  describe('familias de camuflaje', () => {
+    it('el uniform de familia sale de la skin', () => {
+      const mesh = mallaDeArma()
+      const handle = createSkinHandle(mesh)!
+      const shader = compilar(mesh.material as MeshBasicMaterial)
+
+      for (const fam of ['multicam', 'gema', 'damasco', 'cebra', 'clasico'] as const) {
+        handle.setSkin({ ...generateSkin('drop:1'), family: fam })
+        expect(shader.uniforms.uSkinFamily.value, fam).toBe(CAMO_FAMILY_INDEX[fam])
+      }
+    })
+
+    it('la escala se premultiplica por la de la familia', () => {
+      // Una familia cae sobre patrones anfitriones con rangos de escala muy
+      // distintos; sin esta corrección sale con cuatro veces más
+      // repeticiones en un anfitrión que en otro.
+      const mesh = mallaDeArma()
+      const handle = createSkinHandle(mesh)!
+      const shader = compilar(mesh.material as MeshBasicMaterial)
+      const skin = generateSkin('drop:1')
+
+      handle.setSkin({ ...skin, family: 'clasico' })
+      expect(shader.uniforms.uSkinPatternScale.value).toBeCloseTo(skin.patternScale, 9)
+
+      handle.setSkin({ ...skin, family: 'gema' })
+      expect(shader.uniforms.uSkinPatternScale.value).toBeCloseTo(
+        skin.patternScale * ESCALA_FAMILIA.gema,
+        9,
+      )
+    })
+
+    it('cambiar de familia no recompila el shader', () => {
+      // Todo el sistema existe para que equipar una skin escriba uniforms y
+      // nada más. Seis familias en un solo programa, no seis programas.
+      const mesh = mallaDeArma()
+      const material = mesh.material as MeshBasicMaterial
+      const handle = createSkinHandle(mesh)!
+      compilar(material)
+      const version = material.version
+
+      for (const fam of ['multicam', 'follaje', 'filigrana', 'gema', 'damasco', 'cebra'] as const) {
+        handle.setSkin({ ...generateSkin('drop:1'), family: fam })
+      }
+      expect(material.version).toBe(version)
+    })
+
+    it('las seis familias están en el GLSL, en un solo switch por uniform', () => {
+      // Si el switch fuera sobre otra cosa que un uniform, los fragmentos de
+      // una misma llamada de dibujo podrían divergir y la GPU pagaría varias
+      // familias por píxel en vez de una.
+      const mesh = mallaDeArma()
+      createSkinHandle(mesh)
+      const shader = compilar(mesh.material as MeshBasicMaterial)
+      const fs = shader.fragmentShader
+
+      expect(fs).toContain('uniform int uSkinFamily;')
+      expect(fs).toContain('skinFamilyColor')
+      for (let i = 1; i <= 6; i++) {
+        expect(fs, `falta la rama de la familia ${i}`).toContain(`fam == ${i}`)
+      }
+      // Las tres piezas que la máscara de emisivo necesita para no bañar el
+      // fondo: cada familia emisiva escribe `emis` desde su propio elemento.
+      expect(fs).toContain('emis = oro')
+      expect(fs).toContain('emis = enLinea')
+      expect(fs).toContain('emis = 1.0 - negra')
+    })
+
+    it('el emisivo de la familia se tiñe con la familia, no con el acento', () => {
+      // El oro tiene que brillar dorado y la línea del damasco magenta. Si el
+      // glow usara el acento de la skin, todos los brillos saldrían del mismo
+      // color y se perdería lo que distingue a cada familia.
+      const mesh = mallaDeArma()
+      createSkinHandle(mesh)
+      const fs = compilar(mesh.material as MeshBasicMaterial).fragmentShader
+      expect(fs).toContain('tintGlow = fam;')
+      expect(fs).toContain('color += tintGlow * glow * pulse;')
+    })
+  })
+
   it('el patrón se normaliza por el tamaño del arma', () => {
     // Sin esto, una pistola de 20cm recibe media repetición del patrón y
     // sale de un solo color mientras un fusil de 85cm sale bien.
@@ -194,7 +274,11 @@ describe('material de skin', () => {
       createSkinHandle(mesh)
 
       const arma = mesh.material as MeshBasicMaterial
-      expect(arma.customProgramCacheKey()).toBe('skin-v1')
+      // Se afirma el prefijo y no la versión exacta: lo que este test protege
+      // es que la clave del arma sea propia y distinta de la de cualquier otro
+      // material, no en qué versión va el shader. Fijar 'skin-v1' hacía que
+      // cambiar el shader rompiera un test que no habla del shader.
+      expect(arma.customProgramCacheKey()).toMatch(/^skin-v\d+$/)
       expect(mapa.customProgramCacheKey()).not.toBe(arma.customProgramCacheKey())
     })
 

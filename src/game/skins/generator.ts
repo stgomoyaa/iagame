@@ -16,6 +16,7 @@
  * cambian de aspecto. Cualquier parámetro nuevo va al final.
  */
 
+import { camoFamily, type CamoFamilyId } from '@/game/skins/camo-families'
 import { clamp01, jitterColor, type Rgb } from '@/game/skins/color'
 import { createSkinRandom, hashSeed, pick, range } from '@/game/skins/hash'
 import { PALETTES_BY_RARITY } from '@/game/skins/palettes'
@@ -45,6 +46,13 @@ export interface Skin {
   /** 0..1. Cuánto emite el acento. 0 en Común y Raro, por diseño. */
   emissive: number
   animation: AnimationId
+  /**
+   * Familia de camuflaje, o `clasico` si a esta combinación no le toca
+   * ninguna de las seis. Es un campo DERIVADO: sale de patrón, rareza,
+   * animación y seed, sin consumir el PRNG (ver skins/camo-families.ts). Por
+   * eso se puede agregar sin que cambie ninguna skin ya guardada.
+   */
+  family: CamoFamilyId
 }
 
 /**
@@ -77,6 +85,11 @@ export function generateSkin(seed: string): Skin {
   const emissive = clamp01(range(rand, tier.emissive[0], tier.emissive[1]))
   const animation = pick(rand, tier.animations)
 
+  // Después de la última tirada del PRNG, y a propósito: la familia es una
+  // función de lo que ya se decidió, no una decisión más. Si consumiera
+  // `rand()` correría el stream y cambiaría todas las skins guardadas.
+  const family = camoFamily({ seed, rarity: tier.id, pattern, animation })
+
   return {
     seed,
     name: `${palette.name} ${PATTERN_LABEL[pattern]}`,
@@ -89,6 +102,7 @@ export function generateSkin(seed: string): Skin {
     metalness,
     emissive,
     animation,
+    family,
   }
 }
 
