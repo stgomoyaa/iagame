@@ -25,6 +25,7 @@ import { createDefaultCareer, type CareerData } from '@/game/progression/career'
 import { createPlacementState, PLACEMENT, type PlacementState } from '@/game/progression/placement'
 import { RANK_MAX, RANK_MIN, RR_MAXIMO } from '@/game/progression/ranks'
 import { RR, type RankState } from '@/game/progression/rr'
+import { XP_ARMA_MAESTRIA } from '@/game/progression/weapon-xp'
 
 /**
  * Versión del formato guardado. Si cambia la forma de `ProgressData`, sube
@@ -54,6 +55,22 @@ export interface ProgressData {
   partidasJugadas: number
   victorias: number
   derrotas: number
+  /**
+   * XP acumulada por arma, por slug (progression/weapon-xp.ts). El nivel de
+   * cada arma se deriva de acá, y los camos de maestría se derivan del
+   * nivel: no se guarda ninguna recompensa, sólo este número.
+   *
+   * CAMPO ADITIVO: se agregó SIN subir `PROGRESS_VERSION` a propósito. Subir
+   * la versión haría que `parseProgress` descartara todos los guardados
+   * existentes, y un jugador perdería su rango y su inventario por estrenar
+   * una capa nueva. Un guardado viejo no trae este campo, `leerArmas` lo cae
+   * a `{}`, y el jugador simplemente arranca con todas las armas en nivel 1,
+   * que es exactamente lo que era cierto hasta ahora.
+   *
+   * **Sólo se guardan las armas USADAS**, no las 148 con cero. Ver
+   * `leerArmas`.
+   */
+  armas: Record<string, number>
 }
 
 /**
@@ -114,6 +131,7 @@ export function createDefaultProgress(): ProgressData {
     partidasJugadas: 0,
     victorias: 0,
     derrotas: 0,
+    armas: {},
   }
 }
 
@@ -169,6 +187,30 @@ function leerPlacement(raw: unknown): PlacementState {
 }
 
 /**
+ * Lee el mapa de XP por arma de un blob desconocido.
+ *
+ * Se descartan entradas en vez de rechazar el mapa entero: si una sola clave
+ * quedó corrupta, perder el nivel de ESA arma es mucho mejor que perder el
+ * de las otras 147. Es el mismo criterio defensivo del resto del archivo,
+ * aplicado por entrada.
+ *
+ * El valor se topea en `XP_ARMA_MAESTRIA` porque el nivel satura ahí de
+ * todas formas: así un guardado editado a mano no puede meter un número
+ * absurdo, y cada entrada ocupa a lo sumo cuatro dígitos.
+ */
+function leerArmas(raw: unknown): Record<string, number> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {}
+  const obj = raw as Record<string, unknown>
+  const armas: Record<string, number> = {}
+  for (const slug of Object.keys(obj)) {
+    const v = obj[slug]
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) continue
+    armas[slug] = Math.min(XP_ARMA_MAESTRIA, Math.floor(v))
+  }
+  return armas
+}
+
+/**
  * Interpreta lo que salió del almacenamiento. Todo lo que llega es `unknown`
  * a propósito: localStorage lo puede haber escrito una versión anterior del
  * juego, otra pestaña, o el propio usuario desde la consola. Nada de lo que
@@ -203,7 +245,21 @@ export function parseProgress(raw: unknown): ProgressData {
     partidasJugadas: Math.max(0, Math.floor(numeroSeguro(obj.partidasJugadas, 0))),
     victorias: Math.max(0, Math.floor(numeroSeguro(obj.victorias, 0))),
     derrotas: Math.max(0, Math.floor(numeroSeguro(obj.derrotas, 0))),
+    armas: leerArmas(obj.armas),
   }
+}
+
+/**
+ * Devuelve un guardado nuevo con la XP por arma actualizada. Va aparte de
+ * `progressWithCareer` porque la XP de arma NO es parte de la carrera: no
+ * toca rango, RR ni colocaciones, y el llamador puede persistir una sin la
+ * otra.
+ */
+export function progressWithWeaponXp(
+  data: ProgressData,
+  armas: Record<string, number>,
+): ProgressData {
+  return { ...data, armas }
 }
 
 /**

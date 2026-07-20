@@ -12,9 +12,11 @@ import {
   createDefaultProgress,
   createMemoryProgressStore,
   parseProgress,
+  progressWithWeaponXp,
   PROGRESS_VERSION,
   SKINS_INICIALES,
 } from '@/game/progression/store'
+import { XP_ARMA_MAESTRIA } from '@/game/progression/weapon-xp'
 import { generateSkin } from '@/game/skins/generator'
 import { NIVEL_INICIAL, xpParaNivel } from '@/game/progression/unlocks'
 import { weaponIndex } from '@/game/weapons/registry'
@@ -195,5 +197,72 @@ describe('lectura de datos guardados', () => {
     expect(data.xp).toBe(0)
     expect(data.skins).toEqual([...SKINS_INICIALES])
     expect(data.loadout.primary.slug).not.toBeNull()
+  })
+})
+
+/**
+ * El campo `armas` (XP por arma) se agregó SIN subir PROGRESS_VERSION. Estos
+ * tests son los que garantizan que esa decisión fue segura: un guardado
+ * escrito antes de que la capa existiera tiene que seguir cargando entero.
+ */
+describe('xp por arma en el guardado', () => {
+  it('un guardado v2 sin el campo carga igual y arranca con el mapa vacio', () => {
+    const viejo = {
+      // El 2 va LITERAL, no `PROGRESS_VERSION`. Con la constante, subir la
+      // version haria subir tambien este fixture y el test seguiria pasando
+      // mientras `parseProgress` descarta en silencio todos los guardados
+      // reales. Escrito a mano, si alguien sube la version este test cae y
+      // lo obliga a decidir a conciencia que rompe los guardados v2.
+      version: 2,
+      xp: 4800,
+      skins: [...SKINS_INICIALES],
+      loadout: { primary: {}, secondary: {} },
+      rank: null,
+      placement: { played: 2, skill: 0.5 },
+      partidasJugadas: 7,
+      victorias: 4,
+      derrotas: 3,
+      // sin `armas`: es el guardado de antes de esta capa
+    }
+    const data = parseProgress(viejo)
+    expect(data.armas).toEqual({})
+    // Y NADA MAS se perdio: el resto del guardado sobrevivio.
+    expect(data.xp).toBe(4800)
+    expect(data.partidasJugadas).toBe(7)
+    expect(data.victorias).toBe(4)
+    expect(data.loadout.primary.slug).not.toBeNull()
+  })
+
+  it('sobrevive el viaje de ida y vuelta', () => {
+    const data = progressWithWeaponXp(createDefaultProgress(), { ak47: 1500, glock: 600 })
+    expect(parseProgress(JSON.parse(JSON.stringify(data))).armas).toEqual({
+      ak47: 1500,
+      glock: 600,
+    })
+  })
+
+  it('descarta entradas corruptas sin perder las sanas', () => {
+    const data = parseProgress({
+      ...createDefaultProgress(),
+      armas: { ak47: 1500, rota: 'mucha', nan: NaN, negativa: -20, cero: 0, glock: 600 },
+    })
+    expect(data.armas).toEqual({ ak47: 1500, glock: 600 })
+  })
+
+  it('topea la xp por arma en la maestria', () => {
+    const data = parseProgress({
+      ...createDefaultProgress(),
+      armas: { ak47: 99_999_999 },
+    })
+    expect(data.armas.ak47).toBe(XP_ARMA_MAESTRIA)
+  })
+
+  it('un `armas` que no es objeto cae al mapa vacio', () => {
+    // Los arrays van NO VACIOS a proposito: un `[]` produce `{}` por
+    // Object.keys aunque el guard de Array.isArray no exista, asi que no
+    // probaria nada. `[7, 8]` sin el guard entraria como { '0': 7, '1': 8 }.
+    for (const basura of [null, 42, 'texto', [], [7, 8], [{ ak47: 1 }]]) {
+      expect(parseProgress({ ...createDefaultProgress(), armas: basura }).armas).toEqual({})
+    }
   })
 })
