@@ -4,8 +4,10 @@ Cubemap procedural que reemplaza el vacío negro que hoy ocupa media pantalla.
 Es **nuestro**: sale de un generador determinista, no de un asset descargado,
 así que se puede publicar, versionar por semilla y regenerar en otra paleta.
 
-**Este documento describe el asset y cómo aplicarlo. La integración al motor
-NO está hecha** — nada de `src/` fue tocado. Lo de abajo es la receta.
+**Integrado.** Está aplicado a los cuatro mapas (arena, torre, búnker y
+nuketown) desde `src/game/engine/renderer.ts`. Lo de abajo describe el asset
+y las razones de diseño; la sección "Cómo se aplica" quedó como registro de
+la receta y de las trampas que tiene.
 
 ---
 
@@ -137,8 +139,11 @@ hardware modesto, **bajar a 512 es la primera palanca** y cuesta un comando.
 
 ## Cómo se aplica
 
-Nada de esto está integrado todavía. En `src/game/engine/renderer.ts`, junto a
-`const scene = new Scene()`:
+Ya está hecho, en `src/game/engine/renderer.ts` junto a `const scene = new
+Scene()`. La lista de caras y el mensaje de error viven aparte, en
+`src/game/engine/skybox.ts`, que es puro y NO importa three — así el orden de
+las caras se puede testear contra el generador sin WebGL y sin ampliar la
+lista de `architecture.test.ts`. El esqueleto es éste:
 
 ```ts
 import { CubeTextureLoader, SRGBColorSpace } from 'three'
@@ -169,8 +174,37 @@ Tres cosas a tener en cuenta al integrar:
    ver el skybox por arriba de las paredes de arena/torre/búnker. Es lo
    buscado, pero cambia cómo se leen esos mapas y vale una pasada de QA.
 3. **El asset tiene que existir.** Si el deploy no corre el generador, los seis
-   PNG dan 404 y `scene.background` queda en `null` — o sea, el cielo negro de
-   hoy. Falla en silencio, no rompe el juego.
+   PNG dan 404 y el cielo vuelve a ser negro sin romper el juego. **Resuelto
+   por los dos lados** (ver la sección siguiente): `package.json` hornea el
+   asset en `predev` y `prebuild`, y si aun así falta, el renderer lo grita
+   por consola con el comando exacto en vez de quedarse en negro callado.
+
+### Asset generado contra build: por qué `prebuild` y no versionar
+
+Había dos salidas para el asset gitignoreado. Se eligió **que el build lo
+genere** (`predev` + `prebuild` en `package.json`), no versionar los 1.1 MB:
+
+- **Versionar reintroduce el problema que el `.gitignore` evita.** El PNG es
+  salida determinista de un script commiteado (verificado de nuevo acá: se
+  borró la carpeta, se regeneró y los seis `shasum` dieron idénticos). Con el
+  asset versionado, cada retoque de paleta o de semilla mete 1.1 MB de blobs
+  nuevos en la historia para siempre, y aparece un estado imposible de
+  detectar: PNG commiteados que ya no corresponden al generador commiteado.
+  Nada avisaría de esa desincronización.
+- **El costo real de generar es bajo**: 4.5 s, una vez, al arrancar `dev` o
+  `build`. Contra eso, `git clone` baja 1.1 MB menos.
+- **pnpm 10 sí corre `pre<script>`** — verificado a mano, no asumido, porque
+  pnpm los tuvo desactivados por default durante varias versiones mayores y
+  eso habría hecho que `prebuild` no corriera nunca sin ningún error. Hay un
+  test (`src/game/engine/skybox.test.ts`) que ancla los dos scripts en
+  `package.json`.
+
+Como la generación automática puede saltearse igual (un deploy que corra
+`next build` directo, sin pasar por el script de npm), **el fallo se hizo
+ruidoso**: `renderer.ts` engancha el `onError` del `CubeTextureLoader` y saca
+por `console.error` un mensaje con el comando a correr, una sola vez y no seis
+(el loader dispara un `onError` por cara). Verificado escondiendo el asset y
+recargando el juego.
 
 ### Verificar que quedó bien
 
@@ -272,3 +306,25 @@ framebuffer con `gl.readPixels`):
 equipo púrpura sobre cielo púrpura — la preocupación obvia — se lee sin
 problema: 0.435 contra 0.249, porque el cielo es desaturado y el color de
 equipo es vívido. La separación es de brillo, no de tono.
+
+### Re-medido después de integrar (3840x2160, `gl.readPixels`)
+
+El presupuesto se volvió a medir **sobre el renderer ya integrado**, que es lo
+único que prueba que la integración no lo rompió. Un cuerpo `0x1a1a1a` y uno
+`0xb44cff` contra el cielo, en tres mapas:
+
+| Mapa | Cielo limpio (mín) | Cielo (media) | Silueta | Contraste silueta/cielo |
+|---|---|---|---|---|
+| arena | 0.2346 | 0.2568 | 0.102 | **0.1327** |
+| torre | 0.2310 | 0.2550 | 0.102 | **0.1290** |
+| búnker | 0.2310 | 0.2540 | 0.102 | **0.1290** |
+
+El púrpura de equipo midió 0.4354 en los tres, o sea +0.18 sobre el cielo.
+Todo por encima del piso 0.22 y del contraste 0.12 de diseño.
+
+**Detalle de método que cambia el resultado:** el mínimo del cielo hay que
+tomarlo sobre el cielo *erosionado*. Con `antialias: true`, el borde de cada
+cuerpo son píxeles MEZCLA de cuerpo y cielo; contarlos como cielo daba un
+mínimo de 0.1765 y hacía parecer que el piso de luminancia se violaba cuando
+no. Descartando todo píxel de cielo con un vecino no-cielo a 3 px, el mínimo
+sube a 0.2346, que es el número honesto.
