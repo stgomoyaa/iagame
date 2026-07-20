@@ -1860,6 +1860,15 @@ export function createGame(
             grounded: player.grounded,
           },
           mapa: mapaActual.name,
+          // Costo de CPU de la IA (engine/profiler.ts, sección 'ia'), para
+          // poder comparar el presupuesto de bots ANTES y DESPUÉS de tocar
+          // su comportamiento sin tener que leer el HUD. El desglose ya lo
+          // calcula el profiler cada frame: esto sólo lo copia, no mide
+          // nada nuevo ni agrega trabajo al camino de frame.
+          perfil: {
+            iaMedianaMs: profiler.stats.ia.medianMs,
+            iaP95Ms: profiler.stats.ia.p95Ms,
+          },
           // Loadout y skin equipada (fase 3): para verificar sin pointer
           // lock que el arma con la que se spawnea es la elegida en la
           // armería, y que la skin persistida es la que se aplicó.
