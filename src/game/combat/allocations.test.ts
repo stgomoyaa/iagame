@@ -69,8 +69,21 @@ describe('presupuesto de asignaciones del combate', () => {
     global.gc?.()
     const antes = process.memoryUsage().heapUsed
 
-    // "Miles de disparos" (sección "qué testear" del spec de fase 1).
-    const ITERACIONES = 8000
+    // Derivación (ver movement/tuning.ts para el mismo estilo de comentario):
+    // el guard tiene que detectar una fuga tan chica como UN number retenido
+    // por disparo (~8 bytes en V8, el tamaño de un `push` a un array a nivel
+    // de módulo -- el tipo de fuga más fácil de introducir sin querer, más
+    // chica que el objeto {x,y,z} con el que se calibró originalmente este
+    // umbral). Para que esa fuga supere el umbral de 1MB con un margen
+    // holgado (3x o más, no un empate a filo de cuchillo con el ruido):
+    // iteraciones >= 3 * umbral_bytes / 8 = 3 * 1_048_576 / 8 = 393_216.
+    // 400_000 redondea hacia arriba y deja ~3.05x de margen (400_000 * 8B =
+    // 3.05MB de fuga esperada contra un umbral de 1MB). Confirmado a mano:
+    // con un array a nivel de módulo que hace push de un number por disparo
+    // en fireShot() (combat/shot.ts), este guard con 400_000 iteraciones
+    // pasó de verde a rojo -- ver el informe de cierre de la tarea para el
+    // crecimiento medido exacto.
+    const ITERACIONES = 400_000
     let shotsDisparados = 0
     for (let i = 0; i < ITERACIONES; i++) shotsDisparados += dispararUno()
     expect(shotsDisparados).toBeGreaterThan(2000)

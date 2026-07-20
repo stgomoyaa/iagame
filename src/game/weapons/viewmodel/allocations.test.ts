@@ -51,7 +51,20 @@ describe('presupuesto de asignaciones del viewmodel', () => {
     global.gc?.()
     const antes = process.memoryUsage().heapUsed
 
-    for (let i = 0; i < 300_000; i++) {
+    // Derivación (mismo estilo que movement/tuning.ts): el guard tiene que
+    // detectar una fuga tan chica como UN number retenido por tick (~8 bytes
+    // en V8), no sólo el objeto {x,y,z} con el que se calibró originalmente
+    // el umbral de 4.5MB. Para superarlo con un margen holgado (3x o más):
+    // ticks >= 3 * umbral_bytes / 8 = 3 * 4.5 * 1_048_576 / 8 = 1_769_472.
+    // A los 300_000 ticks anteriores, una fuga de 8 bytes/tick daba sólo
+    // 2.4MB -- por DEBAJO del umbral de 4.5MB, ni lo cruzaba. 1_800_000
+    // redondea hacia arriba y deja ~3.05x de margen (13.73MB de fuga
+    // esperada contra el umbral). Confirmado a mano: con un array a nivel de
+    // módulo que hace push de un number por tick en stepViewmodel()
+    // (weapons/viewmodel/rig.ts), este guard con 1_800_000 ticks pasó de
+    // verde a rojo -- ver el informe de cierre de la tarea para el
+    // crecimiento medido exacto.
+    for (let i = 0; i < 1_800_000; i++) {
       input.mouseDeltaX = Math.sin(i * 0.01) * 0.02
       input.ads = i % 200 < 100
       if (i % 500 === 0) fire(state, WEAPON)
@@ -64,9 +77,8 @@ describe('presupuesto de asignaciones del viewmodel', () => {
     const crecimientoMB = (despues - antes) / 1024 / 1024
 
     // Mismo umbral que movement/allocations.test.ts, calibrado con la misma
-    // metodología (300k ticks, --expose-gc, Node v26.3.1): el ruido de heap
-    // del runtime queda muy por debajo de una fuga real de un objeto por
-    // tick.
+    // metodología (--expose-gc, Node v26.3.1): el ruido de heap del runtime
+    // queda muy por debajo de una fuga real de un objeto por tick.
     expect(crecimientoMB).toBeLessThan(4.5)
   })
 })

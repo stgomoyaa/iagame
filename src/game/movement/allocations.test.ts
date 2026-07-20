@@ -34,12 +34,26 @@ describe('presupuesto de asignaciones', () => {
     global.gc?.()
     const antes = process.memoryUsage().heapUsed
 
-    // 300k en vez de 100k: la señal de una fuga real (bytes por tick que se
-    // acumulan) escala 3x con el conteo de ticks, pero el ruido de heap del
-    // runtime (JIT, GC generacional) no escala igual de rápido. A más
-    // ticks, más separación entre "ruido" y "fuga real", y el umbral deja
-    // de ser un filo de cuchillo dependiente de la máquina.
-    for (let i = 0; i < 300_000; i++) {
+    // Derivación (mismo estilo que movement/tuning.ts): el guard tiene que
+    // detectar una fuga tan chica como UN number retenido por tick (~8 bytes
+    // en V8 -- un `push` a un array a nivel de módulo, el tipo de fuga MÁS
+    // fácil de introducir sin querer, y más chica que el objeto {x,y,z} con
+    // el que se calibró el umbral de 4.5MB originalmente -- ver el informe
+    // de cierre de la tarea "guards de asignaciones"). Para que esa fuga
+    // supere el umbral con un margen holgado (3x o más, no un empate a filo
+    // de cuchillo con el ruido de GC): ticks >= 3 * umbral_bytes / 8 =
+    // 3 * 4.5 * 1_048_576 / 8 = 1_769_472. Antes este guard corría 300_000
+    // ticks -- suficiente para el umbral ORIGINAL (calibrado contra fugas de
+    // objeto, ~24-64 bytes cada una) pero insuficiente para un number: a
+    // 300_000 ticks, una fuga de 8 bytes/tick da sólo 2.4MB, por DEBAJO del
+    // umbral de 4.5MB -- ni siquiera lo cruza, el guard no vería nada.
+    // 1_800_000 redondea hacia arriba y deja ~3.05x de margen (1_800_000 * 8B
+    // = 13.73MB de fuga esperada contra un umbral de 4.5MB). Confirmado a
+    // mano: con un array a nivel de módulo que hace push de un number por
+    // tick en stepPlayer() (movement/step.ts), este guard con 1_800_000
+    // ticks pasó de verde a rojo -- ver el informe de cierre para el
+    // crecimiento medido exacto.
+    for (let i = 0; i < 1_800_000; i++) {
       input.yaw += 0.01
       stepPlayer(s, input, ARENA.boxes, TICK_DT)
     }

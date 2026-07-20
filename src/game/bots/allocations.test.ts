@@ -17,6 +17,14 @@ describe('presupuesto de asignaciones de bots', () => {
     // fuerte sin --expose-gc en vez de degradar en silencio.
     expect(typeof global.gc, 'correr con --expose-gc').toBe('function')
 
+    // Este guard es el más caro de la suite: 1.8M ticks x 10 bots con IA
+    // real (steering + stepPlayer + resincronización de hitboxes) miden
+    // ~15s (Node v26.3.1, ver el informe de cierre de la tarea "guards de
+    // asignaciones"), por encima del timeout por defecto de vitest (5s).
+    // No es un test colgado -- es el costo real de la escala de iteraciones
+    // que hace falta para que este guard detecte una fuga de 8 bytes/tick
+    // con margen (ver la derivación más abajo, junto al TICKS).
+
     const grid = buildNavGrid(ARENA, 1, 1.8)
     const world = createBotWorld(ARENA.boxes, raycastMap, grid)
     const squad = createBotSquad(ARENA.spawns, 10, 0.5, ARCHETYPE)
@@ -38,19 +46,31 @@ describe('presupuesto de asignaciones de bots', () => {
     global.gc?.()
     const antes = process.memoryUsage().heapUsed
 
-    const TICKS = 60_000
+    // Derivación (mismo estilo que movement/tuning.ts): el guard tiene que
+    // detectar una fuga tan chica como UN number retenido por TICK (~8 bytes
+    // en V8) -- no por bot: `TICKS` es el contador del loop de este test,
+    // así que "una fuga de 8 bytes por iteración" se mide contra ÉL, no
+    // contra TICKS * squadSize. Es la lectura conservadora: no asume nada
+    // sobre CUÁNTOS bots toca el bug (podría ser un bug que sólo corre una
+    // vez por tick, fuera del loop por-bot). Para superar el umbral de
+    // 4.5MB con un margen holgado (3x o más): TICKS >= 3 * umbral_bytes / 8
+    // = 3 * 4.5 * 1_048_576 / 8 = 1_769_472. A los 60_000 ticks anteriores,
+    // una fuga de 8 bytes/tick daba sólo 0.46MB -- ni cerca de cruzar el
+    // umbral. 1_800_000 redondea hacia arriba y deja ~3.05x de margen
+    // (13.73MB de fuga esperada contra el umbral). Confirmado a mano: con
+    // un array a nivel de módulo que hace push de un number por tick en
+    // stepAllBotsMotor() (bots/bot.ts), este guard con 1_800_000 ticks pasó
+    // de verde a rojo -- ver el informe de cierre de la tarea para el
+    // crecimiento medido exacto.
+    const TICKS = 1_800_000
     for (let i = 0; i < TICKS; i++) stepAllBotsMotor(squad, world, TICK_DT)
 
     global.gc?.()
     const despues = process.memoryUsage().heapUsed
     const crecimientoMB = (despues - antes) / 1024 / 1024
 
-    // 10 bots x 60k ticks = 600k llamadas a stepBotMotor: mismo orden de
-    // magnitud que movement/allocations.test.ts (300k ticks de un solo
-    // jugador). Mismo umbral (4.5MB) por el mismo motivo -- ver el
-    // comentario de ese archivo sobre cómo se calibró.
     expect(crecimientoMB).toBeLessThan(4.5)
-  })
+  }, 30_000)
 
   it('stepBotCombat (el mismo stepCombat que el jugador) no hace crecer el heap sostenidamente', () => {
     expect(typeof global.gc, 'correr con --expose-gc').toBe('function')
@@ -80,8 +100,20 @@ describe('presupuesto de asignaciones de bots', () => {
     global.gc?.()
     const antes = process.memoryUsage().heapUsed
 
+    // Misma derivación que combat/allocations.test.ts (mismo umbral de 1MB):
+    // iteraciones >= 3 * 1_048_576 / 8 = 393_216 para que una fuga de un
+    // number por llamada de dispararTodos() (~8 bytes) supere el umbral con
+    // ~3x de margen -- lectura conservadora sobre el CONTADOR del loop de
+    // este test, no sobre el total de llamadas a stepBotCombat (10 bots x
+    // iteración): igual que en stepAllBotsMotor de arriba, no asume que el
+    // bug toca a los 10 bots. 400_000 deja ~3.05x de margen (3.05MB de fuga
+    // esperada contra el umbral de 1MB). Confirmado a mano: con un array a
+    // nivel de módulo que hace push de un number por llamada en
+    // stepBotCombat() (bots/bot.ts), este guard con 400_000 iteraciones pasó
+    // de verde a rojo -- ver el informe de cierre de la tarea para el
+    // crecimiento medido exacto.
     let shotsTotal = 0
-    for (let i = 0; i < 8000; i++) shotsTotal += dispararTodos()
+    for (let i = 0; i < 400_000; i++) shotsTotal += dispararTodos()
     expect(shotsTotal).toBeGreaterThan(2000)
 
     global.gc?.()
