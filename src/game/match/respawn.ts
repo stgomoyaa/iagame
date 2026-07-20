@@ -14,23 +14,30 @@ import type { Vec3 } from '@/game/math/vec3'
  * de seguridad parecida (en nuketown los 16 spawns de una misma casa están
  * a 5-12 m entre sí) y nunca puede convencer a un bot de meterse en la mira
  * de un enemigo con tal de separarse de un aliado.
+ *
+ * El tope arrancó en 8 m y se bajó a 5 midiendo: con 8, en 6 min de
+ * nuketown, la partida caía de 79 a 53 kills -- el término era tan fuerte
+ * que mandaba a los bots a spawns peores en vez de sólo desempatar entre
+ * spawns equivalentes, que es todo lo que tiene que hacer.
  */
 const ALLY_SPREAD_WEIGHT = 1
-const ALLY_SPREAD_CAP_M = 8
+const ALLY_SPREAD_CAP_M = 5
 
 /**
- * Ventana y castigo del término de recencia. 6 s es del orden de lo que
+ * Ventana y castigo del término de recencia. 4 s es del orden de lo que
  * tarda un bot en irse caminando de su punto de aparición, así que castiga
  * exactamente el caso malo -- dos muertes seguidas del mismo bando
  * resolviendo al mismo punto mientras el primero todavía está parado ahí --
  * y deja de castigar cuando el punto ya se despejó.
  *
- * 14 m es mayor que ALLY_SPREAD_CAP_M a propósito: reusar un punto recién
+ * 6 m es mayor que ALLY_SPREAD_CAP_M a propósito: reusar un punto recién
  * usado tiene que perder incluso contra un spawn algo peor, porque el
- * apilamiento se ve y "un poco más cerca de un enemigo" no.
+ * apilamiento se ve y "un poco más cerca de un enemigo" no. Igual que el
+ * tope de compañeros, arrancó más alto (14 m) y se bajó midiendo: castigos
+ * grandes distorsionan la elección de spawn mucho más de lo que arreglan.
  */
-const RECENT_WINDOW_S = 6
-const RECENT_PENALTY_M = 14
+const RECENT_WINDOW_S = 4
+const RECENT_PENALTY_M = 6
 
 /**
  * Últimos spawns usados, en un anillo de tamaño fijo. Existe porque
