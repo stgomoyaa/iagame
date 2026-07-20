@@ -39,11 +39,18 @@
  *        `COLOR_0` para separar metal de madera y polímero: sin ese atributo
  *        las skins no tendrían de dónde agarrarse y estas 39 armas serían
  *        las únicas sin skin del arsenal.
- *      - `viewmodel/renderer.ts` aísla UNA malla del GLB. Un modelo con 3
- *        materiales llega a Three como 3 mallas y se dibujarían sólo los
- *        vértices de la primera (le pasa a 7 de estos archivos: visor y
- *        cuerpo son materiales distintos). Colapsar a un material deja 1
- *        primitiva y 1 llamada de dibujo, igual que el pack CC0.
+ *      - `viewmodel/renderer.ts` aísla las mallas del GLB POR NOMBRE. Un
+ *        modelo con 3 materiales llega a Three como 3 mallas y se dibujarían
+ *        sólo los vértices de la primera (le pasa a 7 de estos archivos:
+ *        visor y cuerpo son materiales distintos). Colapsar a un material
+ *        deja 1 primitiva por parte.
+ *        Ojo: "por parte", no "en total". Desde que la recarga anima el
+ *        cargador, un arma que lo trae sale con DOS nodos (`weapon_body` y
+ *        `weapon_mag`) y cuesta 2 draw calls en vez de 1 — medido en el
+ *        navegador: 8 draws con un arma CC0, 9 con el AK-47, y de vuelta 8
+ *        durante el tramo en que el cargador viejo ya salió y el nuevo no
+ *        entró. Las 4 sin cargador extraíble (revólver y las tres escopetas
+ *        de bombeo) siguen costando 1, igual que el pack CC0.
  *      - Los .glb pasan de ~700 KB a ~50 KB. Con 79 armas en el catálogo eso
  *        importa: el navegador baja una por arma equipada.
  *    El look resultante —facetado, color plano por vértice— es además el
@@ -97,6 +104,31 @@ const RAW_BARREL_SIGN = 1
 const RAW_UP_AXIS = 1
 
 /**
+ * Nombres de las dos partes que produce `scripts/blender/mdl-to-glb.py`. Son
+ * el contrato entre los tres eslabones de este pipeline: Blender los escribe,
+ * este script los preserva (ver `KEEP_PARTS` abajo) y
+ * `viewmodel/renderer.ts` busca el cargador por el nombre exacto.
+ */
+const NODE_BODY = 'weapon_body'
+const NODE_MAG = 'weapon_mag'
+
+/**
+ * `join()` fusiona todas las mallas compatibles en una. Es lo que queremos
+ * PUERTAS ADENTRO de cada parte —el cuerpo llega con varias primitivas
+ * (cuerpo, silenciador, visor) y colapsarlas deja un draw call— pero no ENTRE
+ * partes: fusionar el cargador con el cuerpo es exactamente lo que destruía
+ * la posibilidad de animar la recarga.
+ *
+ * `keepNamed` es el matiz justo: no une mallas/nodos CON NOMBRE entre sí, pero
+ * sí une las primitivas dentro de cada uno. Como Blender ya nombró las dos
+ * partes (`weapon_body` / `weapon_mag`) y nada más tiene nombre, el resultado
+ * es 1 primitiva por parte: 2 draw calls en un arma con cargador, 1 en un
+ * revólver. Sin `keepNamed` el resultado vuelve a ser 1 sola malla y la
+ * recarga vuelve a leerse como el arma agachándose.
+ */
+const KEEP_PARTS = { keepNamed: true } as const
+
+/**
  * Largo objetivo por clase de arquetipo, en metros. Reusa la tabla de
  * `geometry.ts` (que indexa por palabra del nombre de archivo del pack CC0)
  * traduciendo de clase de arquetipo a esa palabra, en vez de escribir números
@@ -140,6 +172,15 @@ export interface SourceIndexEntry extends IndexEntry {
   sightLateral: number
   sightType: SightType
   sightConfidence: number
+  /**
+   * El `.glb` conserva el cargador como nodo `weapon_mag` aparte del cuerpo.
+   * El renderer no lee este campo —descubre el nodo al cargar el GLB, que es
+   * la fuente de verdad— pero el índice lo registra igual para poder contestar
+   * "¿cuántas armas pueden animar el cargador?" sin abrir 39 archivos
+   * binarios, y para que un arma que PIERDA el cargador en una reconversión
+   * futura se note en el diff del índice en vez de en pantalla.
+   */
+  hasMagazine: boolean
 }
 
 /**
@@ -261,7 +302,7 @@ async function convertOne(
 ): Promise<SourceIndexEntry> {
   const doc = await io.read(inPath)
 
-  await doc.transform(flatten(), dedup(), joinMeshes(), weld())
+  await doc.transform(flatten(), dedup(), joinMeshes(KEEP_PARTS), weld())
   // El transform del nodo se descarta acá, antes de medir nada: todo lo que
   // sigue razona sobre las posiciones de los vértices, así que un transform
   // colgando del nodo sería una escala fantasma que no aparece en las
@@ -270,8 +311,10 @@ async function convertOne(
 
   bakeTextureToVertexColors(doc)
   // Recién ahora join() puede fusionar: antes cada primitiva tenía su propio
-  // material y se quedaban separadas.
-  await doc.transform(joinMeshes())
+  // material y se quedaban separadas. Sigue con `keepNamed`, si no este
+  // segundo pase se comería la separación cuerpo/cargador que el primero
+  // preservó — que es justo el error fácil de cometer acá.
+  await doc.transform(joinMeshes(KEEP_PARTS))
 
   const positions = collectPositions(doc)
   if (positions.length === 0) throw new Error('el modelo no tiene vértices')
@@ -296,10 +339,28 @@ async function convertOne(
   // coordenadas y otra escala.
   const sight = detectSightLine(finalPositions, entry.sight)
 
+  // Se mide sobre el documento final, después de prune(): lo que importa no es
+  // que Blender haya escrito el nodo, sino que haya SOBREVIVIDO todo el
+  // pipeline. Un join() sin `keepNamed` en cualquiera de los dos pases lo
+  // fusionaría con el cuerpo y este chequeo es el que lo delataría.
+  const hasMagazine = doc
+    .getRoot()
+    .listNodes()
+    .some((n) => n.getName() === NODE_MAG && n.getMesh() !== null)
+
+  // El cuerpo es obligatorio: si se perdió, algo se rompió río arriba y el
+  // arma saldría invisible o a medias. Mejor fallar acá que en pantalla.
+  const hasBody = doc
+    .getRoot()
+    .listNodes()
+    .some((n) => n.getName() === NODE_BODY && n.getMesh() !== null)
+  if (!hasBody) throw new Error(`no quedó ningún nodo "${NODE_BODY}" con malla`)
+
   await io.write(outPath, doc)
 
   return {
     slug: entry.slug,
+    hasMagazine,
     name: entry.name,
     triangles: countTriangles(doc),
     bounds: {
@@ -387,7 +448,8 @@ async function main(): Promise<void> {
       console.log(
         `ok    ${result.slug.padEnd(20)} ${String(result.triangles).padStart(6)} tris  ` +
           `mira ${(result.sightHeight * 100).toFixed(1).padStart(5)} cm (${result.sightType}, ` +
-          `conf ${result.sightConfidence.toFixed(2)})${flag}`,
+          `conf ${result.sightConfidence.toFixed(2)})  ` +
+          `${result.hasMagazine ? 'cargador' : '   --   '}${flag}`,
       )
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -409,6 +471,9 @@ async function main(): Promise<void> {
   console.log(`sin archivo: ${missing}`)
   console.log(`fallidas:    ${failures.length}`)
   console.log(`índice:      ${merged.length} entradas (antes ${existingIndex.length})`)
+  // Cuántas pueden animar el cargador con geometría. El resto cae a la
+  // coreografía procedural sola, que también se ve como una recarga.
+  console.log(`con cargador: ${merged.filter((e) => e.hasMagazine).length}/${merged.length}`)
 
   const review = merged.filter((e) => e.needsManualReview)
   if (review.length > 0) {

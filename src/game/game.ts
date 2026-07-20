@@ -41,10 +41,13 @@ import { performanceFromStats } from '@/game/progression/combat-score'
 import { getWeaponVisual, weaponIndex } from '@/game/weapons/registry'
 import { createRigWeapon, syncRigWeapon } from '@/game/weapons/viewmodel/adapt'
 import { createViewmodelRenderer } from '@/game/weapons/viewmodel/renderer'
+import { createMagTransform, magazinePose } from '@/game/weapons/viewmodel/reload'
+import { VIEWMODEL } from '@/game/weapons/viewmodel/tuning'
 import {
   createViewmodelState,
   easeInOutCubic,
   fire,
+  reloadFraction,
   startDraw,
   startReload,
   stepViewmodel,
@@ -565,6 +568,9 @@ export function createGame(
     speed: 0, grounded: false, ads: false, mouseDeltaX: 0, mouseDeltaY: 0,
   }
   const vmOut: VmTransform = { px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0 }
+  // Pose del cargador durante la recarga. Preasignada por el mismo motivo que
+  // vmOut: se muta cada frame, nunca se reemplaza.
+  const vmMag = createMagTransform()
   const rigWeapon = createRigWeapon()
 
   // Estado de combate: preasignado una vez, igual que el viewmodel (sección
@@ -1398,6 +1404,20 @@ export function createGame(
       // siempre `true` y la línea es un no-op idempotente.
       viewmodel.weapon.visible =
         scopeReticleNow === null || !weaponHiddenByScope(scopeAlpha(easedAdsTForScope))
+
+      // Cargador: sale, cae y entra uno nuevo durante la recarga. Misma
+      // convención de pz que arriba (se niega al escribir). Se escribe sin
+      // preguntar si el arma tiene cargador — un arma sin él tiene el pivote
+      // vacío y mover un grupo vacío no cuesta nada ni se ve.
+      //
+      // No hace falta cruzarlo con la visibilidad del arma de la línea de
+      // arriba: `magPivot` es hijo de `weapon` (viewmodel/renderer.ts), y en
+      // three la visibilidad es jerárquica, así que apagar el arma al mirar
+      // por el visor ya se lleva al cargador con ella.
+      magazinePose(reloadFraction(vmState), vmMag)
+      viewmodel.magPivot.position.set(vmMag.px, vmMag.py, -vmMag.pz)
+      viewmodel.magPivot.rotation.set(vmMag.rx, 0, vmMag.rz)
+      viewmodel.magPivot.visible = vmMag.visible
       // now/1000: el reloj de las animaciones de skin (pulso, flujo, ciclo
       // de tono). Se pasa el timestamp del rAF en vez de acumular un
       // contador propio para no sumar estado que se pueda desincronizar.
@@ -1655,6 +1675,15 @@ export function createGame(
         // el fulgor de boca dura 45 ms y es casi imposible de cazar en una
         // captura sin poder estirarlo desde la consola.
         ;(window as unknown as { __vfxTuning?: typeof VFX }).__vfxTuning = VFX
+
+        // Tuning del viewmodel: mismo motivo que los tres de arriba, y con el
+        // mismo problema agudo que __vfxTuning. La coreografía de recarga
+        // (weapons/viewmodel/reload.ts) se aprueba MIRÁNDOLA, y sus fases
+        // duran décimas de segundo: ajustar roll, caída o golpes editando el
+        // archivo y esperando el rebuild hace que cada iteración cueste una
+        // recarga entera de la página. Desde la consola es inmediato.
+        ;(window as unknown as { __viewmodelTuning?: typeof VIEWMODEL }).__viewmodelTuning =
+          VIEWMODEL
 
         // Estado vivo de los efectos, sólo lectura. Los shaders deciden qué
         // se dibuja a partir de spawnTimeS contra el reloj, así que cuando

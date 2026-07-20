@@ -24,10 +24,46 @@ export interface ViewmodelTuning {
   reloadDrop: number
   /** Radianes que se inclina el arma durante la fase de recarga. */
   reloadTilt: number
+  /** Radianes de ROLL durante la recarga: gira el arma sobre su eje para que
+   *  la boca del cargador quede a la vista. Es la señal que distingue una
+   *  recarga de un agachón — agacharse no rola. */
+  reloadRoll: number
+  /** Radianes de YAW durante la recarga: mete el arma un poco hacia adentro,
+   *  como quien la acerca al cuerpo para manipularla. */
+  reloadYaw: number
+  /** Metros que el arma se corre hacia el centro del encuadre al recargar.
+   *  El arma vive a la derecha; recargar la trae hacia adentro, que es lo que
+   *  hace alguien que se mira las manos. Además es lo que la mantiene EN
+   *  CUADRO mientras baja. */
+  reloadPullIn: number
   /** Fracción de reloadTime en la que se emite el evento magOut. */
   reloadMagOutAt: number
   /** Fracción de reloadTime en la que se emite el evento magIn. */
   reloadMagInAt: number
+  /** Ancho (en fracción de reloadTime) de los golpes secos de magOut/magIn. */
+  reloadSnapSpan: number
+  /** Metros del tirón hacia abajo al arrancar el cargador viejo. */
+  reloadYankAmount: number
+  /** Metros del golpe hacia arriba al encajar el cargador nuevo de una palmada. */
+  reloadSlapAmount: number
+  /** Fracción de reloadTime donde arranca el tirón de manija de carga. */
+  reloadChargeAt: number
+  /** Ancho de ese tirón, en fracción de reloadTime. */
+  reloadChargeSpan: number
+  /** Metros que se tira la manija de carga hacia atrás. */
+  reloadChargeAmount: number
+  /** Radianes de cabeceo que acompañan al tirón de manija. */
+  reloadChargeTilt: number
+  /** Fracción de reloadTime que tarda el cargador viejo en salir de cuadro. */
+  reloadMagFallSpan: number
+  /** Fracción de reloadTime que tarda el cargador nuevo en entrar y asentarse. */
+  reloadMagInsertSpan: number
+  /** Metros que cae el cargador viejo antes de ocultarse. */
+  reloadMagFallDistance: number
+  /** Metros por debajo de su asiento donde aparece el cargador nuevo. */
+  reloadMagEntryDistance: number
+  /** Radianes que voltea el cargador viejo mientras cae. */
+  reloadMagTumble: number
   /** Constante de tiempo del acercamiento exponencial de groundedBlend al (des)aterrizar. */
   groundedBlendTime: number
 }
@@ -101,13 +137,54 @@ export const VIEWMODEL: ViewmodelTuning = {
 
   drawDrop: 0.35,
 
-  reloadDrop: 0.35,
-  reloadTilt: 0.35,
+  // La caída bajó de 0,35 a 0,10 m, y eso NO es un ajuste cosmético: con 0,35
+  // el arma se iba literalmente abajo del borde inferior de la pantalla y sólo
+  // quedaba asomando la punta del cañón. Medido en el navegador, es
+  // probablemente la causa principal de que la recarga se leyera como el arma
+  // agachándose — un arma que se va de cuadro no puede leerse como otra cosa.
+  // Ahora baja lo justo para sentirse, y el trabajo de mostrar que se está
+  // manipulando el arma lo hacen el roll y el desplazamiento hacia el centro.
+  reloadDrop: 0.1,
+  reloadTilt: 0.34,
+  // El roll es lo que convierte "el arma se agacha" en "alguien manipula el
+  // arma": 0,85 rad son ~49°, que es lo que hace falta para que el pozo del
+  // cargador quede de frente a la cámara. Verificado mirando la secuencia:
+  // con ~30° el arma apenas se ladea y en un modelo largo y fino (las 40 CC0)
+  // el gesto casi no se nota, porque de punta un fusil es casi simétrico.
+  reloadRoll: 0.85,
+  reloadYaw: 0.3,
+  reloadPullIn: 0.13,
   // Los mismos números que da el spec, no reelegidos: 0.25 y 0.55 de
   // reloadTime. El test de timing de eventos depende de estos dos valores
-  // exactos.
+  // exactos. Las fases NUEVAS de abajo se agregaron alrededor de estos dos
+  // sin moverlos, que es la restricción de la tarea.
   reloadMagOutAt: 0.25,
   reloadMagInAt: 0.55,
+
+  // Golpes secos. Son cortos a propósito (7% de la recarga): un impacto que
+  // dura mucho deja de leerse como impacto y se lee como deriva. El de la
+  // palmada es más fuerte que el del tirón porque meter un cargador de un
+  // manotazo mueve más el arma que sacarlo.
+  reloadSnapSpan: 0.07,
+  reloadYankAmount: 0.045,
+  reloadSlapAmount: 0.075,
+
+  // Manija de carga: arranca DESPUÉS de que el cargador quedó asentado
+  // (0,55 + 0,16 = 0,71) y termina en 0,87, con margen antes del final. Es el
+  // gesto que remata la lectura: sin él, la secuencia termina en "metí el
+  // cargador" en vez de "el arma quedó lista".
+  reloadChargeAt: 0.72,
+  reloadChargeSpan: 0.15,
+  reloadChargeAmount: 0.055,
+  reloadChargeTilt: 0.09,
+
+  // Cargador. Cae rápido (14% de la recarga hasta salir de cuadro) y entra
+  // más lento (16%): sacarlo es un tirón, meterlo es puntería.
+  reloadMagFallSpan: 0.14,
+  reloadMagInsertSpan: 0.16,
+  reloadMagFallDistance: 0.6,
+  reloadMagEntryDistance: 0.28,
+  reloadMagTumble: 1.4,
 
   groundedBlendTime: 0.15,
 }

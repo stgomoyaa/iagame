@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   createViewmodelState,
   fire,
+  reloadFraction,
   startDraw,
   startReload,
   stepViewmodel,
   type ViewmodelInput,
 } from '@/game/weapons/viewmodel/rig'
+import { createMagTransform, magazinePose } from '@/game/weapons/viewmodel/reload'
 import type { VmTransform, WeaponVisual } from '@/game/weapons/viewmodel/types'
 import { TICK_DT } from '@/game/engine/constants'
 
@@ -36,6 +38,7 @@ describe('presupuesto de asignaciones del viewmodel', () => {
     expect(typeof global.gc, 'correr con --expose-gc').toBe('function')
 
     const state = createViewmodelState()
+    const mag = createMagTransform()
 
     // Calentar: JIT y asentar el estado inicial, incluyendo un ciclo de
     // disparo/recarga/draw para que las ramas de cada capa se ejerciten.
@@ -46,6 +49,11 @@ describe('presupuesto de asignaciones del viewmodel', () => {
       if (i % 3000 === 0) startReload(state, WEAPON)
       if (i % 4000 === 0) startDraw(state, WEAPON)
       stepViewmodel(state, input, WEAPON, out, TICK_DT)
+      // magazinePose corre una vez por frame en game.ts, al lado de
+      // stepViewmodel, así que entra al mismo presupuesto. Se ejercita acá
+      // dentro del mismo bucle y no en un test aparte para que una fuga en
+      // cualquiera de los dos la detecte el mismo guard.
+      magazinePose(reloadFraction(state), mag)
     }
 
     global.gc?.()
@@ -68,6 +76,11 @@ describe('presupuesto de asignaciones del viewmodel', () => {
       if (i % 3000 === 0) startReload(state, WEAPON)
       if (i % 4000 === 0) startDraw(state, WEAPON)
       stepViewmodel(state, input, WEAPON, out, TICK_DT)
+      // magazinePose corre una vez por frame en game.ts, al lado de
+      // stepViewmodel, así que entra al mismo presupuesto. Se ejercita acá
+      // dentro del mismo bucle y no en un test aparte para que una fuga en
+      // cualquiera de los dos la detecte el mismo guard.
+      magazinePose(reloadFraction(state), mag)
     }
 
     // gc() también DESPUÉS del tramo medido, igual que

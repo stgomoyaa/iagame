@@ -104,12 +104,23 @@ describe('determinismo de composición', () => {
     // Recapturados tras el fix de sway (dt-normalización + swayScale
     // reescalado, ver tuning.ts): sólo cambia la contribución del canal de
     // sway, el orden de composición de las capas sigue siendo el mismo.
-    const expectedPx = -0.000006551716257299379
-    const expectedPy = -0.007358987686810808
+    //
+    // Recapturados de nuevo al agregar la coreografía de recarga
+    // (viewmodel/reload.ts), que suma tres ejes a la capa (px hacia el centro,
+    // ry de yaw, rz de roll) y recalibra la caída. Sólo pz quedó idéntico, que
+    // es lo esperable: es el único canal que la recarga no toca en esta
+    // fracción (la manija de carga entra recién en 0,72).
+    //
+    // En este escenario la recarga va por frac ~0,047: dentro de la fase A, o
+    // sea antes de las ventanas de yank (0,25), slap (0,55) y manija (0,72),
+    // que valen exactamente 0 acá. Este test NO cubre esos tres golpes ni el
+    // cargador: de eso se encarga reload.test.ts.
+    const expectedPx = -0.0034342860912572994
+    const expectedPy = -0.0007671908118108085
     const expectedPz = 0.0029860033280968675
-    const expectedRx = 0.00923179148312865
-    const expectedRy = 0
-    const expectedRz = 0.0022329507798153512
+    const expectedRx = 0.008968119608128652
+    const expectedRy = 0.00791015625
+    const expectedRz = 0.02464506015481535
 
     expect(out.px).toBe(expectedPx)
     expect(out.py).toBe(expectedPy)
