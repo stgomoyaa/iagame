@@ -14,7 +14,8 @@ import { deflateSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { crc32 } from './crc32.ts'
 import { decodePng, samplePngRgb } from './png-reader.ts'
-import { encodePng } from './png-writer.ts'
+import { encodePng, encodePngRaw } from './png-writer.ts'
+import { medirRgba } from './teselado.ts'
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
@@ -172,5 +173,47 @@ describe('samplePngRgb', () => {
     const img = png2x2()
     expect(samplePngRgb(img, 1.25, 1.25)).toEqual(samplePngRgb(img, 0.25, 0.25))
     expect(samplePngRgb(img, -0.75, -0.75)).toEqual(samplePngRgb(img, 0.25, 0.25))
+  })
+})
+
+/**
+ * Gris de un canal. Es el formato en que se escriben los patrones de
+ * camuflaje (scripts/patrones-camo-prueba.ts, docs/PROMPTS-CAMOS.md): sin
+ * esta rama, `scripts/verificar-teselado.ts` no puede leer los archivos que
+ * existe para verificar.
+ */
+describe('PNG en escala de grises', () => {
+  it('expande el canal único a RGB con los tres iguales', () => {
+    const niveles = new Uint8Array([0, 64, 128, 255])
+    const png = encodePngRaw({ width: 2, height: 2, data: niveles, channels: 1 })
+    const img = decodePng(png)
+    expect(img.width).toBe(2)
+    expect(img.height).toBe(2)
+    for (let i = 0; i < 4; i++) {
+      const [r, g, b, a] = img.rgba.subarray(i * 4, i * 4 + 4)
+      expect(r).toBe(niveles[i])
+      // Los tres canales IGUALES: es lo que hace que el croma que mide
+      // scripts/lib/teselado.ts dé exactamente 0 sobre un gris de verdad.
+      expect(g).toBe(r)
+      expect(b).toBe(r)
+      expect(a).toBe(255)
+    }
+  })
+
+  it('un gris real mide croma 0, y uno con tinte no', () => {
+    const data = new Uint8Array([10, 90, 170, 250])
+    const img = decodePng(encodePngRaw({ width: 2, height: 2, data, channels: 1 }))
+    expect(medirRgba(img.width, img.height, img.rgba).croma).toBe(0)
+
+    // El mismo dibujo pero escrito como RGB con un canal corrido: es lo que
+    // devuelve un generador que ignoró la instrucción de escala de grises.
+    const rgb = new Uint8Array(4 * 3)
+    for (let i = 0; i < 4; i++) {
+      rgb[i * 3] = data[i]
+      rgb[i * 3 + 1] = Math.min(255, data[i] + 20)
+      rgb[i * 3 + 2] = data[i]
+    }
+    const tinte = decodePng(encodePngRaw({ width: 2, height: 2, data: rgb, channels: 3 }))
+    expect(medirRgba(tinte.width, tinte.height, tinte.rgba).esGris).toBe(false)
   })
 })

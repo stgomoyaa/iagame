@@ -28,16 +28,25 @@ import {
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { Skin } from '@/game/skins/generator'
 import {
+  cargarPatron,
   createSkinHandle,
   type SkinHandle,
   type SkinnableMaterial,
 } from '@/game/skins/material'
+import type { CamoTextura } from '@/game/skins/texturas'
 import { instalarRigDeLuz } from '@/game/weapons/viewmodel/lighting'
 import { weaponAssetUrl } from '@/game/weapons/registry'
 
 export interface PreviewItem {
   slug: string
   skin: Skin | null
+  /**
+   * Camuflaje por textura (skins/texturas.ts). Si viene, gana sobre `skin`: el
+   * patrón se carga bajo demanda y se aplica cuando termina de bajar. Es lo que
+   * permite comparar en la misma vitrina un camo por textura contra uno
+   * procedural.
+   */
+  camo?: CamoTextura | null
 }
 
 export interface SkinPreview {
@@ -183,7 +192,7 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
     }
   }
 
-  function addWeapon(fuente: FuenteArma, item: PreviewItem, index: number): void {
+  function addWeapon(fuente: FuenteArma, item: PreviewItem, index: number, token: number): void {
     // Clon del material virgen del GLB: ver el comentario de `GeometryCache`.
     const mesh = new Mesh(fuente.geometry, fuente.material.clone())
     // Los GLB salen del pipeline con el cañón hacia -Z (sección 6.3): un
@@ -196,7 +205,23 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
     scene.add(group)
 
     const handle = createSkinHandle(mesh)
-    handle?.setSkin(item.skin)
+    if (item.camo) {
+      // El patrón se baja bajo demanda. Hasta que llega, el arma se ve con su
+      // horneado crudo (setCamoTextura con null); cuando llega, se aplica sólo
+      // si el atril sigue siendo el mismo (token) y este slot no se descartó.
+      const camo = item.camo
+      cargarPatron(camo)
+        .then((tex) => {
+          if (token !== generation) return
+          const vivo = slots.find((s) => s.mesh === mesh)
+          vivo?.handle?.setCamoTextura(camo, tex)
+        })
+        .catch(() => {
+          lastError = `no se pudo cargar el patrón "${camo.patron}" de "${camo.id}"`
+        })
+    } else {
+      handle?.setSkin(item.skin)
+    }
 
     slots.splice(index, 0, { group, mesh, handle })
     layout()
@@ -205,7 +230,7 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
   function loadInto(item: PreviewItem, index: number, token: number): void {
     const cached = geometries.get(item.slug)
     if (cached) {
-      addWeapon(cached, item, index)
+      addWeapon(cached, item, index, token)
       return
     }
     loader
@@ -224,7 +249,7 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
         }
         const fuente: FuenteArma = { geometry: mesh.geometry, material }
         geometries.set(item.slug, fuente)
-        addWeapon(fuente, item, Math.min(index, slots.length))
+        addWeapon(fuente, item, Math.min(index, slots.length), token)
         lastError = null
       })
       .catch(() => {
