@@ -71,11 +71,31 @@ function degToRad(deg: number): number {
   return (deg * Math.PI) / 180
 }
 
-const FSM_TUNING: FsmTuning = {
-  targetMemoryS: BOTS.targetMemoryS,
-  suspicionMemoryS: BOTS.suspicionMemoryS,
-  retreatEnterHealthFraction: BOTS.retreatEnterHealthFraction,
-  retreatExitHealthFraction: BOTS.retreatExitHealthFraction,
+/**
+ * Umbrales de retirada de ESTE bot, según su agresividad
+ * (bots/difficulty.ts). Un bot agresivo aguanta con menos vida antes de
+ * romper el contacto; uno cobarde se va temprano. Es la tercera palanca de
+ * dificultad -- reacción y puntería son las otras dos.
+ *
+ * Se construye UNA VEZ por bot (en createBotState) y no por tick: `stepFsm`
+ * recibe el objeto ya armado, así que esto no asigna nada en el camino
+ * caliente.
+ */
+function fsmTuningPara(difficulty: BotDifficulty): FsmTuning {
+  // Fácil (agresividad 0.2) se retira con 39% de vida; Experto (1.0) aguanta
+  // hasta el 15%. La base de BOTS.retreatEnterHealthFraction (0.3) queda
+  // justo en el medio de la escalera, así que un bot Normal se comporta
+  // como se comportaban TODOS antes de esta tarea.
+  const entrar = 0.45 - 0.3 * difficulty.aggression
+  return {
+    targetMemoryS: BOTS.targetMemoryS,
+    suspicionMemoryS: BOTS.suspicionMemoryS,
+    retreatEnterHealthFraction: entrar,
+    // La histéresis se conserva con el mismo margen que la tabla original
+    // (0.5 - 0.3 = 0.2): sin margen, la vida oscilando en el umbral haría
+    // parpadear Retirarse<->Enfrentar cada tick.
+    retreatExitHealthFraction: entrar + 0.2,
+  }
 }
 
 /** Último disparo conocido por el mundo (sección 8: "un radio de audición
@@ -106,6 +126,14 @@ export function registerGunshot(registry: GunshotRegistry, position: Vec3, time:
  *  sin acoplarse a game.ts: el propio game.ts arma esto una vez y lo pasa
  *  por referencia cada tick (mutando sus campos, nunca reasignando el
  *  objeto -- cero asignaciones por frame en el llamador). */
+/**
+ * Por qué un bot se está moviendo de lado. 'ninguna' es un valor de primera
+ * clase, no un caso borde: es el estado NORMAL de un bot en un duelo, y que
+ * exista es lo que impide que el movimiento lateral vuelva a ser el ruido
+ * constante que era. Ver `updateEngageStrafe`.
+ */
+export type IntencionLateral = 'ninguna' | 'separarse' | 'romper-linea' | 'cubrirse' | 'rodear'
+
 export interface BotWorld {
   boxes: Box[]
   /** Brushes convexos del mapa (map/types.ts). Los bots corren el MISMO
@@ -230,6 +258,9 @@ export interface BotState {
   fsm: FsmState
   difficultyRank: number
   difficulty: BotDifficulty
+  /** Umbrales de retirada de ESTE bot, derivados de su agresividad una sola
+   *  vez (fsmTuningPara). Se pasa a stepFsm sin asignar nada por tick. */
+  fsmTuning: FsmTuning
 
   aimMotor: AimMotorState
   aimBrain: AimBrainState
@@ -277,8 +308,31 @@ export interface BotState {
   /** Sentido del strafe de Enfrentar: -1 izquierda, +1 derecha, 0 quieto
    *  (sin terreno lateral válido). Ver stepBotThink caso 'engage'. */
   strafeDir: number
-  /** Segundos sosteniendo el sentido actual de strafe. */
+  /**
+   * POR QUÉ se está moviendo de lado ahora mismo. No es telemetría: es la
+   * regla. Si no hay una intención que nombrar, el bot no strafea -- se
+   * planta y dispara, como cualquier bot de CS.
+   *
+   * El movimiento lateral de antes no tenía intención: invertía el sentido
+   * al vencer un temporizador o al chocar contra la correa del ancla, y
+   * volvía a invertirlo al chocar del otro lado. MEDIDO, eso daba 4.86 m/s
+   * de recorrido lateral (97% de la velocidad de caminata) con ~20 cambios
+   * de sentido en 12 s, para un desplazamiento NETO del 0.5% de todo lo
+   * recorrido: el bot recorría ~57 m de lado para terminar a 30 cm de donde
+   * empezó. Eso es exactamente el temblor que hace que fallarle sea cuestión
+   * de suerte y no de puntería.
+   */
+  intencionLateral: IntencionLateral
+  /** Segundos sosteniendo la intención lateral actual. */
   strafeHoldS: number
+  /**
+   * Segundos desde el último impacto recibido. Lo reinicia `damageBot`. Es
+   * lo que habilita la intención 'romper-linea': moverse de lado porque te
+   * están pegando es una razón real; moverse de lado porque sí, no.
+   * Arranca en Infinity (nadie le disparó todavía) y no en 0, que
+   * significaría "recién me pegaron".
+   */
+  sinDanoS: number
   /** Punto donde el bot entró en Enfrentar: el strafe no se aleja más de
    *  BOTS.engageStrafeRadiusM de acá. */
   strafeAnchor: Vec3
@@ -317,6 +371,7 @@ export function createBotState(
   const legs = vec3(spawn.x, spawn.y + BOTS.legsOffsetY, spawn.z)
 
   const combat = createCombatState(archetype)
+  const difficulty = interpolateDifficulty(difficultyRank)
   const aimBrain = createAimBrainState(seed)
   // Fase de escaneo de Idle: se muestrea acá (una vez, al crear el bot) para
   // que varios bots no escaneen todos en fase -- mismo espíritu que el
@@ -347,7 +402,8 @@ export function createBotState(
 
     fsm: createFsmState('idle'),
     difficultyRank,
-    difficulty: interpolateDifficulty(difficultyRank),
+    difficulty,
+    fsmTuning: fsmTuningPara(difficulty),
 
     aimMotor: createAimMotorState(0, 0),
     aimBrain,
@@ -374,7 +430,9 @@ export function createBotState(
     investigatedLastActivity: false,
 
     strafeDir: 0,
+    intencionLateral: 'ninguna',
     strafeHoldS: 0,
+    sinDanoS: Infinity,
     strafeAnchor: vec3(spawn.x, spawn.y, spawn.z),
     engageAdvancing: false,
 
@@ -709,37 +767,167 @@ function separationStrafeDir(bot: BotState, world: BotWorld): number {
   return proyeccion >= 0 ? 1 : -1
 }
 
+/** Fija intención y sentido de una sola vez, reiniciando el sostén sólo si
+ *  la intención CAMBIÓ: sostener la misma intención no debe reiniciar su
+ *  propio reloj, o ninguna intención con duración acotada terminaría nunca. */
+function fijarIntencion(bot: BotState, dir: number, intencion: IntencionLateral): void {
+  if (bot.intencionLateral !== intencion) bot.strafeHoldS = 0
+  bot.intencionLateral = intencion
+  bot.strafeDir = dir
+}
+
+/** Plantarse: sin intención que nombrar, el bot no se mueve de lado. */
+function detenerLateral(bot: BotState): void {
+  if (bot.intencionLateral !== 'ninguna') bot.strafeHoldS = 0
+  bot.intencionLateral = 'ninguna'
+  bot.strafeDir = 0
+}
+
+/** ¿Está el bot lejos de cualquier cobertura? Lo usa la intención
+ *  'cubrirse'. */
+function estaExpuesto(bot: BotState, world: BotWorld): boolean {
+  return distanciaACobertura(world, bot.player.position.x, bot.player.position.z) > BOTS.coverSeekDistanceM
+}
+
+/**
+ * Sentido cuyo paso lateral ACERCA al bot a la cobertura, o 0 si ninguno
+ * mejora de verdad. Exige una mejora MÍNIMA (`coverSeekGainM`) y no un
+ * empate: sin ese margen, dos candidatos casi idénticos se turnan de tick en
+ * tick y el "buscar cobertura" degenera en el mismo temblor que esta tarea
+ * viene a sacar.
+ */
+function ladoHaciaCobertura(bot: BotState, world: BotWorld): number {
+  const aqui = distanciaACobertura(world, bot.player.position.x, bot.player.position.z)
+  const s = Math.sin(bot.aimMotor.yaw)
+  const c = Math.cos(bot.aimMotor.yaw)
+
+  let mejorDir = 0
+  let mejorDist = aqui - BOTS.coverSeekGainM
+  for (let i = 0; i < 2; i++) {
+    const dir = i === 0 ? 1 : -1
+    if (!canStrafeTowards(bot, world, dir)) continue
+    const px = bot.player.position.x + c * dir * BOTS.engageStrafeProbeM
+    const pz = bot.player.position.z - s * dir * BOTS.engageStrafeProbeM
+    const alla = distanciaACobertura(world, px, pz)
+    if (alla < mejorDist) {
+      mejorDist = alla
+      mejorDir = dir
+    }
+  }
+  return mejorDir
+}
+
+/**
+ * Decide el movimiento lateral de Enfrentar A PARTIR DE UNA INTENCIÓN.
+ *
+ * La regla, que es el corazón de esta tarea: **todo paso lateral tiene que
+ * responder a algo que se pueda nombrar**. Hay cuatro razones legítimas para
+ * moverse de lado en un tiroteo, y si no aplica ninguna el bot se planta y
+ * dispara -- como un bot de CS 1.6, que en fácil camina y te mira en vez de
+ * vibrar.
+ *
+ *   separarse     tenés otro cuerpo encima: corrértele es urgente.
+ *   romper-línea  te acaban de pegar: salir de la línea de tiro de quien
+ *                 te está pegando es LA reacción correcta, y dura poco.
+ *   cubrirse      estás al descubierto y hay cobertura para ese lado.
+ *   rodear        sos agresivo, ya estás cómodo, y buscás ángulo.
+ *
+ * Lo que se sacó, y por qué
+ * -------------------------
+ * La versión anterior invertía el sentido en dos situaciones, ninguna de las
+ * cuales es una intención:
+ *
+ * 1. AL VENCER UN TEMPORIZADOR (`engageStrafeHoldS`). Un bot con terreno
+ *    libre a los dos lados cambiaba de sentido cada 0.9 s para siempre.
+ * 2. AL CHOCAR CONTRA LA CORREA DEL ANCLA (`engageStrafeRadiusM`). Éste era
+ *    el dominante: al llegar a los 3 m del ancla `canStrafeTowards` fallaba,
+ *    el código caía al "rebote" del final e invertía. Del otro lado pasaba
+ *    lo mismo. Un péndulo de 3 m a velocidad de caminata, indefinidamente.
+ *    Se confirmó midiendo: subir el sostén a 60 s NO bajó el lateral
+ *    (4.863 m/s en los dos casos), así que el temporizador no era la causa
+ *    principal -- la correa sí.
+ *
+ * Ahora un sentido bloqueado hace que el bot PARE, no que invierta. Invertir
+ * sólo puede pasar si una intención nueva elige el otro lado, y eso requiere
+ * que haya cambiado algo del mundo (un vecino encima, un impacto recibido,
+ * cobertura de aquel lado). Ese es todo el arreglo del zigzag.
+ */
 function updateEngageStrafe(bot: BotState, world: BotWorld, dt: number): void {
   bot.strafeHoldS += dt
 
-  // El espacio personal manda sobre el temporizador de sostén: si hay otro
-  // cuerpo adentro del radio, el sentido lo decide separarse, y se decide
-  // AHORA. El sostén existe para que un bot arrinconado no vibre; un bot
-  // encimado no está arrinconado, está estorbando.
+  // 1. Separarse. Máxima prioridad y sin mirar cobertura (ver el comentario
+  //    de `ignorarCobertura`): dos cuerpos en el mismo metro cuadrado es peor
+  //    que quedar expuesto.
   const escape = separationStrafeDir(bot, world)
   if (escape !== 0 && canStrafeTowards(bot, world, escape, true)) {
-    bot.strafeDir = escape
-    bot.strafeHoldS = 0
+    fijarIntencion(bot, escape, 'separarse')
     return
   }
 
-  if (bot.strafeDir !== 0 && canStrafeTowards(bot, world, bot.strafeDir)) {
-    if (bot.strafeHoldS < BOTS.engageStrafeHoldS) return
-    bot.strafeHoldS = 0
-    if (canStrafeTowards(bot, world, -bot.strafeDir)) bot.strafeDir = -bot.strafeDir
+  // 2. Romper la línea de tiro de quien te está pegando. Dura
+  //    `breakLineS` desde el último impacto y NO se renueva sola: si dejan
+  //    de pegarte, se termina. Mantiene el sentido que ya llevaba para no
+  //    convertir la ráfaga en otro temblor.
+  if (bot.sinDanoS < BOTS.breakLineS) {
+    const preferido =
+      bot.intencionLateral === 'romper-linea' && bot.strafeDir !== 0
+        ? bot.strafeDir
+        : bot.idlePhase >= 0
+          ? 1
+          : -1
+    if (canStrafeTowards(bot, world, preferido, true)) {
+      fijarIntencion(bot, preferido, 'romper-linea')
+      return
+    }
+    if (canStrafeTowards(bot, world, -preferido, true)) {
+      fijarIntencion(bot, -preferido, 'romper-linea')
+      return
+    }
+    detenerLateral(bot)
     return
   }
 
-  bot.strafeHoldS = 0
-  // Arranque y rebote: se prueba primero el sentido contrario al actual (o
-  // el que dicta la fase del bot si venía en 0, para que dos bots que
-  // entran en Enfrentar juntos no bailen espejados).
-  const first = bot.strafeDir !== 0 ? -bot.strafeDir : bot.idlePhase >= 0 ? 1 : -1
-  if (canStrafeTowards(bot, world, first)) {
-    bot.strafeDir = first
-    return
+  // 3. Cubrirse: sólo si de verdad está al descubierto Y hay un lado que
+  //    mejora. Al llegar a cobertura `estaExpuesto` se apaga y el bot deja
+  //    de moverse -- la intención se cumple y termina, no se invierte.
+  if (estaExpuesto(bot, world)) {
+    const haciaCobertura = ladoHaciaCobertura(bot, world)
+    if (haciaCobertura !== 0) {
+      fijarIntencion(bot, haciaCobertura, 'cubrirse')
+      return
+    }
   }
-  bot.strafeDir = canStrafeTowards(bot, world, -first) ? -first : 0
+
+  // 4. Rodear: buscar ángulo de verdad, y sólo los bots agresivos
+  //    (bots/difficulty.ts aggression). Es la única intención que produce
+  //    movimiento lateral sostenido sin que nadie lo esté obligando, así que
+  //    es también la única que podría volver a parecer un baile: se le exige
+  //    comprometerse con UN sentido y parar al agotarlo, nunca invertir.
+  if (bot.difficulty.aggression >= BOTS.flankMinAggression) {
+    if (bot.intencionLateral === 'rodear' && bot.strafeDir !== 0) {
+      if (bot.strafeHoldS < BOTS.flankMaxS && canStrafeTowards(bot, world, bot.strafeDir)) return
+      // Se agotó el rodeo (por tiempo o por terreno): se planta. NO invierte.
+      detenerLateral(bot)
+      return
+    }
+    // Sólo se arranca un rodeo nuevo tras plantarse un rato: sin esta pausa,
+    // "parar" y "arrancar para el otro lado" se encadenarían y volveríamos
+    // al péndulo por otro camino.
+    if (bot.strafeHoldS >= BOTS.flankCooldownS) {
+      const lado = bot.idlePhase >= 0 ? 1 : -1
+      if (canStrafeTowards(bot, world, lado)) {
+        fijarIntencion(bot, lado, 'rodear')
+        return
+      }
+      if (canStrafeTowards(bot, world, -lado)) {
+        fijarIntencion(bot, -lado, 'rodear')
+        return
+      }
+    }
+  }
+
+  // 5. Nada que nombrar: se planta y dispara.
+  detenerLateral(bot)
 }
 
 // ---------------------------------------------------------------------------
@@ -788,6 +976,11 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
   }
   if (!heardShotNow) bot.timeSinceHeardS += dt
 
+  // Envejece el reloj del último impacto recibido. Se hace acá (tick de IA)
+  // y no en el motor porque quien lo consulta es la decisión de intención
+  // lateral, que vive en este mismo tick.
+  if (bot.sinDanoS !== Infinity) bot.sinDanoS += dt
+
   const prevState = bot.fsm.current
   const state = stepFsm(
     bot.fsm,
@@ -798,7 +991,9 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
       timeSinceHeardS: bot.timeSinceHeardS,
       healthFraction: healthFraction(bot.health),
     },
-    FSM_TUNING,
+    // Umbrales de retirada de ESTE bot (por agresividad), no la tabla única:
+    // un bot agresivo aguanta con menos vida. Ver fsmTuningPara.
+    bot.fsmTuning,
     dt,
   )
   const justEntered = state !== prevState
@@ -825,12 +1020,28 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
     distanceXZ(bot.player.position.x, bot.player.position.z, world.targetEye.x, world.targetEye.z) <=
       BOTS.retreatFightBackM
 
-  bot.combatInput.triggerHeld = (state === 'engage' || acorralado) && visible && !recoilTooHigh
+  // Demora de ataque (bots/difficulty.ts attackDelayS, el `AttackDelay` de
+  // BotProfile.db): el bot NO dispara el mismo tick en que te ve. Antes sí,
+  // en todos los tramos por igual, y por eso el tiempo medido hasta el
+  // primer disparo daba 0.000 s tanto para el bot más fácil como para el
+  // más experto -- la reacción, que es LA palanca de dificultad en CS, no
+  // existía. `targetAwareTimeS` se reinicia cada vez que el objetivo vuelve
+  // a aparecer, así que la demora se paga en cada contacto nuevo y no una
+  // sola vez por partida.
+  const reaccionCumplida = bot.targetAwareTimeS >= bot.difficulty.attackDelayS
+  // Un enemigo a quemarropa no espera: si el bot está acorralado, dispara
+  // apenas puede. Un bot fácil que se queda medio segundo mirando a alguien
+  // pegado a él no se lee como torpe, se lee como roto.
+  bot.combatInput.triggerHeld =
+    (state === 'engage' || acorralado) && visible && !recoilTooHigh && (reaccionCumplida || acorralado)
 
   const errorRadius = currentErrorConeRadius(
     bot.difficulty.errorConeRad,
     bot.difficulty.reactionTimeS,
     bot.targetAwareTimeS,
+    // El piso del cono: sin esto el bot se vuelve un aimbot perfecto a los
+    // pocos décimos de verte, sea cual sea su tramo.
+    bot.difficulty.aimSteadyRad,
   )
 
   if (
@@ -875,6 +1086,7 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
         anclarStrafe(bot)
         bot.strafeHoldS = BOTS.engageStrafeHoldS
         bot.strafeDir = 0
+        bot.intencionLateral = 'ninguna'
         bot.engageAdvancing = false
       }
 
@@ -917,6 +1129,7 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
           // además aplica la separación al caminar). El strafe se apaga --
           // son dos movimientos distintos, no se suman.
           bot.strafeDir = 0
+          bot.intencionLateral = 'ninguna'
           break
         }
         // Sin camino utilizable hacia el objetivo (encaramado, otro
@@ -1189,6 +1402,8 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
       bot.patrolNode = -1
       bot.investigatedLastActivity = false
       bot.strafeDir = 0
+      bot.intencionLateral = 'ninguna'
+      bot.sinDanoS = Infinity
       bot.strafeHoldS = 0
       bot.engageAdvancing = false
     }
@@ -1233,7 +1448,10 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
     bot.aimMotor,
     bot.aimTargetYaw,
     bot.aimTargetPitch,
-    degToRad(BOTS.aimMaxAngularSpeedDegPerSec),
+    // Por TRAMO de dificultad, no la constante única de antes: un bot fácil
+    // gira la mira despacio, y eso es la mitad de lo que se percibe como
+    // "reacciona lento" (bots/difficulty.ts aimSpeedDegPerSec).
+    degToRad(bot.difficulty.aimSpeedDegPerSec),
     dt,
   )
 
@@ -1275,8 +1493,21 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
   bot.combatInput.origin.x = bot.player.position.x
   bot.combatInput.origin.y = bot.player.position.y + bot.player.eyeHeight
   bot.combatInput.origin.z = bot.player.position.z
-  bot.combatInput.pitch = bot.aimMotor.pitch
-  bot.combatInput.yaw = bot.aimMotor.yaw
+  // Compensación de retroceso, escalada por tramo (bots/difficulty.ts
+  // recoilControl). combat/combat.ts SUMA el retroceso acumulado
+  // (recoil.pitchOffset/yawOffset) a la dirección del disparo; acá el bot lo
+  // RESTA de antemano en proporción a su habilidad, así que el disparo final
+  // sale con `pitchOffset * (1 - recoilControl)` de retroceso residual. Es la
+  // traducción directa de lo que hace el bot de CS (cs_bot_weapon.cpp,
+  // `m_aimGoal -= punchAngles * factor`): un experto anula casi todo su
+  // retroceso y sostiene la ráfaga sobre el objetivo; un bot fácil no
+  // compensa nada y sus tiros trepan y se le van por encima. El offset se lee
+  // del tick anterior (el orden del loop es pensar->mover->disparar), un
+  // retardo de un tick que además hace la compensación imperfecta a
+  // propósito -- un humano tampoco la clava al instante.
+  const control = bot.difficulty.recoilControl
+  bot.combatInput.pitch = bot.aimMotor.pitch - bot.combat.recoil.pitchOffset * control
+  bot.combatInput.yaw = bot.aimMotor.yaw - bot.combat.recoil.yawOffset * control
 
   syncBotHitboxes(bot)
 }
@@ -1324,6 +1555,10 @@ export function stepBotCombat(bot: BotState, targetHitboxes: Hitbox[], dt: numbe
  *  recién equipada -- para que al revivir no arrastre retroceso/dispersión
  *  acumulados de la vida anterior. */
 export function damageBot(bot: BotState, damage: number): boolean {
+  // Reloj de "recién me pegaron": habilita la intención 'romper-linea'
+  // (bots/bot.ts updateEngageStrafe). Se reinicia con CADA impacto, así que
+  // mientras te sigan disparando el bot sigue rompiendo la línea.
+  bot.sinDanoS = 0
   const killed = applyDamageToBot(bot.health, damage)
   if (killed) resetCombatState(bot.combat, bot.archetype)
   return killed
