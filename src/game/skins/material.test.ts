@@ -7,6 +7,7 @@ import {
   MeshBasicMaterial,
   MeshDepthMaterial,
   MeshStandardMaterial,
+  Vector3,
 } from 'three'
 import { CAMO_FAMILY_INDEX, ESCALA_FAMILIA } from '@/game/skins/camo-families'
 import { generateSkin } from '@/game/skins/generator'
@@ -264,9 +265,12 @@ describe('material de skin', () => {
     // uSkinExtent es el tamaño del arma ENTERA, igual en las dos: medido por
     // pieza, los hierros llevarían el patrón ampliado como si fueran un arma
     // completa del tamaño de un dedo.
-    expect(shaderHierros.uniforms.uSkinExtent.value.toArray()).toEqual(
-      shaderCuerpo.uniforms.uSkinExtent.value.toArray(),
-    )
+    // El tipo del uniform es `unknown` porque el shader de three no está
+    // tipado por uniform; se estrecha acá en vez de castear en la aserción,
+    // así el fallo es "no es un Vector3" y no un error de tipos ilegible.
+    const extentHierros = shaderHierros.uniforms.uSkinExtent.value as Vector3
+    const extentCuerpo = shaderCuerpo.uniforms.uSkinExtent.value as Vector3
+    expect(extentHierros.toArray()).toEqual(extentCuerpo.toArray())
 
     handle!.setTime(1.5)
     expect(shaderHierros.uniforms.uSkinTime.value).toBe(1.5)
