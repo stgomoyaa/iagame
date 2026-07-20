@@ -45,6 +45,7 @@ import {
 import { canHear, canSee, type RaycastMapFn } from '@/game/bots/perception'
 import { buildPatrolGraph, nearestPatrolNode, pickPatrolNode, type PatrolGraph } from '@/game/bots/patrol'
 import { nearestCoverDistanceXZ } from '@/game/bots/cover'
+import { buildCoverField, coverDistanceAt, type CoverField } from '@/game/bots/cover-field'
 import {
   createAimBrainState,
   createAimMotorState,
@@ -133,6 +134,13 @@ export interface BotWorld {
    * Horneada una vez por mapa, igual que el navgrid y la red de patrulla.
    */
   reachable: Uint8Array
+  /**
+   * Campo de distancia a cobertura, u null si este mapa no lo necesita
+   * (bots/cover-field.ts). Sólo lo tienen los mapas IMPORTADOS: en los tres
+   * escritos en código `MapDef.boxes` ya responde bien y el campo ni se
+   * hornea, así que su comportamiento no cambia en nada.
+   */
+  coverField: CoverField | null
   /** Posición de los ojos del objetivo (jugador), mundo. */
   targetEye: Vec3
   /**
@@ -165,6 +173,9 @@ export function createBotWorld(
   grid: NavGrid,
   convexes: Convex[] = NO_CONVEXES,
 ): BotWorld {
+  // La máscara se calcula antes porque el campo de cobertura la necesita:
+  // el suelo de referencia se siembra sólo desde la zona jugable.
+  const reachable = buildMainComponentMask(grid)
   return {
     boxes,
     convexes,
@@ -173,7 +184,8 @@ export function createBotWorld(
     pathCtx: createPathfindingContext(grid),
     pathCache: createPathCache(),
     patrol: buildPatrolGraph(grid),
-    reachable: buildMainComponentMask(grid),
+    reachable,
+    coverField: buildCoverField(boxes, convexes, grid, reachable),
     targetEye: vec3(),
     neighbourPos: vec3(),
     neighbourDistM: Infinity,
@@ -603,7 +615,39 @@ function pickIdleDestination(bot: BotState, world: BotWorld): void {
  */
 const STRAFE_MAX_STEP = 0.35
 
-function canStrafeTowards(bot: BotState, world: BotWorld, dir: number): boolean {
+/**
+ * Distancia a la cobertura más cercana, por el camino que corresponda a este
+ * mapa: el campo horneado si es importado, las cajas si está escrito en
+ * código. Un solo lugar donde se decide, para que no haya dos respuestas
+ * distintas a la misma pregunta.
+ */
+function distanciaACobertura(world: BotWorld, x: number, z: number): number {
+  if (world.coverField !== null) return coverDistanceAt(world.coverField, x, z)
+  return nearestCoverDistanceXZ(world.boxes, x, z, BOTS.coverMinHeightM)
+}
+
+/**
+ * `ignorarCobertura` existe por un riesgo concreto de esta tarea. Mientras el
+ * campo de cobertura no existía, en un mapa importado el chequeo evaluaba
+ * `Infinity <= Infinity + holgura` y dejaba pasar TODO. Al volverlo real, el
+ * veto empieza a morder -- y el primer strafe que mordería es justo el que
+ * usa `separationStrafeDir` para despegarse de un vecino encima, porque
+ * separarse casi siempre significa salir de atrás de lo que te tapaba.
+ *
+ * O sea que arreglar la cobertura sin esta salida convertiría el arreglo en
+ * una REGRESIÓN de amontonamiento: los bots encimados se quedarían pegados
+ * "por no perder cobertura". Dos cuerpos en el mismo metro cuadrado es un
+ * problema táctico peor que quedar expuesto, y además ninguno de los dos
+ * está usando bien esa cobertura si están uno arriba del otro. El espacio
+ * personal manda; el resto de las condiciones (radio, celda caminable,
+ * desnivel) siguen valiendo.
+ */
+function canStrafeTowards(
+  bot: BotState,
+  world: BotWorld,
+  dir: number,
+  ignorarCobertura = false,
+): boolean {
   const s = Math.sin(bot.aimMotor.yaw)
   const c = Math.cos(bot.aimMotor.yaw)
   // Dirección de mundo del eje "derecha" local -- inversa de
@@ -621,13 +665,10 @@ function canStrafeTowards(bot: BotState, world: BotWorld, dir: number): boolean 
     return false
   }
 
-  const coverHere = nearestCoverDistanceXZ(
-    world.boxes,
-    bot.player.position.x,
-    bot.player.position.z,
-    BOTS.coverMinHeightM,
-  )
-  const coverThere = nearestCoverDistanceXZ(world.boxes, px, pz, BOTS.coverMinHeightM)
+  if (ignorarCobertura) return true
+
+  const coverHere = distanciaACobertura(world, bot.player.position.x, bot.player.position.z)
+  const coverThere = distanciaACobertura(world, px, pz)
   return coverThere <= coverHere + BOTS.engageStrafeCoverSlackM
 }
 
@@ -676,7 +717,7 @@ function updateEngageStrafe(bot: BotState, world: BotWorld, dt: number): void {
   // AHORA. El sostén existe para que un bot arrinconado no vibre; un bot
   // encimado no está arrinconado, está estorbando.
   const escape = separationStrafeDir(bot, world)
-  if (escape !== 0 && canStrafeTowards(bot, world, escape)) {
+  if (escape !== 0 && canStrafeTowards(bot, world, escape, true)) {
     bot.strafeDir = escape
     bot.strafeHoldS = 0
     return
