@@ -76,6 +76,29 @@ function skinnedBox(
   return { mesh, bones }
 }
 
+/**
+ * Malla rígida centrada en el origen, con la caja que se le pida. Como llegan
+ * las de COD: medidas sobre los .glb reales, las 69 tienen la caja de
+ * `weapon_body` centrada exactamente en (0,0,0).
+ */
+function codBox(size: [number, number, number]): Mesh {
+  const [sx, sy, sz] = size
+  const positions = new Float32Array([
+    -sx / 2, -sy / 2, -sz / 2,
+    sx / 2, sy / 2, sz / 2,
+  ])
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new BufferAttribute(positions, 3))
+  const mesh = new Mesh(geometry, new MeshBasicMaterial())
+  mesh.name = 'weapon_body'
+  return mesh
+}
+
+/** Dónde cae un punto de la malla de COD, en el espacio del donante. */
+function trasInjerto(cod: Mesh, punto: [number, number, number]): Vector3 {
+  return new Vector3(...punto).applyMatrix4(cod.matrixWorld)
+}
+
 /** Malla rígida con una caja envolvente conocida, como llegan las de COD. */
 function rigidBox(size: [number, number, number], offset: [number, number, number]): Mesh {
   const positions = new Float32Array([
@@ -226,6 +249,41 @@ describe('graftArms', () => {
     expect(centro.x).toBeCloseTo(esperado.x, 5)
     expect(centro.y).toBeCloseTo(esperado.y, 5)
     expect(centro.z).toBeCloseTo(esperado.z, 5)
+  })
+
+  it('la boca del arma de COD queda del lado de la boca del donante', () => {
+    // EL test de este archivo, y el que faltaba: el injerto llegó a producción
+    // con el arma dada vuelta —apuntando hacia atrás, a la cara del jugador—
+    // y NINGÚN test lo vio. El motivo es que el resto de las aserciones miran
+    // el CENTRO de la caja, y una media vuelta sobre el centro deja el centro
+    // donde estaba: son ciegas al sentido por construcción.
+    //
+    // Convenciones, ambas medidas sobre los .glb reales (ver GRAFT_YAW):
+    //   donante de CS -> boca en +Z (hueso `flash` del propio archivo)
+    //   arma de COD   -> boca en -Z
+    // Así que la punta -Z del arma de COD tiene que terminar en la punta +Z
+    // del donante. Sin la media vuelta cae en la contraria y este test falla.
+    const largoDonante = 0.72
+    const { mesh: donorBody } = skinnedBox(
+      Array.from({ length: 8 }, () => [1, 0, 0, 0] as const),
+      Array.from({ length: 8 }, () => [1, 0, 0, 0] as const),
+      [0.05, 0.2, largoDonante],
+    )
+    // `skinnedBox` reparte los vértices entre 0 y el tamaño pedido, así que la
+    // boca del donante (+Z) está en z = largoDonante y la culata en z = 0.
+    const cod = codBox([0.05, 0.2, 0.9])
+
+    expect(graftArms(donorBody, cod)).not.toBeNull()
+    donorBody.updateMatrixWorld(true)
+
+    const boca = trasInjerto(cod, [0, 0, -0.45])
+    const culata = trasInjerto(cod, [0, 0, 0.45])
+
+    expect(boca.z).toBeCloseTo(largoDonante, 5)
+    expect(culata.z).toBeCloseTo(0, 5)
+    // Redundante con lo de arriba pero es la frase que importa si algún día
+    // cambian los números: la boca queda MÁS ADELANTE que la culata.
+    expect(boca.z).toBeGreaterThan(culata.z)
   })
 
   it('encuentra el cuerpo cuando viene partido en varias primitivas', () => {

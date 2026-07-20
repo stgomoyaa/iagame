@@ -45,6 +45,44 @@ import type { ArchetypeId } from '@/game/weapons/archetypes'
 const BODY_NODE_NAME = 'weapon_body'
 
 /**
+ * Media vuelta sobre Y: las dos familias apoyan el eje largo del arma sobre Z,
+ * pero con la BOCA a lados opuestos, así que injertar sin girar deja el arma
+ * apuntando hacia atrás.
+ *
+ * Está medido y no supuesto, y la primera medición dio el resultado AL REVÉS:
+ *
+ * - **CS: la boca está en +Z, y eso es un dato del archivo, no una inferencia.**
+ *   Los `v_` conservan el hueso `flash` que el autor puso en la boca de fuego.
+ *   Cae siempre en el extremo de mayor Z de la caja: el `ak47` lo tiene en
+ *   Z=+0,494 contra un máximo de caja de +0,498; el `m249` en Z=+0,614 contra
+ *   +0,601. Coincide con lo que declara el conversor para el pack
+ *   (`barrelAxis: 2, barrelSign: 1`, ver scripts/convert-source-weapons.ts).
+ * - **COD: la boca está en -Z.** Estos `.glb` llegan con UN solo nodo
+ *   (`weapon_body`) y sin ningún `tag_*`, así que acá no hay hueso que leer y
+ *   hay que medir la geometría: el extremo de la boca es el GRUESO (guardamanos,
+ *   bloque de gases, alza) y el de la culata el delgado. Con ese criterio el
+ *   `cod4_ak47` mide un radio medio de 0,094 en -Z contra 0,049 en +Z, y el
+ *   w1200 y el m249 dan lo mismo.
+ *
+ * **La trampa que costó las primeras dos horas:** ese criterio de grosor se
+ * aplicó al revés al principio ("la boca es la punta delgada"), lo que daba
+ * "CS tiene la boca en -Z" y por lo tanto "las dos familias coinciden, no hay
+ * que girar nada". El hueso `flash` es lo que lo desmintió, y es la razón por
+ * la que esta constante se justifica con el hueso y no con el grosor: el grosor
+ * es un proxy que se puede leer en los dos sentidos, el hueso no.
+ *
+ * Verificado además mirando: seis armas de COD, una por clase (ak47, mp5,
+ * m40a3, w1200, m249, m1911), cada una contra la captura de SU donante de CS.
+ * El m249 y el m1911 parecen mal a primera vista —la LMG lleva la caja de
+ * cinta tapando el lado izquierdo y la pistola queda casi tragada por el
+ * puño— pero el donante de CS se ve EXACTAMENTE igual, así que es el encuadre
+ * del viewmodel y no el injerto. Comparar contra el donante y no contra una
+ * idea de cómo debería verse un arma es lo que evita "arreglar" lo que no
+ * está roto.
+ */
+const GRAFT_YAW = Math.PI
+
+/**
  * Donante de brazos por arquetipo.
  *
  * Se elige POR CLASE y no uno solo para todas por una razón geométrica, no
@@ -124,18 +162,8 @@ export function dominantBoneIndex(mesh: SkinnedMesh): number {
  * deformaría, y un AK aplastado se ve peor que un AK dos centímetros corrido.
  *
  * La rotación es un parámetro y NO se deduce de las cajas: una caja envolvente
- * es simétrica y no distingue "cañón adelante" de "culata adelante".
- *
- * `graftArms` le pasa CERO, y eso está medido, no supuesto. La tentación era
- * descontar el cuarto de vuelta que renderer.ts le aplica a los viewmodels de
- * Source (SOURCE_VIEWMODEL_YAW), y probarlo dejó el arma cruzada de lado. El
- * motivo por el que no hay que descontar nada: la alineación pasa en espacio de
- * BIND, y ahí las dos mallas ya están en la misma convención — el `weapon_body`
- * del donante y el de COD tienen los dos su nodo en identidad y el eje largo
- * sobre Z. El cuarto de vuelta del renderer se aplica después y sobre la
- * jerarquía ENTERA, así que le toca igual a los brazos y al arma y no las
- * separa. Lo mismo la pose de reposo: mueve el hueso, y el arma injertada
- * cuelga del hueso.
+ * es simétrica y no distingue "cañón adelante" de "culata adelante". Por eso
+ * el sentido lo fija `GRAFT_YAW` (media vuelta), que se midió aparte.
  *
  * La escala sale del EJE LARGO y no del volumen ni del promedio de los tres
  * ejes: lo que tiene que coincidir para que las manos caigan en la empuñadura
@@ -262,7 +290,7 @@ export function graftArms(
   const codBox = codBody.geometry.boundingBox
   if (donorBox.isEmpty() || !codBox) return null
 
-  const align = alignmentMatrix(donorBox, codBox, 0)
+  const align = alignmentMatrix(donorBox, codBox, GRAFT_YAW)
 
   // El transform local del hijo respecto del hueso. La identidad que lo
   // justifica: colgado del hueso, el mundo de la malla es
