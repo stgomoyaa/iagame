@@ -24,7 +24,6 @@ function mapOf(boxes: Box[], bounds: Box): MapDef {
 }
 
 const CAPSULE_H = 1.8
-const MANTLE_H = 1.2
 
 describe('bake del navgrid: piso plano', () => {
   const floor = box(-5, -1, -5, 5, 0, 5)
@@ -61,7 +60,7 @@ describe('bake del navgrid: piso plano', () => {
       for (let col = 0; col < grid.cols - 1; col++) {
         const a = cellIndex(grid, col, row)
         const b = cellIndex(grid, col + 1, row)
-        expect(cellsConnected(grid, a, b, MANTLE_H)).toBe(true)
+        expect(cellsConnected(grid, a, b)).toBe(true)
       }
     }
   })
@@ -75,11 +74,11 @@ describe('bake del navgrid: escalón bajo (mantleable) vs. muro alto', () => {
     const map = mapOf([floor, step], box(-10, 0, -10, 10, 4, 10))
     const grid = buildNavGrid(map, 1, CAPSULE_H)
 
-    const floorCell = worldToCellIndex(grid, -5, 0)
-    const stepCell = worldToCellIndex(grid, 5, 0)
+    const floorCell = worldToCellIndex(grid, -0.5, 0)
+    const stepCell = worldToCellIndex(grid, 0.5, 0)
     expect(grid.heights[floorCell]).toBeCloseTo(0, 6)
     expect(grid.heights[stepCell]).toBeCloseTo(1.0, 6)
-    expect(cellsConnected(grid, floorCell, stepCell, MANTLE_H)).toBe(true)
+    expect(cellsConnected(grid, floorCell, stepCell)).toBe(true)
   })
 
   it('un muro de altura > mantleMaxHeight NO queda conectado al piso', () => {
@@ -87,18 +86,18 @@ describe('bake del navgrid: escalón bajo (mantleable) vs. muro alto', () => {
     const map = mapOf([floor, wall], box(-10, 0, -10, 10, 5, 10))
     const grid = buildNavGrid(map, 1, CAPSULE_H)
 
-    const floorCell = worldToCellIndex(grid, -5, 0)
-    const wallTopCell = worldToCellIndex(grid, 5, 0)
+    const floorCell = worldToCellIndex(grid, -0.5, 0)
+    const wallTopCell = worldToCellIndex(grid, 0.5, 0)
     expect(grid.heights[wallTopCell]).toBeCloseTo(3.0, 6)
-    expect(cellsConnected(grid, floorCell, wallTopCell, MANTLE_H)).toBe(false)
+    expect(cellsConnected(grid, floorCell, wallTopCell)).toBe(false)
   })
 
   it('cellsConnected es simétrica', () => {
     const step = box(0, 0, -10, 10, 1.0, 10)
     const map = mapOf([floor, step], box(-10, 0, -10, 10, 4, 10))
     const grid = buildNavGrid(map, 1, CAPSULE_H)
-    const a = worldToCellIndex(grid, -5, 0)
-    const b = worldToCellIndex(grid, 5, 0)
+    const a = worldToCellIndex(grid, -0.5, 0)
+    const b = worldToCellIndex(grid, 0.5, 0)
     expect(cellsConnected(grid, a, b)).toBe(cellsConnected(grid, b, a))
   })
 
@@ -193,7 +192,7 @@ describe('máscara del componente conexo principal', () => {
   const grid = buildNavGrid(map, 1, CAPSULE_H)
 
   it('marca el piso y deja afuera el techo inalcanzable', () => {
-    const mask = buildMainComponentMask(grid, MANTLE_H)
+    const mask = buildMainComponentMask(grid)
 
     const enElPiso = worldToCellIndex(grid, -8, -8)
     expect(grid.walkable[enElPiso]).toBe(1)
@@ -206,7 +205,7 @@ describe('máscara del componente conexo principal', () => {
   })
 
   it('nearestWalkableCellIndex con máscara no devuelve una celda del techo', () => {
-    const mask = buildMainComponentMask(grid, MANTLE_H)
+    const mask = buildMainComponentMask(grid)
 
     const sinMascara = nearestWalkableCellIndex(grid, 0.5, 0.5)
     expect(grid.heights[sinMascara]).toBe(3)
@@ -219,7 +218,7 @@ describe('máscara del componente conexo principal', () => {
   it('un mapa de un solo nivel queda entero dentro de la máscara', () => {
     const plano = mapOf([floor], box(-10, 0, -10, 10, 6, 10))
     const gridPlano = buildNavGrid(plano, 1, CAPSULE_H)
-    const mask = buildMainComponentMask(gridPlano, MANTLE_H)
+    const mask = buildMainComponentMask(gridPlano)
     for (let i = 0; i < gridPlano.walkable.length; i++) {
       expect(mask[i]).toBe(gridPlano.walkable[i])
     }
