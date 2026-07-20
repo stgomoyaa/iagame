@@ -106,9 +106,14 @@ describe('con índice local presente (la máquina de desarrollo)', () => {
     await loadLocalWeapons(async () => indiceLocalFalso())
     const ak = weaponIndex().find((e) => e.slug === 'ak47')
     expect(ak?.name).toBe('AK-47 (CS)')
-    // Y todas las locales llevan etiqueta, no sólo la emblemática.
+    // El AK-47 de COD es OTRA fila, con el mismo nombre real y otra etiqueta.
+    // Es el caso que justifica que la etiqueta exista: sin ella las dos se
+    // mostrarían como "AK-47" y una taparía a la otra en la armería.
+    expect(weaponIndex().find((e) => e.slug === 'cod4_ak47')?.name).toBe('AK-47 (COD)')
+
+    // Y todas las locales llevan etiqueta, no sólo las emblemáticas.
     for (const entry of weaponIndex().filter((e) => e.origin === 'local')) {
-      expect(entry.name, entry.slug).toContain('(CS)')
+      expect(entry.name, entry.slug).toMatch(/ \((CS|COD)\)$/)
     }
   })
 

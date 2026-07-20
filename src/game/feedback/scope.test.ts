@@ -39,11 +39,29 @@ describe('qué armas llevan estampa de visor', () => {
     }
   })
 
-  it('exactamente cuatro armas del catálogo llevan estampa, y son las cuatro de precisión con óptica', () => {
+  // La lista se escribe entera y a mano, no se deriva de un filtro: la gracia
+  // del test es que agregar un arma con óptica OBLIGUE a mirar acá y decidir
+  // si de verdad lleva visor telescópico. Derivarla del catálogo lo dejaría
+  // pasando siempre y no probaría nada.
+  //
+  // Las 4 de CS son las de siempre. Las 10 de COD entraron con el pack, y son
+  // exactamente sus francotiradores: 5 de cerrojo y 5 semiautomáticos. Que
+  // sean todas las de `sight: 'optica'` del pack COD no es casualidad ni
+  // descuido — en COD ningún fusil de asalto quedó marcado con óptica, así
+  // que no aparece acá el caso `aug`/`sg553` (óptica integrada SIN estampa)
+  // que sí existe del lado de CS y que el test de arriba cubre.
+  it('las 14 armas con estampa son las de precisión con óptica de los dos packs', () => {
     const conEstampa = SOURCE_WEAPONS.filter(
       (w) => scopeReticleForWeapon(w.archetype, w.sight) !== null,
     ).map((w) => w.slug)
-    expect(conEstampa).toEqual(['awp', 'ssg08', 'scar20', 'g3sg1'])
+    expect(conEstampa).toEqual([
+      // CS
+      'awp', 'ssg08', 'scar20', 'g3sg1',
+      // COD: cerrojo
+      'cod4_m40a3', 'cod4_r700', 'mw2e_cheytac', 'mw3e_awm', 'mw3e_msr',
+      // COD: semiautomáticos de precisión
+      'cod4_m82', 'mw3e_as50', 'cod4_dragunov', 'mw3e_rsass', 'mw3e_mk14',
+    ])
   })
 
   it('ninguna arma de hierros lleva estampa: el camino de ADS medido al píxel queda intacto', () => {

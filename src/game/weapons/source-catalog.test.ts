@@ -41,6 +41,30 @@ const MARCAS_PROHIBIDAS = [
   'usp', 'p2000', 'p250', 'ssg08', 'ssg 08', 'scar20', 'scar-20', 'g3sg1',
   'heckler', 'koch', 'sig sauer', 'steyr', 'benelli', 'ithaca', 'beretta',
   'counter-strike', 'counter strike',
+
+  // Marcas que entraron con el pack de COD. Sumarlas acá no es sólo para que
+  // el conteo del catálogo local dé: la lista es la MISMA que usa el guard de
+  // las publicables, así que cada nombre agregado acá le pone un diente más a
+  // ese guard. Si mañana un arma CC0 se llamara "Barrett", ahora falla.
+  'acr', 'masada', 'g36', 'f2000', 'tar-21', 'tavor', 'stg-44', 'stg44',
+  'scar-l', 'scar-h', 'scar', 'fad', 'cm901', 'm16a4', 'type 95', 'qbz',
+  'fn fal', 'fnfal', 'fal', 'g3', 'm14', 'hbar',
+  'ak-74', 'ak74', 'uzi', 'skorpion', 'vector', 'kriss',
+  'pp-2000', 'pp2000', 'pp90', 'fmg9', 'pm-9',
+  'w1200', 'winchester', 'm1014', 'spas-12', 'spas12', 'striker', 'aa-12',
+  'ksg', 'usas', 'model 1887', '1887',
+  'm40a3', 'm40', 'r700', 'remington', 'intervention', 'cheytac',
+  'l118a', 'accuracy international', 'msr', 'barrett', '.50cal', 'as50',
+  'dragunov', 'svd', 'rsass', 'mk14', 'ebr',
+  // Ojo: acá NO va 'saw' suelto. El M249 SAW ya lo cubre 'm249', y 'saw' como
+  // subcadena matchea "Sawed-Off", que es una escopeta CC0 de nombre genérico
+  // y no una marca. Ese falso positivo lo detectó este mismo guard.
+  'm60', 'rpd', 'm240', 'mg4', 'mk46', 'pkp', 'pecheneg', 'l86',
+  'lsw', 'mg36',
+  'm1911', '1911', 'm9', 'p99', '.44 magnum', 'magnum', 'mp-412', 'mp412',
+  'rex', 'anaconda',
+  'fn herstal', 'herstal', 'walther', 'izhmash', 'iwi',
+  'call of duty', 'modern warfare',
 ]
 
 /** Sin acentos y en minúscula: "Cárpato" y "carpato" tienen que compararse
@@ -58,9 +82,36 @@ describe('catálogo de armas derivadas de Source', () => {
     expect(new Set(slugs).size).toBe(slugs.length)
   })
 
-  it('no repite nombres mostrados', () => {
+  // El nombre real SÍ se repite entre packs, y tiene que poder repetirse: el
+  // AK-47 de CS y el de COD se llaman los dos AK-47 porque son la misma arma
+  // real vista por dos autores. Lo que no puede repetirse es dentro de UN
+  // pack, que sí sería un error de tipeo o una fila duplicada.
+  //
+  // Este test reemplaza a uno anterior que exigía el nombre único en toda la
+  // tabla. Esa invariante era correcta mientras hubo un solo pack y dejó de
+  // serlo al entrar COD; la que la sustituye no es más débil, porque el caso
+  // que aquélla atrapaba (dos filas iguales) lo sigue atrapando, y el de
+  // "nombre+juego repetido" lo cubre el test de nombres mostrados de abajo.
+  it('no repite nombres DENTRO de un mismo pack', () => {
+    const porJuego = new Map<string, string[]>()
+    for (const e of SOURCE_WEAPONS) {
+      porJuego.set(e.game, [...(porJuego.get(e.game) ?? []), e.name])
+    }
+    expect(porJuego.size).toBeGreaterThan(1) // si no, no está probando nada
+    for (const [juego, nombres] of porJuego) {
+      const repetidos = nombres.filter((n, i) => nombres.indexOf(n) !== i)
+      expect(repetidos, `nombres repetidos en ${juego}`).toEqual([])
+    }
+  })
+
+  // Y el complemento: que el cruce entre packs de verdad ocurra. Si mañana
+  // alguien "arreglara" la colisión renombrando el AK-47 de COD a
+  // "AK-47 COD", el test de arriba seguiría verde y la etiqueta de juego
+  // habría dejado de servir para lo único que existe.
+  it('hay armas homónimas entre packs: es el caso que la etiqueta resuelve', () => {
     const nombres = SOURCE_WEAPONS.map((e) => e.name)
-    expect(new Set(nombres).size).toBe(nombres.length)
+    const repetidos = [...new Set(nombres.filter((n, i) => nombres.indexOf(n) !== i))]
+    expect(repetidos.sort()).toEqual(['AK-47', 'Desert Eagle', 'FAMAS', 'MP7', 'MP9', 'P90'])
   })
 
   it('cada arma mapea a un arquetipo que EXISTE: ninguna queda sin estadísticas', () => {
@@ -175,10 +226,22 @@ describe('lista negra de marcas: la separación publicable / local', () => {
   })
 
   it('toda arma local lleva etiqueta de juego, y el nombre mostrado la incluye', () => {
+    // La lista de etiquetas válidas se escribe acá a mano, en vez de leerse
+    // del tipo: si alguien agrega un pack nuevo, este test tiene que obligarlo
+    // a pasar por acá y decidir la etiqueta, no aceptarla sola.
+    const ETIQUETAS = ['CS', 'COD']
     for (const entry of SOURCE_WEAPONS) {
-      expect(entry.game, `${entry.slug} sin etiqueta de juego`).toBe('CS')
+      expect(ETIQUETAS, `${entry.slug} con etiqueta desconocida`).toContain(entry.game)
       expect(sourceWeaponDisplayName(entry)).toBe(`${entry.name} (${entry.game})`)
-      expect(sourceWeaponDisplayName(entry)).toContain('(CS)')
+      expect(sourceWeaponDisplayName(entry)).toContain(`(${entry.game})`)
+    }
+    // Y que las DOS etiquetas estén realmente pobladas: un pack que quedara
+    // con cero filas dejaría el bucle de arriba verde sin probar nada de él.
+    for (const etiqueta of ETIQUETAS) {
+      expect(
+        SOURCE_WEAPONS.filter((e) => e.game === etiqueta).length,
+        `el pack ${etiqueta} quedó vacío`,
+      ).toBeGreaterThan(0)
     }
   })
 
