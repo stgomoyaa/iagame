@@ -34,8 +34,8 @@
  * El resultado: un MISMO patrón en escala de grises, con distinta paleta y
  * animación, da camos que se sienten distintos. Eso es lo que multiplica el
  * catálogo sin multiplicar los bytes. Un patrón comprimido pesa ~40..110 kB
- * (ver docs/PROMPTS-CAMOS.md y scripts/patrones-camo-prueba.ts); las diez
- * definiciones de abajo salen de tres archivos.
+ * (ver docs/PROMPTS-CAMOS.md y scripts/patrones-camo-prueba.ts); las diecisiete
+ * definiciones de abajo salen de nueve archivos.
  *
  *
  * POR QUÉ ESTE ARCHIVO ES PURO (NO IMPORTA THREE)
@@ -117,17 +117,28 @@ export function patronUrl(camo: CamoTextura): string {
 /**
  * El catálogo.
  *
- * Diez camos de TRES patrones. La repetición de `patron` es el punto entero
- * de la vía: `vetas` aparece como Element 115 (verde que respira) y como
- * Afterlife (violeta/cian que fluye) — mismo dibujo, dos camos que no se
- * parecen en nada. Igual `celdas` (un panal geométrico) rinde como Dark
- * Matter reflectante y como un damasco dorado, y `nube` como nebulosa que
- * cicla el tono y como humo apagado de dotación.
+ * Diecisiete camos de NUEVE patrones reales (docs/PROMPTS-CAMOS.md, generados
+ * con Higgsfield y verificados uno por uno con el chequeo de teselado: razón
+ * 0.5..1.3, muy por debajo del umbral 1.8, croma 0). La repetición de `patron`
+ * es el punto entero de la vía: `vetas` aparece como Elemento 115 (verde que
+ * respira) y como Otromundo (cian/violeta que fluye) — mismo dibujo, dos camos
+ * que no se parecen en nada. Igual `mercurio` rinde como cromo espejado y como
+ * oro líquido, y `fractura` como Materia Oscura reflectante y como una grieta
+ * carmesí encendida.
+ *
+ * Los nueve son ORGÁNICOS a propósito: un generador de imágenes no cierra la
+ * costura de una grilla rígida (panal, circuito, escamas), así que esos van por
+ * el generador procedural de camo-families.ts, que tesela por construcción. La
+ * vía por textura se queda con lo que el generador hace bien: vetas, nubes,
+ * lava, mármol, fractura, mercurio.
  *
  * Los parámetros no son físicos: son lo que hace que cada uno se lea como lo
  * que quiere ser cuando el arma gira, igual que `skinSuperficie` en
  * material.ts. La calibración fina se hace mirando el arma en movimiento, que
- * es el único juez válido (ver el entregable de la tarea).
+ * es el único juez válido (ver el entregable de la tarea). Los que heredé del
+ * set de prueba (Elemento 115, Otromundo, Materia Oscura, Nebulosa, Humo) ya
+ * pasaron por ese ojo; los nuevos son un punto de partida razonable por tipo
+ * (emisivo / reflectante / mate), a afinar cuando se los vea en pantalla.
  */
 export const CATALOGO_CAMOS: readonly CamoTextura[] = [
   // --- vetas: orgánico, filamentos que se encienden -----------------------
@@ -165,44 +176,11 @@ export const CATALOGO_CAMOS: readonly CamoTextura[] = [
     animation: 'flujo',
     escala: 3.0,
   },
-  // --- celdas: geométrico duro --------------------------------------------
-  {
-    id: 'materia-oscura',
-    nombre: 'Materia Oscura',
-    patron: 'celdas',
-    base: '#05070f',
-    accent: '#1a2a55',
-    // Casi sin emisión: en Dark Matter la magia es el REFLEJO, no el glow. El
-    // barniz alto y la rugosidad baja son los que hacen correr el brillo por
-    // el panal cuando el arma gira.
-    glow: '#6fb0ff',
-    emissive: 0.28,
-    metal: 0.85,
-    rugosidad: 0.16,
-    barniz: 1.1,
-    animation: 'flujo',
-    escala: 2.4,
-  },
-  {
-    id: 'panal-de-oro',
-    nombre: 'Panal de Oro',
-    patron: 'celdas',
-    base: '#1a1206',
-    accent: '#c69328',
-    glow: '#ffd766',
-    emissive: 0.4,
-    // Oro: reflejo chico, durísimo y DORADO (metal casi 1), como la filigrana.
-    metal: 0.95,
-    rugosidad: 0.22,
-    barniz: 0.8,
-    animation: 'pulso',
-    escala: 2.4,
-  },
-  // --- nube: ruido suave --------------------------------------------------
+  // --- nebulosa: nube HDR con núcleos brillantes --------------------------
   {
     id: 'nebulosa',
     nombre: 'Nebulosa',
-    patron: 'nube',
+    patron: 'nebulosa',
     base: '#0c0820',
     accent: '#7a2b8f',
     glow: '#ff5ad0',
@@ -216,9 +194,25 @@ export const CATALOGO_CAMOS: readonly CamoTextura[] = [
     escala: 1.8,
   },
   {
+    id: 'aurora',
+    nombre: 'Aurora',
+    patron: 'nebulosa',
+    base: '#031014',
+    accent: '#1f7a6a',
+    // Verde/cian sobre casi negro: la misma nube, leída como aurora boreal.
+    glow: '#5affc8',
+    emissive: 0.62,
+    metal: 0.28,
+    rugosidad: 0.6,
+    barniz: 0.5,
+    animation: 'espectro',
+    escala: 1.6,
+  },
+  // --- humo: ruido suave y apagado (el control) ---------------------------
+  {
     id: 'humo-tactico',
     nombre: 'Humo Táctico',
-    patron: 'nube',
+    patron: 'humo',
     base: '#1a1c1f',
     accent: '#6a7178',
     glow: '#9aa0a6',
@@ -230,6 +224,195 @@ export const CATALOGO_CAMOS: readonly CamoTextura[] = [
     rugosidad: 0.8,
     barniz: 0.1,
     animation: 'ninguna',
+    escala: 2.0,
+  },
+  // --- lava: grietas que emiten entre placas oscuras ----------------------
+  {
+    id: 'magma',
+    nombre: 'Magma',
+    patron: 'lava',
+    base: '#140805',
+    accent: '#5a1e0a',
+    // Naranja incandescente en las grietas; las placas quedan casi negras.
+    glow: '#ff6a1a',
+    emissive: 0.88,
+    metal: 0.3,
+    rugosidad: 0.5,
+    barniz: 0.3,
+    // Pulso: la lava late como brasa viva.
+    animation: 'pulso',
+    escala: 2.6,
+  },
+  {
+    id: 'ceniza',
+    nombre: 'Ceniza',
+    patron: 'lava',
+    base: '#0e0e10',
+    accent: '#3a2f2a',
+    // La misma roca agrietada apagándose: rojo tenue que apenas corre.
+    glow: '#b23a1e',
+    emissive: 0.34,
+    metal: 0.45,
+    rugosidad: 0.62,
+    barniz: 0.35,
+    animation: 'flujo',
+    escala: 2.6,
+  },
+  // --- damasco: grano de acero plegado ------------------------------------
+  {
+    id: 'damasco-acero',
+    nombre: 'Damasco',
+    patron: 'damasco',
+    base: '#14161a',
+    accent: '#8a929c',
+    glow: '#c8d2dc',
+    // Acero cepillado: casi no emite, el reflejo metálico es la gracia.
+    emissive: 0.15,
+    metal: 0.9,
+    rugosidad: 0.3,
+    barniz: 0.55,
+    animation: 'flujo',
+    escala: 2.8,
+  },
+  {
+    id: 'filigrana-oro',
+    nombre: 'Filigrana de Oro',
+    patron: 'damasco',
+    base: '#1a1206',
+    accent: '#c69328',
+    glow: '#ffd766',
+    emissive: 0.4,
+    // Oro: reflejo chico, durísimo y DORADO (metal casi 1), como la filigrana.
+    metal: 0.95,
+    rugosidad: 0.22,
+    barniz: 0.8,
+    animation: 'pulso',
+    escala: 2.6,
+  },
+  // --- marmol: veta fina sobre piedra pulida ------------------------------
+  {
+    id: 'marmol',
+    nombre: 'Mármol',
+    patron: 'marmol',
+    base: '#e6e2da',
+    accent: '#9a8f80',
+    glow: '#ffffff',
+    // Piedra clara y pulida: barniz alto para la resina, casi sin emisión.
+    emissive: 0.08,
+    metal: 0.25,
+    rugosidad: 0.28,
+    barniz: 1.2,
+    animation: 'ninguna',
+    escala: 2.2,
+  },
+  {
+    id: 'obsidiana',
+    nombre: 'Obsidiana',
+    patron: 'marmol',
+    base: '#0a0a0c',
+    accent: '#2a2a30',
+    // La misma veta sobre piedra negra: vidrio volcánico, reflejo frío.
+    glow: '#6a7280',
+    emissive: 0.12,
+    metal: 0.6,
+    rugosidad: 0.2,
+    barniz: 1.0,
+    animation: 'flujo',
+    escala: 2.2,
+  },
+  // --- fractura: grietas radiales desde puntos de impacto -----------------
+  {
+    id: 'materia-oscura',
+    nombre: 'Materia Oscura',
+    patron: 'fractura',
+    base: '#05070f',
+    accent: '#1a2a55',
+    // Casi sin emisión: en Dark Matter la magia es el REFLEJO, no el glow. El
+    // barniz alto y la rugosidad baja son los que hacen correr el brillo por
+    // la fractura cuando el arma gira.
+    glow: '#6fb0ff',
+    emissive: 0.28,
+    metal: 0.85,
+    rugosidad: 0.16,
+    barniz: 1.1,
+    animation: 'flujo',
+    escala: 2.2,
+  },
+  {
+    id: 'grieta-carmesi',
+    nombre: 'Grieta Carmesí',
+    patron: 'fractura',
+    base: '#100305',
+    accent: '#4a0d16',
+    // La misma red de grietas, encendida: rojo agresivo que late.
+    glow: '#ff2a4a',
+    emissive: 0.85,
+    metal: 0.4,
+    rugosidad: 0.48,
+    barniz: 0.4,
+    animation: 'pulso',
+    escala: 2.4,
+  },
+  // --- topografico: curvas de nivel concéntricas --------------------------
+  {
+    id: 'cota',
+    nombre: 'Cota',
+    patron: 'topografico',
+    base: '#04120a',
+    accent: '#186a3a',
+    glow: '#4affa0',
+    // Líneas finas que ciclan el tono: se lee como un mapa de calor vivo.
+    emissive: 0.55,
+    metal: 0.35,
+    rugosidad: 0.5,
+    barniz: 0.45,
+    animation: 'espectro',
+    escala: 2.0,
+  },
+  {
+    id: 'radar',
+    nombre: 'Radar',
+    patron: 'topografico',
+    base: '#0a0c14',
+    accent: '#243a5a',
+    // Las mismas curvas, en ámbar/cian de instrumento.
+    glow: '#ffb02a',
+    emissive: 0.5,
+    metal: 0.4,
+    rugosidad: 0.55,
+    barniz: 0.4,
+    animation: 'flujo',
+    escala: 2.0,
+  },
+  // --- mercurio: metal líquido en gotas que se funden ---------------------
+  {
+    id: 'mercurio',
+    nombre: 'Mercurio',
+    patron: 'mercurio',
+    base: '#16181c',
+    accent: '#aeb6c0',
+    glow: '#dfe6ee',
+    // Cromo espejado: metal casi total, rugosidad baja, el reflejo lo es todo.
+    emissive: 0.1,
+    metal: 0.95,
+    rugosidad: 0.14,
+    barniz: 1.15,
+    animation: 'flujo',
+    escala: 2.0,
+  },
+  {
+    id: 'oro-liquido',
+    nombre: 'Oro Líquido',
+    patron: 'mercurio',
+    base: '#1c1305',
+    accent: '#b98a20',
+    glow: '#ffd061',
+    // El mismo metal fluido, en oro: gotas doradas que corren al girar.
+    emissive: 0.35,
+    metal: 0.95,
+    rugosidad: 0.2,
+    barniz: 0.9,
+    animation: 'flujo',
     escala: 2.0,
   },
 ]
