@@ -34,33 +34,18 @@ import {
   createProgressStore,
   type ProgressData,
 } from '@/game/progression/store'
-import { unlockLevelFor } from '@/game/progression/unlocks'
 import { generateSkin, type Skin } from '@/game/skins/generator'
 import { RARITY_BY_ID, rarityRank } from '@/game/skins/rarity'
 import type { PreviewItem } from '@/game/skins/preview'
-import { loadLocalWeapons, resolveArchetype, weaponIndex } from '@/game/weapons/registry'
+import { loadLocalWeapons } from '@/game/weapons/registry'
 import { CLASS_LABEL, statBars } from '@/game/weapons/stats'
 import { WeaponPreview } from '@/ui/WeaponPreview'
 import { SensitivitySettings } from '@/ui/SensitivitySettings'
+// El arsenal se arma en ui/arsenal.ts porque el menú de pausa
+// (ui/PauseMenu.tsx) muestra la misma lista con los mismos desbloqueos.
+import { construirArsenal } from '@/ui/arsenal'
 
 const MUESCAS = 12
-
-/** Una fila del arsenal: lo que la lista necesita de cada arma del catálogo. */
-interface ArmaDeLista {
-  slug: string
-  nombre: string
-  archetype: ReturnType<typeof resolveArchetype>
-  nivel: number
-}
-
-function construirArsenal(): ArmaDeLista[] {
-  return weaponIndex().map((entry) => ({
-    slug: entry.slug,
-    nombre: entry.name,
-    archetype: resolveArchetype(entry.slug),
-    nivel: unlockLevelFor(entry.slug),
-  }))
-}
 
 function Barra({ value }: { value: number }) {
   const llenas = Math.max(1, Math.round(value * MUESCAS))
