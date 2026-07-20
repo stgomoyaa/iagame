@@ -57,10 +57,20 @@ function montarEntorno(archivos: Map<string, Uint8Array>): {
   sonidos: Sonido[]
   /** hash -> URL, para que un fallo diga qué archivo sonó y no un hex suelto. */
   origen: Map<string, string>
+  /** Espera a que no quede ni un fetch ni un decode en vuelo. Ver abajo. */
+  asentar: () => Promise<void>
   desmontar: () => void
 } {
   const sonidos: Sonido[] = []
   const origen = new Map<string, string>()
+  // Operaciones asincrónicas en vuelo (fetch + decode). Esperar por este
+  // contador en vez de por N ticks del event loop es lo que hace que el
+  // test no dependa de cuán cargada esté la máquina: con un número fijo de
+  // ticks, una máquina ocupada dejaba el buffer sin decodificar, el disparo
+  // caía al sample de la clase y el test fallaba por una razón que no tenía
+  // nada que ver con lo que mide. Pasó de verdad -- dos fallos intermitentes
+  // corriendo la suite junto con un build.
+  let pendientes = 0
 
   class GainFalso {
     gain = { value: 1 }
@@ -117,7 +127,12 @@ function montarEntorno(archivos: Map<string, Uint8Array>): {
       // El "decodificador" no interpreta Ogg: sólo marca el buffer con la
       // huella de los bytes que le llegaron. Es todo lo que hace falta para
       // distinguir un sample de otro, y no ata el test a un códec.
-      return Promise.resolve({ hash: hashDe(datos), duration: datos.byteLength / 48000 })
+      pendientes++
+      return Promise.resolve({ hash: hashDe(datos), duration: datos.byteLength / 48000 }).finally(
+        () => {
+          pendientes--
+        },
+      )
     }
   }
 
@@ -132,28 +147,43 @@ function montarEntorno(archivos: Map<string, Uint8Array>): {
     if (!datos) return Promise.resolve({ ok: false, status: 404 })
     const copia = datos.slice()
     origen.set(hashDe(copia.buffer as ArrayBuffer), url)
+    pendientes++
     return Promise.resolve({
       ok: true,
       status: 200,
       arrayBuffer: () => Promise.resolve(copia.buffer as ArrayBuffer),
       json: () => Promise.resolve(JSON.parse(Buffer.from(datos).toString('utf8')) as unknown),
+    }).finally(() => {
+      pendientes--
     })
+  }
+
+  /**
+   * Deja correr las cadenas fetch -> arrayBuffer -> decode hasta que no
+   * quede nada en vuelo. Exige varias vueltas seguidas en cero porque el
+   * pipeline se re-alimenta: resolver un fetch DISPARA un decode, así que
+   * ver el contador en cero una vez no significa que ya terminó todo.
+   */
+  const asentar = async (): Promise<void> => {
+    const limite = Date.now() + 5000
+    let enCero = 0
+    while (enCero < 6 && Date.now() < limite) {
+      await new Promise((r) => setTimeout(r, 0))
+      enCero = pendientes === 0 ? enCero + 1 : 0
+    }
+    if (pendientes !== 0) throw new Error(`quedaron ${pendientes} operaciones de audio en vuelo`)
   }
 
   return {
     sonidos,
     origen,
+    asentar,
     desmontar: () => {
       delete g.window
       if (fetchOriginal === undefined) delete g.fetch
       else g.fetch = fetchOriginal
     },
   }
-}
-
-/** Deja correr las promesas en vuelo (fetch -> decode -> buffers). */
-async function asentar(vueltas = 12): Promise<void> {
-  for (let i = 0; i < vueltas; i++) await new Promise((r) => setTimeout(r, 0))
 }
 
 /** Bytes distintos y deterministas por nombre de archivo. */
@@ -209,7 +239,7 @@ describe('dos armas de la misma clase suenan a buffers distintos', () => {
       a.unlock()
       a.prewarm('arma-ak')
       a.prewarm('arma-m4')
-      await asentar()
+      await env.asentar()
 
       a.playShot('arma-ak', 'ar')
       a.playShot('arma-m4', 'ar')
@@ -254,7 +284,7 @@ describe('dos armas de la misma clase suenan a buffers distintos', () => {
       a.precargar()
       a.unlock()
       a.prewarm('arma-ak')
-      await asentar()
+      await env.asentar()
 
       a.playShot('arma-ak', 'ar') // nivel 1: sample propio del arma
       a.playShot('arma-desconocida', 'ar') // nivel 2: fallback por clase
@@ -275,7 +305,7 @@ describe('dos armas de la misma clase suenan a buffers distintos', () => {
       a.precargar()
       a.unlock()
       a.prewarm('arma-multi')
-      await asentar()
+      await env.asentar()
 
       for (let i = 0; i < 4; i++) a.playShot('arma-multi', 'ar')
 
@@ -299,7 +329,7 @@ describe('dos armas de la misma clase suenan a buffers distintos', () => {
       a.unlock()
       a.prewarm('arma-ak')
       a.prewarm('arma-m4')
-      await asentar()
+      await env.asentar()
 
       // Jugador con la AK a volumen pleno, bot con la M4 atenuado por
       // distancia: el camino de los bots tiene que resolver por arma igual
@@ -327,7 +357,7 @@ describe('checkout limpio: sin los assets locales, ningún arma queda muda', () 
       a.precargar()
       a.unlock()
       a.prewarm('arma-ak')
-      await asentar()
+      await env.asentar()
 
       a.playShot('arma-ak', 'ar')
       a.playShot('arma-m4', 'ar')
@@ -352,7 +382,7 @@ describe('checkout limpio: sin los assets locales, ningún arma queda muda', () 
       const a = createWeaponAudio()
       a.precargar()
       a.unlock()
-      await asentar()
+      await env.asentar()
 
       // Primer disparo: el índice está, pero los bytes del arma no se
       // pidieron nunca. Tiene que sonar igual -- con la clase.
@@ -361,7 +391,7 @@ describe('checkout limpio: sin los assets locales, ningún arma queda muda', () 
 
       // Ese mismo disparo dejó pedidos los bytes. Después de que lleguen, el
       // arma ya suena a sí misma sin que nadie llame a prewarm().
-      await asentar()
+      await env.asentar()
       a.playShot('arma-ak', 'ar')
       expect(env.origen.get(env.sonidos[1].hash ?? '')).toBe(
         '/assets/audio/weapons-local/pack__ak/disparo-1.ogg',
@@ -439,6 +469,9 @@ describe('presupuesto de memoria de playShot', () => {
     const buffersFalsos = { getChannelData: (): Float32Array => new Float32Array(8) }
 
     const archivos = archivosSinteticos2()
+    // Mismo contador determinista que montarEntorno: sin esto, una máquina
+    // cargada mediría el camino del fallback en vez del camino por arma.
+    let pendientes = 0
     const g = globalThis as unknown as { window?: unknown; fetch?: unknown }
     const fetchOriginal = g.fetch
     g.window = {
@@ -463,7 +496,10 @@ describe('presupuesto de memoria de playShot', () => {
           return buffersFalsos
         }
         decodeAudioData(d: ArrayBuffer): Promise<{ duration: number }> {
-          return Promise.resolve({ duration: d.byteLength })
+          pendientes++
+          return Promise.resolve({ duration: d.byteLength }).finally(() => {
+            pendientes--
+          })
         }
       },
     }
@@ -471,10 +507,13 @@ describe('presupuesto de memoria de playShot', () => {
       const datos = archivos.get(url)
       if (!datos) return Promise.resolve({ ok: false })
       const copia = datos.slice()
+      pendientes++
       return Promise.resolve({
         ok: true,
         arrayBuffer: () => Promise.resolve(copia.buffer as ArrayBuffer),
         json: () => Promise.resolve(JSON.parse(Buffer.from(datos).toString('utf8')) as unknown),
+      }).finally(() => {
+        pendientes--
       })
     }
 
@@ -483,7 +522,13 @@ describe('presupuesto de memoria de playShot', () => {
       a.precargar()
       a.unlock()
       a.prewarm('arma-ak')
-      await asentar()
+      const limite = Date.now() + 5000
+      let enCero = 0
+      while (enCero < 6 && Date.now() < limite) {
+        await new Promise((r) => setTimeout(r, 0))
+        enCero = pendientes === 0 ? enCero + 1 : 0
+      }
+      expect(pendientes, 'quedaron operaciones de audio en vuelo').toBe(0)
 
       // Calentar: JIT y asentar el estado interno (el Set de pedidos, el
       // cursor de variantes) antes de medir.
@@ -563,7 +608,7 @@ describe.skipIf(!existsSync(INDICE_LOCAL))('assets reales del Workshop', () => {
       a.unlock()
       a.prewarm('ak47')
       a.prewarm('m4a4')
-      await asentar()
+      await env.asentar()
 
       a.playShot('ak47', 'ar')
       a.playShot('m4a4', 'ar')
