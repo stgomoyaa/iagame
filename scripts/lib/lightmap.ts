@@ -249,6 +249,37 @@ function calcularExposicion(luminancias: Float64Array): number {
   return Math.max(1, p)
 }
 
+/** Luminancia Rec.709 de una muestra ya decodificada. */
+export function luminanciaMuestra(r: number, g: number, b: number): number {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+/**
+ * Exposición del mapa leyendo sólo LUMP_LIGHTING, sin construir el atlas.
+ *
+ * Existe para que `bsp-props.ts` -- que corre como script aparte de
+ * `bsp-convert.ts` y no arma ninguna malla -- pueda dividir la luz de los
+ * props por EL MISMO número por el que se dividió la de las paredes. Si
+ * cada uno calculara el suyo, o peor, si uno usara una constante, props y
+ * paredes quedarían expuestos distinto y el desajuste sería justamente el
+ * que este trabajo vino a arreglar.
+ */
+export function exposicionDelMapa(buf: Buffer, lumps: Lump[]): number | null {
+  const caras = leerCarasConLightmap(buf, lumps)
+  if (caras.length === 0) return null
+  const lLight = lumps[LUMP_LIGHTING]
+  const total = caras.reduce((a, c) => a + c.w * c.h, 0)
+  const luminancias = new Float64Array(total)
+  let k = 0
+  for (const c of caras) {
+    for (let i = 0; i < c.w * c.h; i++) {
+      const [r, g, b] = decodificarMuestra(buf, lLight.offset + c.lightofs + i * 4)
+      luminancias[k++] = luminanciaMuestra(r, g, b) / 255
+    }
+  }
+  return calcularExposicion(luminancias)
+}
+
 /**
  * Atlas completo. Elige el lado potencia de dos más chico donde entre todo:
  * los 202331 luxels de nuketown más el padding entran en 1024x1024 (4 MB en
@@ -301,7 +332,7 @@ export function construirAtlas(buf: Buffer, lumps: Lump[]): Atlas | null {
       lineal[k * 3] = r / 255
       lineal[k * 3 + 1] = g / 255
       lineal[k * 3 + 2] = b / 255
-      luminancias[k] = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+      luminancias[k] = luminanciaMuestra(r, g, b) / 255
       k++
     }
   }

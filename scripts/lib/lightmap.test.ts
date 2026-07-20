@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import { decodificarMuestra, empacar, uvLightmap, type CaraLightmap, type RectAtlas } from './lightmap.ts'
+import { type Lump, TAM_FACE, TAM_TEXINFO } from './bsp.ts'
+import {
+  construirAtlas,
+  decodificarMuestra,
+  empacar,
+  exposicionDelMapa,
+  uvLightmap,
+  type CaraLightmap,
+  type RectAtlas,
+} from './lightmap.ts'
 
 /**
  * Estos tests apuntan a las tres formas en que un atlas de lightmap sale
@@ -165,5 +174,90 @@ describe('uvLightmap', () => {
     const [u, v] = uvLightmap([99, -99, 0], cara, rect, LADO)
     expect(u).toBeCloseTo(13.5 / 64, 10) // clampeado a w-1 = 3
     expect(v).toBeCloseTo(20.5 / 64, 10) // clampeado a 0
+  })
+})
+
+/**
+ * `exposicionDelMapa` existe para que `bsp-props.ts` divida la luz de los
+ * props por el MISMO número que `construirAtlas` usó para las paredes. El
+ * riesgo no es que dé un valor raro, sino que dé un valor DISTINTO: props y
+ * paredes quedarían expuestos diferente y el desajuste sería exactamente el
+ * que el tinte por instancia vino a arreglar. Por eso el test compara las
+ * dos funciones sobre el mismo mapa en vez de comprobar un número fijo.
+ */
+describe('exposicionDelMapa', () => {
+  /** .bsp mínimo con LUMP_FACES + LUMP_TEXINFO + LUMP_LIGHTING. */
+  function bspConLuz(muestras: [number, number, number, number][]): Buffer {
+    const nCaras = 1
+    const bufFaces = Buffer.alloc(nCaras * TAM_FACE)
+    bufFaces.writeInt16LE(0, 10) // texinfo
+    bufFaces.writeInt32LE(0, 20) // lightofs
+    bufFaces.writeInt32LE(0, 28) // minU
+    bufFaces.writeInt32LE(0, 32) // minV
+    bufFaces.writeInt32LE(muestras.length - 1, 36) // size u (grilla = size+1)
+    bufFaces.writeInt32LE(0, 40) // size v
+
+    const bufTexinfo = Buffer.alloc(TAM_TEXINFO)
+    bufTexinfo.writeFloatLE(1, 32)
+    bufTexinfo.writeFloatLE(1, 48)
+
+    const bufLight = Buffer.alloc(muestras.length * 4)
+    muestras.forEach((m, i) => {
+      bufLight.writeUInt8(m[0], i * 4)
+      bufLight.writeUInt8(m[1], i * 4 + 1)
+      bufLight.writeUInt8(m[2], i * 4 + 2)
+      bufLight.writeInt8(m[3], i * 4 + 3)
+    })
+
+    const cabecera = 8 + 64 * 16
+    const piezas: { lump: number; datos: Buffer }[] = [
+      { lump: 6, datos: bufTexinfo },
+      { lump: 7, datos: bufFaces },
+      { lump: 8, datos: bufLight },
+    ]
+    const total = piezas.reduce((a, p) => a + p.datos.length, cabecera)
+    const buf = Buffer.alloc(total)
+    buf.write('VBSP', 0, 'ascii')
+    buf.writeInt32LE(20, 4)
+    let offset = cabecera
+    for (const p of piezas) {
+      buf.writeInt32LE(offset, 8 + p.lump * 16)
+      buf.writeInt32LE(p.datos.length, 8 + p.lump * 16 + 4)
+      p.datos.copy(buf, offset)
+      offset += p.datos.length
+    }
+    return buf
+  }
+
+  function lumpsDe(buf: Buffer): Lump[] {
+    const lumps: Lump[] = []
+    for (let i = 0; i < 64; i++) {
+      lumps.push({ offset: buf.readInt32LE(8 + i * 16), largo: buf.readInt32LE(8 + i * 16 + 4) })
+    }
+    return lumps
+  }
+
+  it('da exactamente la misma exposición que el atlas', () => {
+    // Muestras por encima de 255 (exponente 1) para que el percentil caiga
+    // arriba de 1.0 y la exposición no sea el piso trivial.
+    const muestras: [number, number, number, number][] = Array.from(
+      { length: 20 },
+      (_, i) => [200 + i * 2, 200 + i * 2, 200 + i * 2, 1],
+    )
+    const buf = bspConLuz(muestras)
+    const lumps = lumpsDe(buf)
+    const atlas = construirAtlas(buf, lumps)
+    expect(atlas).not.toBeNull()
+    expect(exposicionDelMapa(buf, lumps)).toBe(atlas!.exposicion)
+  })
+
+  it('nunca baja de 1: un mapa tenue no se normaliza hacia arriba', () => {
+    const buf = bspConLuz(Array.from({ length: 8 }, () => [40, 40, 40, 0]))
+    expect(exposicionDelMapa(buf, lumpsDe(buf))).toBe(1)
+  })
+
+  it('devuelve null si el mapa no trae caras con lightmap', () => {
+    const buf = bspConLuz([])
+    expect(exposicionDelMapa(buf, lumpsDe(buf))).toBeNull()
   })
 })

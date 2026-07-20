@@ -17,6 +17,7 @@
  */
 
 import {
+  Color,
   InstancedMesh,
   LinearFilter,
   Matrix4,
@@ -164,6 +165,8 @@ export interface InstanciaPropJson {
   modelo: number
   pos: [number, number, number]
   quat: [number, number, number, number]
+  /** Tinte de luz horneada, LINEAL. Ausente = sin tintar (albedo pleno). */
+  luz?: [number, number, number]
 }
 
 export interface PropsMapaJson {
@@ -190,7 +193,12 @@ export function esPropsMapaJson(v: unknown): v is PropsMapaJson {
       x.modelo >= 0 &&
       x.modelo < (o.modelos as string[]).length &&
       num(x.pos, 3) &&
-      num(x.quat, 4)
+      num(x.quat, 4) &&
+      // `luz` es opcional, pero si viene tiene que ser un RGB válido: un
+      // array de otro largo o con un NaN adentro pintaría el prop de negro
+      // sin que nada falle, que es el tipo de error que sólo se descubre
+      // mirando el mapa.
+      (x.luz === undefined || num(x.luz, 3))
     )
   })
 }
@@ -243,8 +251,33 @@ function aBasico(mat: Material): Material {
  * Los props van colgados del MISMO Object3D que la malla del mapa, no
  * agregados a la escena por su cuenta: así el renderer no necesita saber que
  * existen (y este archivo no tiene que tocar engine/renderer.ts).
+ *
+ * LA LUZ HORNEADA DE CADA INSTANCIA (`tintar`)
+ * --------------------------------------------
+ * Cada instancia trae su propio color de `bsp-props.ts` y se aplica con
+ * `setColorAt`, o sea como el atributo instanciado `instanceColor`: NO
+ * rompe el instanciado ni agrega un draw call, sólo 3 floats por instancia
+ * (600 bytes para las 50 de nuketown). Sin esto los props se dibujan a
+ * albedo pleno y una cerca queda más brillante que la pared lightmapeada
+ * que tiene al lado.
+ *
+ * Un detalle de three que hay que saber para creerle a esto: alcanza con
+ * setear `instanceColor`, sin tocar `material.vertexColors` ni agregarle un
+ * atributo `color` a la geometría. El prefijo del fragment shader define
+ * `USE_COLOR` cuando hay `instancingColor` (WebGLProgram.js: `vertexColors
+ * || instancingColor`), mientras que el del vertex shader lo define sólo
+ * por `vertexColors` y trata el instanciado aparte. Prender
+ * `vertexColors` "por las dudas" sería peor: define el atributo `color` en
+ * el vertex shader, la geometría de los props no lo tiene, y
+ * `MeshBasicMaterial` no declara `defaultAttributeValues` (sólo lo hace
+ * ShaderMaterial) -- así que el atributo quedaría en el (0,0,0) por
+ * defecto de WebGL y los props saldrían NEGROS.
  */
-export function construirProps(gltfPorModelo: ReadonlyArray<Object3D>, props: PropsMapaJson): Object3D {
+export function construirProps(
+  gltfPorModelo: ReadonlyArray<Object3D>,
+  props: PropsMapaJson,
+  tintar: boolean,
+): Object3D {
   const raiz = new Object3D()
   raiz.matrixAutoUpdate = false
 
@@ -262,6 +295,7 @@ export function construirProps(gltfPorModelo: ReadonlyArray<Object3D>, props: Pr
   const q = new Quaternion()
   const uno = new Vector3(1, 1, 1)
   const local = new Matrix4()
+  const c = new Color()
 
   for (const [idxModelo, instancias] of porModelo) {
     const modelo = gltfPorModelo[idxModelo]
@@ -285,8 +319,17 @@ export function construirProps(gltfPorModelo: ReadonlyArray<Object3D>, props: Pr
         m.compose(p, q, uno)
         m.multiply(local)
         inst.setMatrixAt(i, m)
+        if (tintar && it.luz !== undefined) {
+          // `setRGB` sin espacio de color explícito escribe en el espacio de
+          // trabajo, que es LINEAL -- que es justo como viene el tinte de
+          // bsp-props.ts. Pasarlo por `setHex`/`setStyle` lo interpretaría
+          // como sRGB y lo aclararía de más.
+          c.setRGB(it.luz[0], it.luz[1], it.luz[2])
+          inst.setColorAt(i, c)
+        }
       }
       inst.instanceMatrix.needsUpdate = true
+      if (inst.instanceColor !== null) inst.instanceColor.needsUpdate = true
       // Los props no se mueven: fuera del recálculo de matrices por frame.
       inst.matrixAutoUpdate = false
       inst.updateMatrix()
@@ -328,10 +371,16 @@ export async function cargarMapaExterno(mapa: MapaExterno): Promise<MapaExternoC
   // dibuja a albedo pleno, que es como se veía antes. Perder la
   // iluminación es un downgrade visual; perder el mapa es perder la
   // partida.
+  // Si el lightmap no se engancha, los props tampoco se tintan: las dos
+  // cosas son la MISMA iluminación horneada, y encender sólo una deja el
+  // mapa incoherente (paredes a albedo pleno con props en penumbra es tan
+  // raro como lo contrario, que es lo que había antes).
+  let lightmapAplicado = false
   if (mapa.lightmap !== undefined) {
     try {
       const textura = await new TextureLoader().loadAsync(mapa.lightmap)
       aplicarLightmap(objeto, textura)
+      lightmapAplicado = true
     } catch {
       console.warn(`[${mapa.name}] no se pudo cargar el lightmap ${mapa.lightmap}; se dibuja sin iluminar`)
     }
@@ -360,7 +409,7 @@ export async function cargarMapaExterno(mapa: MapaExterno): Promise<MapaExternoC
           const modelos = await Promise.all(
             crudoProps.modelos.map(async (m) => (await loader.loadAsync(`${mapa.propsDir}/${m}`)).scene),
           )
-          objeto.add(construirProps(modelos, crudoProps))
+          objeto.add(construirProps(modelos, crudoProps, lightmapAplicado))
         } else {
           console.warn(`[${mapa.name}] ${mapa.props} no tiene la forma que produce scripts/bsp-props.ts`)
         }

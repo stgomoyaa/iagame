@@ -1,5 +1,6 @@
 import {
   BufferGeometry,
+  Color,
   InstancedMesh,
   Matrix4,
   Mesh,
@@ -139,6 +140,29 @@ describe('esPropsMapaJson', () => {
     expect(esPropsMapaJson('<!DOCTYPE html>')).toBe(false)
     expect(esPropsMapaJson(null)).toBe(false)
   })
+
+  it('acepta una instancia sin `luz` (mapa sin lightmap)', () => {
+    expect(esPropsMapaJson({ ...valido, instancias: [{ modelo: 0, pos: [0, 0, 0], quat: [0, 0, 0, 1] }] })).toBe(true)
+  })
+
+  it('acepta una instancia con `luz` bien formada', () => {
+    expect(
+      esPropsMapaJson({
+        ...valido,
+        instancias: [{ modelo: 0, pos: [0, 0, 0], quat: [0, 0, 0, 1], luz: [0.3, 0.28, 0.19] }],
+      }),
+    ).toBe(true)
+  })
+
+  it('rechaza una `luz` mal formada en vez de pintar el prop de negro', () => {
+    // Un array de dos componentes o con un NaN adentro llega hasta
+    // `setRGB` sin que nada falle, y el prop sale negro o transparente.
+    for (const luz of [[0.3, 0.2], [0.3, 0.2, NaN], 0.5, 'gris']) {
+      expect(
+        esPropsMapaJson({ ...valido, instancias: [{ modelo: 0, pos: [0, 0, 0], quat: [0, 0, 0, 1], luz }] }),
+      ).toBe(false)
+    }
+  })
 })
 
 describe('construirProps', () => {
@@ -165,7 +189,7 @@ describe('construirProps', () => {
         { modelo: 0, pos: [9, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
       ],
     }
-    const malla = instanciados(construirProps([modeloConMallas(1)], props))
+    const malla = instanciados(construirProps([modeloConMallas(1)], props, true))
     // Tres props, un solo draw call.
     expect(malla).toHaveLength(1)
     expect(malla[0].count).toBe(3)
@@ -179,7 +203,7 @@ describe('construirProps', () => {
         { modelo: 0, pos: [-4, 5, -6] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
       ],
     }
-    const malla = instanciados(construirProps([modeloConMallas(1)], props))[0]
+    const malla = instanciados(construirProps([modeloConMallas(1)], props, true))[0]
     const m = new Matrix4()
     const p = new Vector3()
 
@@ -200,7 +224,7 @@ describe('construirProps', () => {
         { modelo: 0, pos: [0, 0, 0] as [number, number, number], quat: [0, 1, 0, 0] as [number, number, number, number] },
       ],
     }
-    const malla = instanciados(construirProps([modeloConMallas(1)], props))[0]
+    const malla = instanciados(construirProps([modeloConMallas(1)], props, true))[0]
     const m = new Matrix4()
     malla.getMatrixAt(0, m)
     const eje = new Vector3(1, 0, 0).applyMatrix4(m)
@@ -217,7 +241,7 @@ describe('construirProps', () => {
         { modelo: 0, pos: [0, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
       ],
     }
-    const malla = instanciados(construirProps([raiz], props))[0]
+    const malla = instanciados(construirProps([raiz], props, true))[0]
     // Un MeshStandardMaterial sin luces se dibuja NEGRO: el prop existe,
     // está en su lugar, y es una silueta.
     expect(malla.material).toBeInstanceOf(MeshBasicMaterial)
@@ -231,7 +255,7 @@ describe('construirProps', () => {
         { modelo: 0, pos: [0, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
       ],
     }
-    expect(instanciados(construirProps([modeloConMallas(3)], props))).toHaveLength(3)
+    expect(instanciados(construirProps([modeloConMallas(3)], props, true))).toHaveLength(3)
   })
 
   it('compone la transformación INTERNA del GLB con la del prop', () => {
@@ -252,13 +276,66 @@ describe('construirProps', () => {
         { modelo: 0, pos: [1, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
       ],
     }
-    const malla = instanciados(construirProps([raiz], props))[0]
+    const malla = instanciados(construirProps([raiz], props, true))[0]
     const m = new Matrix4()
     malla.getMatrixAt(0, m)
     const p = new Vector3().setFromMatrixPosition(m)
     // 1 del prop en X, 10 del nodo interno en Y: las dos tienen que estar.
     expect(p.x).toBeCloseTo(1, 9)
     expect(p.y).toBeCloseTo(10, 9)
+  })
+
+  it('tinta cada instancia con SU luz, sin romper el instanciado', () => {
+    // El punto del tinte por instancia es que las tres cercas sigan siendo
+    // UN draw call. Si esto alguna vez se implementara clonando material
+    // por prop, este test seguiría pasando por color pero `malla` pasaría
+    // a tener 3 elementos.
+    const props = {
+      modelos: ['a.glb'],
+      instancias: [
+        { modelo: 0, pos: [0, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number], luz: [0.25, 0.5, 0.75] as [number, number, number] },
+        { modelo: 0, pos: [5, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number], luz: [1, 1, 1] as [number, number, number] },
+      ],
+    }
+    const malla = instanciados(construirProps([modeloConMallas(1)], props, true))
+    expect(malla).toHaveLength(1)
+    expect(malla[0].instanceColor).not.toBeNull()
+
+    const c = new Color()
+    malla[0].getColorAt(0, c)
+    // `setRGB`/`getColorAt` trabajan en espacio LINEAL: el valor tiene que
+    // volver tal cual se escribió. Si alguien lo pasara por sRGB, un 0.25
+    // volvería como ~0.53.
+    expect(c.r).toBeCloseTo(0.25, 6)
+    expect(c.g).toBeCloseTo(0.5, 6)
+    expect(c.b).toBeCloseTo(0.75, 6)
+
+    malla[0].getColorAt(1, c)
+    expect(c.r).toBeCloseTo(1, 6)
+  })
+
+  it('NO tinta cuando el lightmap no se aplicó', () => {
+    // Props tintados sobre paredes a albedo pleno es el mismo desajuste al
+    // revés: si el mapa se dibuja sin lightmap, los props van sin tinte.
+    const props = {
+      modelos: ['a.glb'],
+      instancias: [
+        { modelo: 0, pos: [0, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number], luz: [0.25, 0.5, 0.75] as [number, number, number] },
+      ],
+    }
+    const malla = instanciados(construirProps([modeloConMallas(1)], props, false))
+    expect(malla[0].instanceColor).toBeNull()
+  })
+
+  it('deja sin tinte las instancias que no traen `luz`', () => {
+    const props = {
+      modelos: ['a.glb'],
+      instancias: [
+        { modelo: 0, pos: [0, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+      ],
+    }
+    const malla = instanciados(construirProps([modeloConMallas(1)], props, true))
+    expect(malla[0].instanceColor).toBeNull()
   })
 
   it('ignora una instancia cuyo modelo no se pudo cargar, sin romper el resto', () => {
@@ -269,7 +346,7 @@ describe('construirProps', () => {
         { modelo: 0, pos: [3, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
       ],
     }
-    const malla = instanciados(construirProps([modeloConMallas(1)], props))
+    const malla = instanciados(construirProps([modeloConMallas(1)], props, true))
     expect(malla).toHaveLength(1)
     expect(malla[0].count).toBe(1)
   })
