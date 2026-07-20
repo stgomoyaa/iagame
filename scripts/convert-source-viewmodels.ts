@@ -51,9 +51,11 @@ import { type Document, NodeIO } from '@gltf-transform/core'
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions'
 import { dedup, prune } from '@gltf-transform/functions'
 import { mergeIndex, type IndexEntry } from './lib/merge-index.ts'
-import { decodePng } from './lib/png-reader.ts'
-import { encodePngRaw, type RawImage, resizeArea, targetSide } from './lib/png-writer.ts'
-import { analizarMascaraPhong, construirMetalRough, descartarAlfa } from './lib/source-pbr.ts'
+import {
+  MAX_LADO_CUERPO,
+  prepararMaterialesPbr,
+  verificarAtributosPbr,
+} from './lib/pbr-doc.ts'
 import { detectSightLine, type SightType } from './lib/sight.ts'
 import {
   SOURCE_WEAPONS,
@@ -171,17 +173,6 @@ function countTriangles(doc: Document, meshName?: string): number {
 }
 
 /**
- * Lado máximo de la textura del CUERPO del arma.
- *
- * Los `v_` de CS vienen en 2048x2048. A la distancia a la que se ve un
- * viewmodel —el arma ocupa cerca de un tercio de la pantalla y nunca se
- * acerca más— 1024 no se distingue de 2048, y el archivo pasa de 7.5 MB a
- * poco más de 1 MB. La textura sigue siendo el grueso del GLB, así que este
- * número es el que manda en el tiempo de carga de un arma.
- */
-const MAX_LADO_CUERPO = 1024
-
-/**
  * Lado máximo de las texturas de los BRAZOS.
  *
  * La mitad que el cuerpo porque los brazos ocupan menos pantalla, están casi
@@ -191,182 +182,6 @@ const MAX_LADO_CUERPO = 1024
  */
 const MAX_LADO_BRAZOS = 512
 
-/** Rugosidad de un material sin máscara de phong utilizable. */
-const RUGOSIDAD_SIN_MASCARA = 0.75
-
-export interface EstadisticasTexturas {
-  /** Texturas reescaladas y reescritas. */
-  procesadas: number
-  /** Materiales que recibieron un mapa metallic-roughness derivado del alfa. */
-  conMascara: number
-  /** Bytes de imagen después de procesar. */
-  bytes: number
-}
-
-/**
- * Conserva UVs, normales y texturas, y traduce el material de Source a
- * metallic-roughness de glTF.
- *
- * Es el reemplazo del horneado a `COLOR_0` que hacía este script antes. Aquel
- * horneado nació cuando el presupuesto de 2.5 ms mandaba y se buscaba una sola
- * llamada de dibujo por arma; el costo escondido era que dejaba el arma SIN
- * NORMALES y sin UVs, y sin normales no hay iluminación posible: por más luces
- * que se le pongan a la escena, un material sin normales devuelve color plano.
- * De ahí el "parece Roblox".
- *
- * Lo que hace ahora, por material:
- *
- * 1. Reescala la textura base a `maxLado` y le SACA el alfa.
- * 2. Si ese alfa era una máscara de phong (ver `lib/source-pbr.ts`), la
- *    convierte en un mapa metallic-roughness. Eso es lo que hace que el
- *    cerrojo brille y la culata no.
- * 3. Si no lo era —guantes, piel—, deja factores constantes mate.
- *
- * Lo que NO hace y antes sí: tocar `COLOR_0`, `TEXCOORD_0` ni `NORMAL`. Los
- * tres se conservan tal como vinieron de Blender.
- *
- * Se mantiene un material por PRIMITIVA en vez de colapsar a uno por malla:
- * ahora cada uno lleva su propia textura, así que fusionarlos perdería
- * exactamente la información que este cambio vino a rescatar. El cuerpo del
- * arma sigue siendo una sola primitiva con un solo material, que es lo que
- * `skins/material.ts` necesita para que el camuflaje caiga en el arma y no en
- * los guantes.
- */
-function prepararMaterialesPbr(doc: Document): EstadisticasTexturas {
-  const root = doc.getRoot()
-  const stats: EstadisticasTexturas = { procesadas: 0, conMascara: 0, bytes: 0 }
-
-  // Lado máximo por material, según la malla que lo usa. Se resuelve mirando
-  // qué primitiva lo referencia: un material del cuerpo va a 1024 y uno de los
-  // brazos a 512.
-  const ladoPorMaterial = new Map<string, number>()
-  for (const mesh of root.listMeshes()) {
-    const lado = mesh.getName() === NODE_ARMS ? MAX_LADO_BRAZOS : MAX_LADO_CUERPO
-    for (const prim of mesh.listPrimitives()) {
-      const material = prim.getMaterial()
-      if (material) ladoPorMaterial.set(material.getName(), lado)
-    }
-  }
-
-  // Una textura puede estar compartida por varios materiales; se reescribe una
-  // sola vez.
-  const yaProcesadas = new Set<unknown>()
-
-  const procesarImagen = (texture: ReturnType<Document['createTexture']>, lado: number, quitarAlfa: boolean): RawImage | null => {
-    const image = texture.getImage()
-    if (!image) return null
-    const png = decodePng(Buffer.from(image))
-    const original: RawImage = {
-      width: png.width,
-      height: png.height,
-      data: png.rgba,
-      channels: 4,
-    }
-    // El lado objetivo se calcula sobre el lado MAYOR y se aplica a los dos
-    // ejes por separado, para no deformar texturas que no son cuadradas (la
-    // piel de los brazos es 1024x2048).
-    const mayor = Math.max(original.width, original.height)
-    const destino = targetSide(mayor, lado)
-    const factor = destino / mayor
-    const escalada = resizeArea(
-      original,
-      Math.max(1, Math.round(original.width * factor)),
-      Math.max(1, Math.round(original.height * factor)),
-    )
-
-    if (!yaProcesadas.has(texture)) {
-      const final = quitarAlfa ? descartarAlfa(escalada) : escalada
-      const bytes = encodePngRaw(final)
-      texture.setImage(bytes).setMimeType('image/png')
-      yaProcesadas.add(texture)
-      stats.procesadas++
-      stats.bytes += bytes.length
-    }
-    return escalada
-  }
-
-  for (const material of root.listMaterials()) {
-    const lado = ladoPorMaterial.get(material.getName()) ?? MAX_LADO_CUERPO
-
-    const normal = material.getNormalTexture()
-    if (normal) procesarImagen(normal, lado, true)
-
-    const base = material.getBaseColorTexture()
-    if (!base) {
-      material.setMetallicFactor(0).setRoughnessFactor(RUGOSIDAD_SIN_MASCARA)
-      continue
-    }
-
-    // El análisis de la máscara va sobre la textura YA reescalada: es la que
-    // se va a muestrear en el juego, y promediar por área puede achatar
-    // máscaras muy finas. Medir sobre la original diría que hay máscara donde
-    // después no la hay.
-    const escalada = procesarImagen(base, lado, true)
-    if (!escalada) {
-      material.setMetallicFactor(0).setRoughnessFactor(RUGOSIDAD_SIN_MASCARA)
-      continue
-    }
-
-    const mascara = analizarMascaraPhong(escalada.data)
-    if (!mascara.usable) {
-      material.setMetallicFactor(0).setRoughnessFactor(RUGOSIDAD_SIN_MASCARA)
-      continue
-    }
-
-    // El mapa metallic-roughness va a la MITAD del lado de la base. La
-    // rugosidad de un arma es una señal de baja frecuencia —"esta pieza es
-    // acero, esta otra es polímero"— y sus bordes coinciden con bordes de
-    // geometría que la normal ya define con nitidez. A resolución completa
-    // pesaba tanto como el albedo sin aportar nada visible.
-    const mrCompleto = construirMetalRough(escalada)
-    const mr = resizeArea(
-      mrCompleto,
-      Math.max(1, mrCompleto.width >> 1),
-      Math.max(1, mrCompleto.height >> 1),
-    )
-    const textura = doc
-      .createTexture(`${material.getName()}_mr`)
-      .setImage(encodePngRaw(mr))
-      .setMimeType('image/png')
-    stats.bytes += (textura.getImage()?.byteLength ?? 0)
-    // Factores en 1: los valores salen ENTEROS de la textura. glTF multiplica
-    // factor por textura, así que un factor en 0 —el default de este material
-    // tras venir de Blender— anularía el mapa entero y dejaría el arma mate,
-    // que es el bug silencioso de este bloque.
-    material
-      .setMetallicRoughnessTexture(textura)
-      .setMetallicFactor(1)
-      .setRoughnessFactor(1)
-      .setAlphaMode('OPAQUE')
-    stats.conMascara++
-  }
-
-  return stats
-}
-
-/**
- * Verifica que las mallas conserven lo que la iluminación necesita.
- *
- * Va aparte y corre DESPUÉS de `prune()` a propósito: `prune()` borra
- * atributos que considera sin usar, y un cambio de versión de la librería que
- * decidiera que las normales sobran dejaría las armas planas otra vez sin
- * ningún error. Ese es exactamente el modo de falla que este proyecto ya vivió
- * —el pipeline que tiraba las normales en silencio— y no se vuelve a dejar
- * abierto.
- */
-function verificarAtributosPbr(doc: Document): void {
-  for (const mesh of doc.getRoot().listMeshes()) {
-    for (const prim of mesh.listPrimitives()) {
-      const material = prim.getMaterial()
-      if (!prim.getAttribute('NORMAL')) {
-        throw new Error(`la malla "${mesh.getName()}" quedó sin NORMAL: se vería sin iluminación`)
-      }
-      if (material?.getBaseColorTexture() && !prim.getAttribute('TEXCOORD_0')) {
-        throw new Error(`la malla "${mesh.getName()}" tiene textura pero quedó sin TEXCOORD_0`)
-      }
-    }
-  }
-}
 
 /**
  * Borra los nodos que SourceIO deja sueltos y que no aportan nada al runtime.
@@ -432,7 +247,9 @@ async function convertOne(
   // punto 1 del encabezado.
   await doc.transform(dedup())
   pruneLooseNodes(doc)
-  prepararMaterialesPbr(doc)
+  // Los brazos van a media resolución; el cuerpo al lado por defecto. Es lo
+  // único que este pipeline necesita decidir sobre las texturas.
+  prepararMaterialesPbr(doc, (malla) => (malla === NODE_ARMS ? MAX_LADO_BRAZOS : MAX_LADO_CUERPO))
   // Sin `unlit()`: marcar el material como KHR_materials_unlit es justamente
   // lo que le decía al runtime "este arma no se ilumina". Ahora sí se ilumina.
   // `prune()` se conserva —limpia accessors y nodos que quedaron sueltos— y

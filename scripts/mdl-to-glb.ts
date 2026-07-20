@@ -28,6 +28,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, extname, join, resolve } from 'node:path'
+import { chooseBodygroupModels, readBodyparts } from './lib/mdl-bodyparts.ts'
 
 const BLENDER = '/Applications/Blender.app/Contents/MacOS/Blender'
 const SCRIPT_MUNDO = resolve(import.meta.dirname, 'blender/mdl-to-glb.py')
@@ -99,13 +100,18 @@ export function buscarModelosDeMundo(raiz: string): string[] {
 /**
  * `.../rif_ak47/w_ak47.mdl` -> `ak47`, `.../rif_ak47/v_ak47.mdl` -> `ak47`.
  *
- * Los dos prefijos colapsan al MISMO slug a propósito: son el mismo arma vista
- * de dos maneras, y el resto del juego (catálogo, arquetipos, nombres,
- * skins) la identifica por ese slug único. Es lo que permite que cambiar de
- * pipeline `w_` a `v_` no toque ni una fila del registry.
+ * Los prefijos `w_` y `v_` colapsan al MISMO slug a propósito: son el mismo
+ * arma vista de dos maneras, y el resto del juego (catálogo, arquetipos,
+ * nombres, skins) la identifica por ese slug único. Es lo que permite que
+ * cambiar de pipeline `w_` a `v_` no toque ni una fila del registry.
+ *
+ * `c_` (los modelos de COD, ver `--cod`) se pela igual, pero ahí NO hay
+ * colisión que temer: esos archivos ya vienen con el juego adentro del nombre
+ * (`c_cod4_ak47.mdl` -> `cod4_ak47`), así que el AK-47 de COD y el `ak47` de
+ * CS conviven como dos slugs distintos sin que haya que renombrar nada.
  */
 export function nombreDeSalida(rutaMdl: string): string {
-  return basename(rutaMdl, '.mdl').replace(/^[wv]_/, '')
+  return basename(rutaMdl, '.mdl').replace(/^[wvc]_/, '')
 }
 
 /**
@@ -130,7 +136,16 @@ function main(): void {
 
   const [dirAddon, dirSalida] = posicionales
   const viewmodel = args.includes('--viewmodel')
-  const prefijo = viewmodel ? 'v_' : 'w_'
+  // `--cod` son los `c_*.mdl` del pack de ARC9. Usan el MISMO script de
+  // Blender que los `w_` (malla sola, sin esqueleto): lo único que cambia es
+  // el prefijo y que hay que elegir bodygroups, porque estos modelos traen
+  // varias variantes de cada pieza encimadas. Ver `keepPorTrabajo`.
+  const cod = args.includes('--cod')
+  if (viewmodel && cod) {
+    console.error('--viewmodel y --cod son excluyentes')
+    process.exit(2)
+  }
+  const prefijo = viewmodel ? 'v_' : cod ? 'c_' : 'w_'
   const script = viewmodel ? SCRIPT_VIEWMODEL : SCRIPT_MUNDO
   const solo = valorDeFlag(args, '--solo')?.split(',').map((s) => s.trim())
   const limite = Number(valorDeFlag(args, '--limite') ?? Infinity)
@@ -152,6 +167,10 @@ function main(): void {
   const trabajos = modelos.map((mdl) => ({
     mdl: resolve(mdl),
     out: resolve(join(dirSalida, `${nombreDeSalida(mdl)}.glb`)),
+    // Sólo los `c_` lo necesitan. Los `w_` de CS traen una pieza por
+    // bodygroup y el filtro no tendría nada que hacer, así que ni se manda:
+    // `keep` ausente deja el filtro apagado del lado de Blender.
+    ...(cod ? { keep: chooseBodygroupModels(readBodyparts(resolve(mdl))) } : {}),
   }))
 
   const archivoTrabajos = join(mkdtempSync(join(tmpdir(), 'mdl2glb-')), 'trabajos.json')
