@@ -522,6 +522,10 @@ export function createGame(
   // subida: startReload() es idempotente y no avisa si arrancó una nueva,
   // así que el sonido se dispara mirando la transición de vmState.reloading.
   let recargando = false
+  // Flanco del draw, para lanzar el clip importado de sacar el arma una sola
+  // vez. Mismo patrón que `recargando`: `startDraw` es idempotente y no avisa
+  // si arrancó uno nuevo, así que el disparador se cuelga de la transición.
+  let dibujando = false
   let tiempoVfxS = 0
 
   // Scratch preasignado para proyectar el punto de impacto a pantalla
@@ -567,6 +571,7 @@ export function createGame(
   const vmState = createViewmodelState()
   const vmInput: ViewmodelInput = {
     speed: 0, grounded: false, ads: false, mouseDeltaX: 0, mouseDeltaY: 0,
+    clipDriven: false,
   }
   const vmOut: VmTransform = { px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0 }
   // Pose del cargador durante la recarga. Preasignada por el mismo motivo que
@@ -1134,8 +1139,16 @@ export function createGame(
       // avisa si arrancó una nueva, así que el sonido se cuelga de la
       // transición false -> true. Sin esto, con R sostenida el sample se
       // relanzaría en cada frame.
-      if (vmState.reloading && !recargando) weaponAudio.playReload(archetype.class)
+      if (vmState.reloading && !recargando) {
+        weaponAudio.playReload(archetype.class)
+        // La recarga de CS se estira o comprime al `reloadTime` del arma para
+        // que la animación y el estado de juego terminen juntos (ver playClip).
+        viewmodel.playClip('reload', vmState.reloadTime)
+      }
       recargando = vmState.reloading
+
+      if (vmState.drawing && !dibujando) viewmodel.playClip('draw', vmState.drawTime)
+      dibujando = vmState.drawing
 
       finalPitch = cameraPitch(combatState, input.pitch)
       finalYaw = cameraYaw(combatState, input.player.yaw)
@@ -1398,6 +1411,12 @@ export function createGame(
       vmInput.ads = input.adsHeld || debugAdsHeld
       vmInput.mouseDeltaX = mouseDeltaX
       vmInput.mouseDeltaY = mouseDeltaY
+      // La fuente de verdad es el renderer, no el índice: lo decide por lo que
+      // encontró adentro del .glb que efectivamente cargó (ver `animated` en
+      // viewmodel/renderer.ts). Mientras el arma todavía se está bajando esto
+      // es false y corre la coreografía procedural, que es el comportamiento
+      // correcto para ese frame: el modelo animado todavía no está en pantalla.
+      vmInput.clipDriven = viewmodel.animated
 
       profiler.begin('viewmodel')
       stepViewmodel(vmState, vmInput, rigWeapon, vmOut, dt)
@@ -1435,6 +1454,11 @@ export function createGame(
       // now/1000: el reloj de las animaciones de skin (pulso, flujo, ciclo
       // de tono). Se pasa el timestamp del rAF en vez de acumular un
       // contador propio para no sumar estado que se pueda desincronizar.
+      // El mezclador escribe HUESOS; el bloque de arriba escribió el GRUPO que
+      // los contiene. Van en este orden por claridad, no por dependencia: son
+      // dos espacios distintos y por eso ninguno pisa al otro.
+      viewmodel.advanceAnimation(dt)
+
       profiler.begin('render')
       viewmodel.render(gfx.camera, now / 1000)
       profiler.end('render')

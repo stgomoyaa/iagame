@@ -20,6 +20,25 @@ export interface ViewmodelInput {
   mouseDeltaX: number
   /** Delta de mouse de este frame, vertical. */
   mouseDeltaY: number
+  /**
+   * El arma equipada reproduce las animaciones IMPORTADAS de Counter-Strike
+   * (recarga, draw) en vez de la coreografía procedural de este archivo.
+   *
+   * Cuando es true se apagan las capas 5 y 6 —recarga y draw— y NADA MÁS. Las
+   * otras cuatro (base/ADS, bob, sway, kick) siguen corriendo igual, y eso es
+   * deliberado: no son imitaciones de algo que el clip ya trae, son respuestas
+   * a la entrada del jugador que ninguna animación grabada puede tener (el
+   * sway depende de cómo movés el mouse ESTE frame, el bob de tu velocidad, el
+   * ADS de si estás apuntando). Apagarlas también dejaría el arma rígida.
+   *
+   * Las dos familias no se pisan porque escriben en espacios distintos: el
+   * clip mueve HUESOS dentro del modelo, estas capas mueven el GRUPO que
+   * contiene al modelo entero. Es la misma razón por la que hay que apagar
+   * justamente estas dos y no las otras — la recarga procedural mueve el grupo
+   * para SIMULAR lo que el clip hace con los huesos, así que sumadas se ve el
+   * gesto dos veces.
+   */
+  clipDriven: boolean
 }
 
 export interface ViewmodelState {
@@ -356,38 +375,46 @@ export function stepViewmodel(
     // Las formas salen de viewmodel/reload.ts, que las define como funciones
     // PURAS de `frac`. Ese archivo explica el porqué de cada una; acá sólo se
     // eligen los ejes sobre los que se aplican.
-    const reloadShape = reloadEnvelope(frac)
+    // El estado de la recarga (reloadT, los flags de evento, cuándo termina)
+    // se lleva IGUAL con clip importado que sin él: de ahí salen los eventos
+    // de audio y la fracción que consume el HUD, y ésos no dependen de quién
+    // dibuja el gesto. Lo único que se saltea es escribir la POSE.
+    if (!input.clipDriven) {
+      const reloadShape = reloadEnvelope(frac)
 
-    // Fase A/B/C: baja, inclina y —lo que hace que se lea como recarga y no
-    // como agachón— ROLA el arma para mostrar el pozo del cargador.
-    out.py -= VIEWMODEL.reloadDrop * reloadShape
-    out.px -= VIEWMODEL.reloadPullIn * reloadShape
-    out.rx += VIEWMODEL.reloadTilt * reloadShape
-    out.rz += VIEWMODEL.reloadRoll * reloadShape
-    out.ry += VIEWMODEL.reloadYaw * reloadShape
+      // Fase A/B/C: baja, inclina y —lo que hace que se lea como recarga y no
+      // como agachón— ROLA el arma para mostrar el pozo del cargador.
+      out.py -= VIEWMODEL.reloadDrop * reloadShape
+      out.px -= VIEWMODEL.reloadPullIn * reloadShape
+      out.rx += VIEWMODEL.reloadTilt * reloadShape
+      out.rz += VIEWMODEL.reloadRoll * reloadShape
+      out.ry += VIEWMODEL.reloadYaw * reloadShape
 
-    // Acento en magOut: el arma se sacude hacia abajo cuando el cargador se
-    // arranca. Acento en magIn: salta hacia arriba con la palmada que lo
-    // encaja. Los dos caen exactamente en las fracciones que ya emitían los
-    // eventos, así que la animación y el evento son el mismo instante.
-    out.py -= VIEWMODEL.reloadYankAmount * yankShape(frac)
-    out.py += VIEWMODEL.reloadSlapAmount * slapShape(frac)
+      // Acento en magOut: el arma se sacude hacia abajo cuando el cargador se
+      // arranca. Acento en magIn: salta hacia arriba con la palmada que lo
+      // encaja. Los dos caen exactamente en las fracciones que ya emitían los
+      // eventos, así que la animación y el evento son el mismo instante.
+      out.py -= VIEWMODEL.reloadYankAmount * yankShape(frac)
+      out.py += VIEWMODEL.reloadSlapAmount * slapShape(frac)
 
-    // Manija de carga: el arma se va hacia atrás y vuelve. `pz` positivo es
-    // hacia el jugador (game.ts lo niega al escribir la posición), o sea que
-    // esto tira el arma hacia atrás, no hacia la escena.
-    const charge = chargeShape(frac)
-    out.pz += VIEWMODEL.reloadChargeAmount * charge
-    out.rx += VIEWMODEL.reloadChargeTilt * charge
+      // Manija de carga: el arma se va hacia atrás y vuelve. `pz` positivo es
+      // hacia el jugador (game.ts lo niega al escribir la posición), o sea que
+      // esto tira el arma hacia atrás, no hacia la escena.
+      const charge = chargeShape(frac)
+      out.pz += VIEWMODEL.reloadChargeAmount * charge
+      out.rx += VIEWMODEL.reloadChargeTilt * charge
+    }
 
     if (frac >= 1) state.reloading = false
   }
 
   // 6. draw: sube desde DRAW_DROP metros abajo hasta cero en drawTime.
+  // Con clip importado el gesto de sacar el arma también viene animado, así
+  // que sólo se lleva el tiempo y no se escribe la pose.
   if (state.drawing) {
     state.drawT += dt
     const f = clamp01(state.drawT / state.drawTime)
-    out.py -= VIEWMODEL.drawDrop * (1 - easeOutCubic(f))
+    if (!input.clipDriven) out.py -= VIEWMODEL.drawDrop * (1 - easeOutCubic(f))
     if (f >= 1) state.drawing = false
   }
 }

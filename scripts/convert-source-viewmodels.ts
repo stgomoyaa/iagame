@@ -1,0 +1,440 @@
+/**
+ * Ingesta de los VIEWMODELS de Source: GLB con esqueleto, brazos y animaciones
+ * -> GLB normalizado que el viewmodel del juego puede reproducir.
+ *
+ *   node scripts/convert-source-viewmodels.ts <dir_entrada> <dir_salida> [--force]
+ *
+ * Es el hermano de `convert-source-weapons.ts`, que hace lo mismo con los
+ * modelos de MUNDO (`w_`). Comparte con él la idea central —hornear el color
+ * de la textura en `COLOR_0` y tirar las texturas— y se aparta en tres cosas,
+ * todas forzadas por el hecho de que acá la malla está SKINNEADA:
+ *
+ * 1. **No se normaliza la geometría con una matriz.** El pipeline `w_` mide el
+ *    bounding box, arma una matriz de rotación + escala + centrado y la aplica
+ *    a los vértices (`transformMesh`). Eso acá sería un bug silencioso: mover
+ *    los vértices de una malla skinneada sin mover también las matrices de
+ *    bind inversas del skin deja la malla en un espacio y el esqueleto en
+ *    otro, y el resultado es un arma que explota en cuanto empieza a animar.
+ *
+ *    No hace falta, además. El `v_` de Source ya viene POSADO en espacio de
+ *    vista: el hueso raíz está en el ojo del jugador y el arma cuelga de él
+ *    exactamente donde CS la muestra. Toda la "normalización" que necesita es
+ *    una rotación de ejes constante, y esa vive en el runtime
+ *    (`VIEWMODEL_ROTATION` en viewmodel/renderer.ts), aplicada al nodo padre
+ *    —que sí puede rotarse sin tocar el skin, porque rota esqueleto y malla
+ *    juntos.
+ *
+ * 2. **No se fusionan mallas (`join`).** `join()` de gltf-transform no toca
+ *    mallas skinneadas, y forzarlo tampoco sería deseable: cuerpo y brazos
+ *    tienen que quedar SEPARADOS para que el camuflaje pinte el arma y no los
+ *    guantes (ver `weapon_arms` en blender/vmdl-to-glb.py). Lo que sí se hace
+ *    es colapsar los materiales de cada parte a uno solo después de hornear el
+ *    color, que es de donde salía la mayor parte del ahorro de draw calls.
+ *
+ * 3. **Se conservan las animaciones y el skin**, obviamente, y se registran en
+ *    el índice: el runtime necesita saber qué clips existen y cuánto duran
+ *    para decidir a qué velocidad reproducirlos contra el `reloadTime` que ya
+ *    tienen las estadísticas del arma.
+ *
+ * El resultado se escribe con los MISMOS slugs que produce el pipeline `w_`
+ * (`ak47.glb`, `awp.glb`, ...), porque son la misma arma vista de dos maneras.
+ * Eso es lo que permite cambiar de una familia de modelos a la otra sin tocar
+ * el registry, el catálogo, los arquetipos ni los nombres.
+ *
+ * IMPORTANTE: contenido del Workshop, local, nunca se publica. Ver
+ * `docs/WORKSHOP.md`.
+ */
+
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
+import { type Document, NodeIO } from '@gltf-transform/core'
+import { KHRMaterialsUnlit } from '@gltf-transform/extensions'
+import { dedup, prune, unlit } from '@gltf-transform/functions'
+import { mergeIndex, type IndexEntry } from './lib/merge-index.ts'
+import { decodePng, samplePngRgb, type DecodedPng } from './lib/png-reader.ts'
+import { detectSightLine, type SightType } from './lib/sight.ts'
+import {
+  SOURCE_WEAPONS,
+  sourceWeaponDisplayName,
+  type SourceWeaponEntry,
+} from '../src/game/weapons/source-catalog.ts'
+
+/**
+ * Nombres de las dos partes, escritos por `blender/vmdl-to-glb.py`. Son el
+ * contrato con `viewmodel/renderer.ts`: el camuflaje se le engancha SÓLO al
+ * cuerpo, y esa decisión se toma comparando contra esta constante.
+ */
+const NODE_BODY = 'weapon_body'
+const NODE_ARMS = 'weapon_arms'
+
+/** Clips canónicos que puede traer un viewmodel. Los escribe el script de
+ *  Blender; acá sólo se leen para el índice. */
+export type ViewmodelClip = 'reload' | 'draw' | 'idle' | 'fire'
+
+export interface ViewmodelClipInfo {
+  name: ViewmodelClip
+  /** Segundos a velocidad nativa. El runtime lo compara con `reloadTime`. */
+  duration: number
+}
+
+export interface ViewmodelIndexEntry extends IndexEntry {
+  name: string
+  sightHeight: number
+  sightLateral: number
+  sightType: SightType
+  sightConfidence: number
+  /**
+   * Marca que este `.glb` es un viewmodel de Source: trae esqueleto, brazos y
+   * clips importados, y el runtime tiene que reproducirlos en vez de correr la
+   * coreografía procedural de recarga.
+   *
+   * Es un campo del índice y no una inferencia del GLB por una razón concreta:
+   * `seed.ts` calcula las poses de cadera y mira ANTES de que ningún GLB se
+   * haya bajado (arma las 79 entradas al cargar el índice), así que necesita
+   * saberlo sin abrir el archivo. El renderer, que sí tiene el GLB en la mano,
+   * decide por lo que encuentra adentro; los dos coinciden y ninguno depende
+   * del otro.
+   */
+  viewmodel: true
+  /** Clips que trae, con su duración nativa. */
+  clips: ViewmodelClipInfo[]
+  /** Huesos del esqueleto. Métrica de costo, no la usa el runtime. */
+  bones: number
+  /** Triángulos de los brazos, incluidos en `triangles`. */
+  armTriangles: number
+}
+
+/** sRGB -> lineal. Mismo motivo que en convert-source-weapons.ts: `COLOR_0`
+ *  vive en espacio lineal y copiar los bytes del PNG deja todo lavado. */
+function srgbToLinear(c: number): number {
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+}
+
+/**
+ * Posiciones de las primitivas de una malla concreta.
+ *
+ * A diferencia del pipeline `w_`, que junta TODO el documento, acá interesa
+ * por parte: el bounding box que se guarda en el índice y la línea de
+ * puntería tienen que medirse sobre el ARMA, no sobre el arma más dos brazos
+ * que la envuelven. Con los brazos adentro, el "punto más alto del modelo"
+ * —que es como `detectSightLine` encuentra el alza— sería un nudillo.
+ */
+function positionsOfMesh(doc: Document, meshName: string): Float32Array {
+  const chunks: Float32Array[] = []
+  let total = 0
+  for (const mesh of doc.getRoot().listMeshes()) {
+    if (mesh.getName() !== meshName) continue
+    for (const prim of mesh.listPrimitives()) {
+      const pos = prim.getAttribute('POSITION')
+      const arr = pos?.getArray()
+      if (!arr) continue
+      const f32 = arr instanceof Float32Array ? arr : Float32Array.from(arr)
+      chunks.push(f32)
+      total += f32.length
+    }
+  }
+  const out = new Float32Array(total)
+  let off = 0
+  for (const c of chunks) {
+    out.set(c, off)
+    off += c.length
+  }
+  return out
+}
+
+function boundsOfPositions(positions: Float32Array): { min: number[]; max: number[] } {
+  const min = [Infinity, Infinity, Infinity]
+  const max = [-Infinity, -Infinity, -Infinity]
+  for (let i = 0; i < positions.length; i += 3) {
+    for (let k = 0; k < 3; k++) {
+      const v = positions[i + k]
+      if (v < min[k]) min[k] = v
+      if (v > max[k]) max[k] = v
+    }
+  }
+  return { min, max }
+}
+
+function countTriangles(doc: Document, meshName?: string): number {
+  let tris = 0
+  for (const mesh of doc.getRoot().listMeshes()) {
+    if (meshName !== undefined && mesh.getName() !== meshName) continue
+    for (const prim of mesh.listPrimitives()) {
+      const indices = prim.getIndices()
+      const pos = prim.getAttribute('POSITION')
+      const count = indices ? indices.getCount() : pos ? pos.getCount() : 0
+      tris += Math.floor(count / 3)
+    }
+  }
+  return tris
+}
+
+/**
+ * Hornea el color de textura en `COLOR_0` por vértice, y deja UN material por
+ * MALLA (no uno para todo el documento, como hace el pipeline `w_`).
+ *
+ * Uno por malla y no uno global porque cuerpo y brazos tienen que poder llevar
+ * materiales distintos en Three: `skins/material.ts` parcha el shader del
+ * material de la malla del arma, y si el material fuera compartido con los
+ * brazos, el camuflaje aparecería también en los guantes. Un material por
+ * malla es la separación mínima que garantiza que eso no pase.
+ */
+function bakeTextureToVertexColors(doc: Document): void {
+  const root = doc.getRoot()
+  const buffer = root.listBuffers()[0]
+  const decoded = new Map<string, DecodedPng>()
+
+  for (const mesh of root.listMeshes()) {
+    const baked = doc.createMaterial(`baked_${mesh.getName()}`).setBaseColorFactor([1, 1, 1, 1])
+    for (const prim of mesh.listPrimitives()) {
+      const position = prim.getAttribute('POSITION')
+      if (!position) continue
+      const count = position.getCount()
+      const colors = new Float32Array(count * 3)
+
+      const material = prim.getMaterial()
+      const texture = material?.getBaseColorTexture() ?? null
+      const uv = prim.getAttribute('TEXCOORD_0')
+      const image = texture?.getImage() ?? null
+
+      if (texture && image && uv) {
+        const key = texture.getName() || String(texture.listParents().length)
+        let png = decoded.get(key)
+        if (!png) {
+          png = decodePng(Buffer.from(image))
+          decoded.set(key, png)
+        }
+        for (let i = 0; i < count; i++) {
+          const u = uv.getElement(i, [0, 0])
+          const c = samplePngRgb(png, u[0], u[1])
+          colors[i * 3] = srgbToLinear(c.r)
+          colors[i * 3 + 1] = srgbToLinear(c.g)
+          colors[i * 3 + 2] = srgbToLinear(c.b)
+        }
+      } else {
+        const factor = material ? material.getBaseColorFactor() : [1, 1, 1, 1]
+        for (let i = 0; i < count; i++) {
+          colors[i * 3] = factor[0]
+          colors[i * 3 + 1] = factor[1]
+          colors[i * 3 + 2] = factor[2]
+        }
+      }
+
+      const accessor = doc.createAccessor(undefined, buffer).setType('VEC3').setArray(colors)
+      prim.setAttribute('COLOR_0', accessor)
+      prim.setAttribute('TEXCOORD_0', null)
+      // Las normales tampoco se leen: el viewmodel se dibuja con
+      // MeshBasicMaterial, que no tiene iluminación. Tirarlas ahorra un tercio
+      // de los bytes de vértice de un modelo de 24 mil triángulos.
+      prim.setAttribute('NORMAL', null)
+      prim.setMaterial(baked)
+    }
+  }
+}
+
+/**
+ * Borra los nodos que SourceIO deja sueltos y que no aportan nada al runtime.
+ *
+ * El importador crea un empty por cada "attachment" del modelo (boca de fuego,
+ * eyector de casquillos, mira): en Source son puntos de anclaje para efectos,
+ * y llegan al glTF como nodos raíz con nombres numéricos (`1`, `2`) que
+ * ninguna malla ni ningún skin referencia. Se los deja afuera para que el
+ * runtime pueda tratar a la escena del GLB como "el arma y nada más".
+ *
+ * Se borra sólo lo que NO participa del skin ni tiene malla, así que un nodo
+ * que resulte ser un hueso —o el padre de uno— nunca entra acá.
+ */
+function pruneLooseNodes(doc: Document): number {
+  const usados = new Set<string>()
+  for (const skin of doc.getRoot().listSkins()) {
+    for (const joint of skin.listJoints()) usados.add(joint.getName())
+    const raiz = skin.getSkeleton()
+    if (raiz) usados.add(raiz.getName())
+  }
+
+  let borrados = 0
+  for (const scene of doc.getRoot().listScenes()) {
+    for (const node of scene.listChildren()) {
+      if (node.getMesh() !== null) continue
+      if (node.getSkin() !== null) continue
+      if (usados.has(node.getName())) continue
+      if (node.listChildren().length > 0) continue
+      node.dispose()
+      borrados++
+    }
+  }
+  return borrados
+}
+
+/** Clips presentes en el documento, con su duración real. */
+function readClips(doc: Document): ViewmodelClipInfo[] {
+  const validos: ViewmodelClip[] = ['reload', 'draw', 'idle', 'fire']
+  const clips: ViewmodelClipInfo[] = []
+  for (const anim of doc.getRoot().listAnimations()) {
+    const nombre = anim.getName() as ViewmodelClip
+    if (!validos.includes(nombre)) continue
+    let duracion = 0
+    for (const sampler of anim.listSamplers()) {
+      const input = sampler.getInput()
+      if (input) duracion = Math.max(duracion, input.getMax([0])[0])
+    }
+    clips.push({ name: nombre, duration: Number(duracion.toFixed(4)) })
+  }
+  return clips
+}
+
+async function convertOne(
+  io: NodeIO,
+  inPath: string,
+  outPath: string,
+  entry: SourceWeaponEntry,
+): Promise<ViewmodelIndexEntry> {
+  const doc = await io.read(inPath)
+
+  // dedup() sí es seguro con skins (fusiona accessors/materiales idénticos, no
+  // mueve vértices). flatten()/join()/weld()/transformMesh NO se usan: ver el
+  // punto 1 del encabezado.
+  await doc.transform(dedup())
+  pruneLooseNodes(doc)
+  bakeTextureToVertexColors(doc)
+  await doc.transform(unlit(), prune())
+
+  const bodyPositions = positionsOfMesh(doc, NODE_BODY)
+  if (bodyPositions.length === 0) throw new Error(`no hay malla "${NODE_BODY}" con vértices`)
+
+  const clips = readClips(doc)
+  if (!clips.some((c) => c.name === 'reload')) {
+    throw new Error('el GLB no trae clip de recarga')
+  }
+
+  const skin = doc.getRoot().listSkins()[0]
+  if (!skin) throw new Error('el GLB no trae skin: la animación no movería la malla')
+
+  const b = boundsOfPositions(bodyPositions)
+  // La línea de puntería se mide sobre el CUERPO en pose de reposo. Es el
+  // punto de partida para el ADS y hay que re-verificarlo mirando: el `v_`
+  // tiene otra geometría y otro punto de vista que el `w_`, así que el número
+  // medido acá no es intercambiable con el del otro pipeline.
+  const sight = detectSightLine(bodyPositions, entry.sight)
+
+  await io.write(outPath, doc)
+
+  const armTriangles = countTriangles(doc, NODE_ARMS)
+
+  return {
+    slug: entry.slug,
+    name: sourceWeaponDisplayName(entry),
+    triangles: countTriangles(doc),
+    armTriangles,
+    bones: skin.listJoints().length,
+    viewmodel: true,
+    clips,
+    bounds: {
+      min: [b.min[0], b.min[1], b.min[2]],
+      max: [b.max[0], b.max[1], b.max[2]],
+    },
+    muzzleConfidence: 1,
+    upAxisConfidence: 1,
+    needsManualReview: false,
+    sightHeight: Number(sight.height.toFixed(5)),
+    sightLateral: Number(sight.lateral.toFixed(5)),
+    sightType: entry.sight,
+    sightConfidence: Number(sight.confidence.toFixed(3)),
+  }
+}
+
+function readExistingIndex(outDir: string): ViewmodelIndexEntry[] {
+  const indexPath = join(outDir, 'index.json')
+  if (!existsSync(indexPath)) return []
+  try {
+    const raw: unknown = JSON.parse(readFileSync(indexPath, 'utf8'))
+    return Array.isArray(raw) ? (raw as ViewmodelIndexEntry[]) : []
+  } catch {
+    console.error(`no se pudo leer ${indexPath}, se lo trata como vacío`)
+    return []
+  }
+}
+
+function glbSlugsOnDisk(outDir: string): Set<string> {
+  return new Set(
+    readdirSync(outDir)
+      .filter((f) => f.endsWith('.glb'))
+      .map((f) => basename(f, '.glb')),
+  )
+}
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2)
+  const force = args.includes('--force')
+  const positional = args.filter((a) => !a.startsWith('--'))
+
+  if (positional.length < 2) {
+    console.error('uso: node scripts/convert-source-viewmodels.ts <dir_entrada> <dir_salida> [--force]')
+    process.exit(2)
+  }
+
+  const [inDir, outDir] = positional
+  if (!existsSync(inDir)) {
+    console.error(`el directorio de entrada no existe: ${inDir}`)
+    process.exit(2)
+  }
+  mkdirSync(outDir, { recursive: true })
+
+  const io = new NodeIO().registerExtensions([KHRMaterialsUnlit])
+  const entries: ViewmodelIndexEntry[] = []
+  const failures: Array<{ slug: string; error: string }> = []
+  let skipped = 0
+  let missing = 0
+
+  // Se recorre el CATÁLOGO y no el directorio, igual que el pipeline `w_`: un
+  // .glb sin fila no tiene nombre genérico ni arquetipo.
+  for (const entry of SOURCE_WEAPONS) {
+    const inPath = join(inDir, `${entry.slug}.glb`)
+    if (!existsSync(inPath)) {
+      missing++
+      continue
+    }
+
+    const outPath = join(outDir, `${entry.slug}.glb`)
+    if (!force && existsSync(outPath) && statSync(outPath).mtimeMs >= statSync(inPath).mtimeMs) {
+      skipped++
+      continue
+    }
+
+    try {
+      const result = await convertOne(io, inPath, outPath, entry)
+      entries.push(result)
+      const clips = result.clips.map((c) => `${c.name}:${c.duration}s`).join(' ')
+      console.log(
+        `ok    ${result.slug.padEnd(18)} ${String(result.triangles).padStart(6)} tris ` +
+          `(${result.armTriangles} brazos)  ${result.bones} huesos  ` +
+          `${(statSync(outPath).size / 1024).toFixed(0)}KB  ` +
+          `mira ${(result.sightHeight * 100).toFixed(1)}cm  ${clips}`,
+      )
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      failures.push({ slug: entry.slug, error: message.split('\n')[0] })
+      console.error(`FALLO ${entry.slug}: ${message.split('\n')[0]}`)
+    }
+  }
+
+  const existingIndex = readExistingIndex(outDir)
+  const merged = mergeIndex(existingIndex, entries, glbSlugsOnDisk(outDir)) as ViewmodelIndexEntry[]
+  if (merged.length > 0) {
+    writeFileSync(join(outDir, 'index.json'), `${JSON.stringify(merged, null, 2)}\n`)
+  }
+
+  console.log('')
+  console.log(`convertidas: ${entries.length}`)
+  console.log(`saltadas:    ${skipped}`)
+  console.log(`sin archivo: ${missing}`)
+  console.log(`fallidas:    ${failures.length}`)
+  console.log(`índice:      ${merged.length} entradas (antes ${existingIndex.length})`)
+
+  if (failures.length > 0) process.exit(1)
+}
+
+main().catch((err: unknown) => {
+  console.error(err)
+  process.exit(1)
+})

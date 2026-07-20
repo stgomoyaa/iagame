@@ -320,6 +320,10 @@ function parseLocalEntry(raw: unknown): WeaponIndexEntry | null {
     origin: 'local',
     ...(typeof e.sightHeight === 'number' ? { sightHeight: e.sightHeight } : {}),
     ...(typeof e.sightLateral === 'number' ? { sightLateral: e.sightLateral } : {}),
+    // Sólo el `true` explícito cuenta. Un índice viejo (sin el campo) describe
+    // modelos de mundo, y tratarlo como viewmodel les daría pose neutra a las
+    // 39 armas: todas amontonadas en el ojo del jugador.
+    ...(e.viewmodel === true ? { viewmodel: true } : {}),
   }
 }
 

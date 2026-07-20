@@ -2,14 +2,22 @@
  * Driver de conversión .mdl (Source/GMod) a GLB.
  *
  *   node scripts/mdl-to-glb.ts <dir_addon> <dir_salida> [--solo ak47,m4a1s] [--limite 5]
+ *   node scripts/mdl-to-glb.ts <dir_addon> <dir_salida> --viewmodel
  *
- * Levanta Blender UNA vez con `scripts/blender/mdl-to-glb.py` y le pasa todos
- * los trabajos juntos: arrancar Blender cuesta unos 5 segundos y no tiene
- * sentido pagarlo por archivo.
+ * Levanta Blender UNA vez con el script de Blender que corresponda y le pasa
+ * todos los trabajos juntos: arrancar Blender cuesta unos 5 segundos y no
+ * tiene sentido pagarlo por archivo.
  *
- * Convierte los modelos de mundo (`w_*.mdl`), no los viewmodels (`v_*.mdl`):
- * el `v_` trae brazos y rig de Source, y nuestro viewmodel ya anima por código.
- * El porqué completo está en el encabezado del script de Blender.
+ * Hay DOS modos, porque hay dos familias de modelo en el mismo pack y sirven
+ * para cosas distintas:
+ *
+ * - **Por defecto: modelos de MUNDO (`w_*.mdl`)** con `blender/mdl-to-glb.py`.
+ *   Sólo malla, sin esqueleto. Es lo que consume el rig procedural de seis
+ *   capas, y es el único camino que existe para las 40 armas CC0.
+ * - **`--viewmodel`: los VIEWMODELS (`v_*.mdl`)** con
+ *   `blender/vmdl-to-glb.py`. Traen esqueleto, brazos modelados y las
+ *   secuencias reales de CS (recarga, draw, disparo). Es lo que hace que la
+ *   recarga sea la del juego y no una imitación nuestra.
  *
  * IMPORTANTE: entrada y salida son contenido del Workshop. Viven en
  * `workshop-assets/`, que está gitignoreado, y hay un test que falla si alguno
@@ -22,7 +30,20 @@ import { tmpdir } from 'node:os'
 import { basename, extname, join, resolve } from 'node:path'
 
 const BLENDER = '/Applications/Blender.app/Contents/MacOS/Blender'
-const SCRIPT_BLENDER = resolve(import.meta.dirname, 'blender/mdl-to-glb.py')
+const SCRIPT_MUNDO = resolve(import.meta.dirname, 'blender/mdl-to-glb.py')
+const SCRIPT_VIEWMODEL = resolve(import.meta.dirname, 'blender/vmdl-to-glb.py')
+
+/** Un clip de animación importado del `v_`. Sólo en modo viewmodel. */
+export interface ClipImportado {
+  /** Nombre canónico: `reload`, `draw`, `idle` o `fire`. */
+  clip: string
+  /** Cómo se llamaba en el .mdl (`ak47_reload`, `start_reload`, ...). */
+  origen: string
+  frames: number
+  fps: number
+  /** Segundos que dura el clip a su fps nativo. */
+  duracion: number
+}
 
 export interface Resultado {
   mdl: string
@@ -31,16 +52,27 @@ export interface Resultado {
   tris?: number
   partes?: number
   /** El modelo traía el cargador como malla aparte y se preservó como
-   *  `weapon_mag`. Falso en revólveres y escopetas, que no tienen. */
+   *  `weapon_mag`. Falso en revólveres y escopetas, que no tienen.
+   *  Sólo en modo mundo: en el viewmodel el cargador es un HUESO, no una
+   *  malla, y lo mueve la animación importada. */
   cargador?: boolean
+  /** Modo viewmodel: el modelo trajo brazos modelados (`weapon_arms`). */
+  brazos?: boolean
+  huesos?: number
+  clips?: ClipImportado[]
+  tris_cuerpo?: number
+  tris_brazos?: number
   dims?: [number, number, number]
   texturas?: number
   bytes?: number
   error?: string
 }
 
-/** Busca recursivamente todos los `w_*.mdl` bajo `raiz`. */
-export function buscarModelosDeMundo(raiz: string): string[] {
+/**
+ * Busca recursivamente todos los `.mdl` con el prefijo dado bajo `raiz`.
+ * `w_` son los modelos de mundo, `v_` los viewmodels.
+ */
+export function buscarModelos(raiz: string, prefijo: string): string[] {
   const encontrados: string[] = []
   const pendientes = [raiz]
 
@@ -50,7 +82,7 @@ export function buscarModelosDeMundo(raiz: string): string[] {
       const ruta = join(dir, entrada.name)
       if (entrada.isDirectory()) {
         pendientes.push(ruta)
-      } else if (entrada.name.startsWith('w_') && extname(entrada.name) === '.mdl') {
+      } else if (entrada.name.startsWith(prefijo) && extname(entrada.name) === '.mdl') {
         encontrados.push(ruta)
       }
     }
@@ -59,9 +91,21 @@ export function buscarModelosDeMundo(raiz: string): string[] {
   return encontrados.sort()
 }
 
-/** `.../rif_ak47/w_ak47.mdl` -> `ak47` */
+/** Compatibilidad con el nombre viejo, que sólo sabía de modelos de mundo. */
+export function buscarModelosDeMundo(raiz: string): string[] {
+  return buscarModelos(raiz, 'w_')
+}
+
+/**
+ * `.../rif_ak47/w_ak47.mdl` -> `ak47`, `.../rif_ak47/v_ak47.mdl` -> `ak47`.
+ *
+ * Los dos prefijos colapsan al MISMO slug a propósito: son el mismo arma vista
+ * de dos maneras, y el resto del juego (catálogo, arquetipos, nombres,
+ * skins) la identifica por ese slug único. Es lo que permite que cambiar de
+ * pipeline `w_` a `v_` no toque ni una fila del registry.
+ */
 export function nombreDeSalida(rutaMdl: string): string {
-  return basename(rutaMdl, '.mdl').replace(/^w_/, '')
+  return basename(rutaMdl, '.mdl').replace(/^[wv]_/, '')
 }
 
 /**
@@ -85,6 +129,9 @@ function main(): void {
   }
 
   const [dirAddon, dirSalida] = posicionales
+  const viewmodel = args.includes('--viewmodel')
+  const prefijo = viewmodel ? 'v_' : 'w_'
+  const script = viewmodel ? SCRIPT_VIEWMODEL : SCRIPT_MUNDO
   const solo = valorDeFlag(args, '--solo')?.split(',').map((s) => s.trim())
   const limite = Number(valorDeFlag(args, '--limite') ?? Infinity)
 
@@ -93,12 +140,12 @@ function main(): void {
     process.exit(2)
   }
 
-  let modelos = buscarModelosDeMundo(dirAddon)
+  let modelos = buscarModelos(dirAddon, prefijo)
   if (solo) modelos = modelos.filter((m) => solo.includes(nombreDeSalida(m)))
   modelos = modelos.slice(0, limite)
 
   if (modelos.length === 0) {
-    console.error('ningún w_*.mdl coincide')
+    console.error(`ningún ${prefijo}*.mdl coincide`)
     process.exit(1)
   }
 
@@ -110,10 +157,10 @@ function main(): void {
   const archivoTrabajos = join(mkdtempSync(join(tmpdir(), 'mdl2glb-')), 'trabajos.json')
   writeFileSync(archivoTrabajos, JSON.stringify(trabajos))
 
-  console.log(`convirtiendo ${trabajos.length} modelos con Blender...`)
+  console.log(`convirtiendo ${trabajos.length} modelos con Blender (${prefijo})...`)
   const salida = execFileSync(
     BLENDER,
-    ['--background', '--python', SCRIPT_BLENDER, '--', archivoTrabajos],
+    ['--background', '--python', script, '--', archivoTrabajos],
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   )
 
@@ -122,6 +169,15 @@ function main(): void {
   const fallados = resultados.filter((r) => !r.ok)
 
   for (const r of ok) {
+    if (viewmodel) {
+      const clips = (r.clips ?? []).map((c) => `${c.clip}:${c.duracion}s`).join(' ')
+      console.log(
+        `  ${basename(r.out!).padEnd(18)} ${String(r.tris).padStart(6)} tris ` +
+          `(${r.tris_cuerpo}+${r.tris_brazos} brazos)  ${r.huesos} huesos  ` +
+          `${(r.bytes! / 1024).toFixed(0)}KB  ${clips}`,
+      )
+      continue
+    }
     const [x, y, z] = r.dims!
     console.log(
       `  ${basename(r.out!).padEnd(18)} ${String(r.tris).padStart(6)} tris  ` +
@@ -131,12 +187,21 @@ function main(): void {
   }
   for (const r of fallados) console.log(`  FALLÓ ${basename(r.mdl)}: ${r.error}`)
 
-  const conCargador = ok.filter((r) => r.cargador).length
   console.log('')
   console.log(`convertidos: ${ok.length}/${resultados.length} en ${dirSalida}`)
-  // Se reporta explícito porque es el dato que decide si un arma puede animar
-  // la recarga con geometría o cae a la coreografía procedural sola.
-  console.log(`con cargador separado: ${conCargador}/${ok.length}`)
+  if (viewmodel) {
+    // Los dos datos que deciden si el lote sirve: sin recarga el arma no
+    // cumple el motivo por el que se trajo el `v_`, y sin brazos se pierde lo
+    // único que TODOS los shooters de referencia muestran y nosotros no.
+    const conBrazos = ok.filter((r) => r.brazos).length
+    const conRecarga = ok.filter((r) => (r.clips ?? []).some((c) => c.clip === 'reload')).length
+    console.log(`con brazos:  ${conBrazos}/${ok.length}`)
+    console.log(`con recarga: ${conRecarga}/${ok.length}`)
+  } else {
+    // Se reporta explícito porque es el dato que decide si un arma puede animar
+    // la recarga con geometría o cae a la coreografía procedural sola.
+    console.log(`con cargador separado: ${ok.filter((r) => r.cargador).length}/${ok.length}`)
+  }
   if (fallados.length > 0) process.exitCode = 1
 }
 

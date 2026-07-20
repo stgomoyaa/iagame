@@ -18,12 +18,18 @@
  */
 
 import {
+  type AnimationAction,
+  type AnimationClip,
+  AnimationMixer,
   Group,
+  LoopOnce,
+  LoopRepeat,
   Mesh,
   MeshBasicMaterial,
   type Object3D,
   PerspectiveCamera,
   Scene,
+  SkinnedMesh,
   type WebGLRenderer,
 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
@@ -68,6 +74,50 @@ export interface ViewmodelRenderer {
   /** True si el arma adjunta trae cargador como malla aparte. Las que no,
    *  recargan sólo con la coreografía procedural del cuerpo. */
   readonly hasMagazine: boolean
+
+  /**
+   * True si el arma adjunta es un viewmodel de Source: trae esqueleto, brazos
+   * y las secuencias originales del juego, y las reproduce en vez de correr la
+   * coreografía procedural de recarga.
+   *
+   * Lo decide lo que hay ADENTRO del GLB (¿tiene skin?, ¿tiene clips?), no lo
+   * que dice el índice. Los dos coinciden, pero que el renderer mire el
+   * archivo que efectivamente cargó lo hace inmune a un índice desactualizado:
+   * el modo en que se anima un arma no puede desincronizarse del modelo que se
+   * está dibujando.
+   */
+  readonly animated: boolean
+
+  /**
+   * Arranca un clip importado (`reload`, `draw`, `idle`, `fire`), estirándolo
+   * o comprimiéndolo para que dure exactamente `seconds`. Devuelve false si el
+   * arma no es animada o no tiene ese clip, para que el llamador sepa que le
+   * toca la coreografía procedural.
+   *
+   * Por qué se ajusta la duración en vez de reproducir a velocidad nativa: el
+   * `reloadTime` de cada arma es una estadística de JUEGO que ya está
+   * balanceada y de la que dependen el HUD, el audio y la ventana en la que el
+   * jugador está indefenso. Reproducir a velocidad nativa desincronizaría la
+   * animación del estado real. Como las duraciones nativas de CS y las
+   * nuestras salen casi iguales (el AK recarga en 2,43 s en los dos), el
+   * factor de velocidad ronda 1 y no se nota — pero cuando no lo sea, manda el
+   * juego.
+   */
+  playClip(name: string, seconds: number): boolean
+
+  /**
+   * Avanza el mezclador de animación. Se llama una vez por frame ANTES de
+   * render(), con el mismo dt que el resto del rig.
+   *
+   * Es una llamada aparte y no parte de render() porque el orden importa: el
+   * mezclador escribe las rotaciones de los HUESOS, y las capas procedurales
+   * (sway, bob, ADS, kick) escriben el transform del GRUPO PADRE. Son dos
+   * espacios distintos y por eso no se pisan — que es justo el problema que sí
+   * existe cuando una corrección procedural se aplica sobre el mismo hueso que
+   * el mezclador está escribiendo. Mantenerlos como dos pasos explícitos deja
+   * esa separación a la vista en lugar de escondida adentro de render().
+   */
+  advanceAnimation(dt: number): void
   /** Cambia el modelo mostrado. Sin efecto si `slug` ya es el actual.
    *  Cachea por slug: volver a una arma ya cargada no vuelve a pedir el GLB. */
   setWeaponSlug(slug: string): void
@@ -143,6 +193,62 @@ function ensureVertexColors(mesh: Mesh): void {
 const MAG_NODE_NAME = 'weapon_mag'
 
 /**
+ * Nombre del cuerpo del arma en los viewmodels de Source (`v_`), que llegan
+ * como DOS mallas skinneadas: el arma y los brazos.
+ *
+ * La distinción importa por el camuflaje: `skins/material.ts` parcha el shader
+ * del material de la malla a la que se lo enganche, así que engancharlo a los
+ * brazos pintaría los guantes con el camo del arma. El handle se crea sólo
+ * para esta malla; los brazos se quedan con su aspecto.
+ */
+const BODY_NODE_NAME = 'weapon_body'
+
+/**
+ * Rotación base de los viewmodels de Source, en radianes sobre Y.
+ *
+ * Los `v_` salen de Blender con el cañón sobre +X (la convención de Source:
+ * +X adelante, +Z arriba, que el exportador de glTF deja como +X adelante,
+ * +Y arriba). La cámara del viewmodel mira hacia -Z como cualquier cámara de
+ * Three, así que hay que llevar ese +X a -Z: un cuarto de vuelta sobre Y.
+ *
+ * Va acá y no horneada en la geometría por una razón dura: la malla está
+ * SKINNEADA. Mover los vértices sin mover también las matrices de bind
+ * inversas del esqueleto deja malla y huesos en espacios distintos, y el arma
+ * se deforma en cuanto empieza a animar. Rotar el NODO PADRE mueve las dos
+ * cosas juntas y no toca el skin. Ver el punto 1 del encabezado de
+ * `scripts/convert-source-viewmodels.ts`.
+ *
+ * Se compone con el `rotationOffset` del arma (que sigue siendo el ajuste
+ * fino del panel de tuning, y arranca en cero), no lo reemplaza.
+ */
+const SOURCE_VIEWMODEL_YAW = Math.PI / 2
+
+/** Segundos de mezcla al cambiar de clip. Corto a propósito: es para que el
+ *  salto entre reposo y recarga no sea un corte seco, no para suavizar la
+ *  animación en sí, que ya viene animada. */
+const CLIP_BLEND = 0.06
+
+/**
+ * Un viewmodel de Source ya cargado: la escena entera del GLB (mallas +
+ * esqueleto), su mezclador y las acciones por nombre canónico.
+ *
+ * Se guarda la escena COMPLETA y no las mallas aisladas, al revés que en el
+ * camino estático: el esqueleto es parte de la jerarquía y aislarlo sería
+ * exactamente el error que rompe el skinning.
+ */
+interface AnimatedModel {
+  scene: Object3D
+  mixer: AnimationMixer
+  actions: Map<string, AnimationAction>
+  /** Duración nativa de cada clip, para poder ajustar la velocidad. */
+  durations: Map<string, number>
+  /** Malla del arma (no los brazos): es a la que se le engancha el camo. */
+  body: Mesh | null
+  /** Acción sonando ahora, para poder fundir hacia la siguiente. */
+  current: AnimationAction | null
+}
+
+/**
  * Aísla la única malla del GLB en un Object3D con transform identidad,
  * descartando el transform que trae su nodo.
  *
@@ -210,6 +316,47 @@ function isolateParts(root: Object3D): WeaponParts | null {
   return { body: foundBody, mag: foundMag }
 }
 
+/**
+ * Arma el modelo animado a partir de la escena del GLB, o devuelve null si el
+ * GLB no es un viewmodel de Source.
+ *
+ * Las dos condiciones son necesarias y ninguna alcanza sola: un GLB con
+ * esqueleto pero sin clips no tiene nada que reproducir, y uno con clips pero
+ * sin skin tendría animación que no mueve ninguna malla. Exigir las dos es lo
+ * que hace que un archivo a medio convertir caiga al camino estático (que
+ * funciona) en vez de dibujarse quieto y en pose de reposo.
+ */
+function buildAnimatedModel(scene: Object3D, clips: AnimationClip[] | undefined): AnimatedModel | null {
+  // `clips` puede no venir: un GLB sin animaciones deja `gltf.animations` en
+  // un array vacío, pero un loader que no sea GLTFLoader —o un doble de test—
+  // puede directamente no traer el campo. Sin este guard, leerle `.length`
+  // tira TypeError adentro del `.then`, la promesa cae al `.catch` y el arma
+  // se reporta como "no se pudo cargar" aunque el GLB esté perfecto. Es
+  // exactamente el modo de falla que este archivo ya documenta para
+  // requestedSlug/attachedSlug, así que no puede volver a entrar por otra
+  // puerta.
+  if (!clips || clips.length === 0) return null
+
+  let skinned = false
+  let body: Mesh | null = null
+  scene.traverse((child) => {
+    if (child instanceof SkinnedMesh) skinned = true
+    if (child instanceof Mesh && child.name === BODY_NODE_NAME) body = child
+    if (child instanceof Mesh) ensureVertexColors(child)
+  })
+  if (!skinned) return null
+
+  const mixer = new AnimationMixer(scene)
+  const actions = new Map<string, AnimationAction>()
+  const durations = new Map<string, number>()
+  for (const clip of clips) {
+    actions.set(clip.name, mixer.clipAction(clip))
+    durations.set(clip.name, clip.duration)
+  }
+
+  return { scene, mixer, actions, durations, body, current: null }
+}
+
 function disposeModel(mesh: Mesh): void {
   mesh.geometry.dispose()
   const material = mesh.material
@@ -250,6 +397,10 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
   // cargador separado", que es distinto de "todavía no cargó": eso lo dice
   // `cache`, que es la que siempre tiene entrada para un arma ya cargada.
   const magCache = new Map<string, Mesh>()
+  // Viewmodels de Source ya cargados. Una entrada acá y una en `cache` son
+  // MUTUAMENTE EXCLUYENTES: un slug es de una familia o de la otra, nunca de
+  // las dos. `attach` consulta ésta primero.
+  const animCache = new Map<string, AnimatedModel>()
   // Un handle de skin por malla cacheada, creado una sola vez al cargar el
   // GLB: es ahí donde se parcha el shader (skins/material.ts). Volver a un
   // arma ya cargada no recompila nada, sólo vuelve a escribir uniforms.
@@ -279,6 +430,65 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
   // selección nueva.
   let loadToken = 0
   let lastLoadError: string | null = null
+
+  /**
+   * Adjunta un viewmodel de Source. Camino separado del estático a propósito:
+   * acá NO se aísla ninguna malla ni se resetea ningún transform, porque el
+   * esqueleto vive en esa misma jerarquía y desarmarla rompe el skinning.
+   */
+  function attachAnimated(slug: string, model: AnimatedModel): void {
+    modelRoot.clear()
+    modelRoot.add(model.scene)
+    // El pivote procedural del cargador se vacía y se deja quieto: en un
+    // viewmodel de Source el cargador es un HUESO adentro de la malla del
+    // arma, y lo mueve la animación importada. Dejar además el cargador
+    // procedural del arma anterior colgando sería un segundo cargador
+    // flotando al lado del primero.
+    magOrient.clear()
+
+    attachedSlug = slug
+    lastLoadError = null
+    skinHandles.get(slug)?.setSkin(currentSkin)
+
+    // Reposo: el `idle` de CS es una pose de dos frames, no un ciclo, y es la
+    // que deja el arma sostenida como corresponde. Sin esto el arma se dibuja
+    // en pose de BIND —el esqueleto sin animar— que en un viewmodel de Source
+    // es una pose de referencia con los brazos abiertos, no la de sostener.
+    playOn(model, 'idle', 0, true)
+  }
+
+  /**
+   * Arranca `name` sobre `model`, fundiendo desde lo que estuviera sonando.
+   *
+   * `seconds <= 0` significa "a velocidad nativa". `loop` distingue el reposo
+   * (que se repite indefinidamente) de un gesto que pasa una vez y devuelve la
+   * mano al reposo.
+   */
+  function playOn(model: AnimatedModel, name: string, seconds: number, loop: boolean): boolean {
+    const action = model.actions.get(name)
+    if (!action) return false
+
+    const nativa = model.durations.get(name) ?? 0
+    // timeScale > 1 acelera. Un clip de duración nativa 0 (el `idle` de un
+    // solo frame) no se puede reescalar y se deja en 1: dividir daría
+    // Infinity y el mezclador se comería la pose.
+    action.timeScale = seconds > 0 && nativa > 0 ? nativa / seconds : 1
+
+    action.setLoop(loop ? LoopRepeat : LoopOnce, loop ? Infinity : 1)
+    // clampWhenFinished deja el último frame congelado en vez de volver de
+    // golpe a la pose de bind cuando el clip termina. El retorno al reposo lo
+    // hace el fundido de la próxima llamada a playOn, no el mezclador.
+    action.clampWhenFinished = !loop
+
+    if (model.current && model.current !== action) {
+      model.current.fadeOut(CLIP_BLEND)
+      action.reset().setEffectiveWeight(1).fadeIn(CLIP_BLEND).play()
+    } else {
+      action.reset().setEffectiveWeight(1).play()
+    }
+    model.current = action
+    return true
+  }
 
   function attach(slug: string, mesh: Mesh): void {
     modelRoot.clear()
@@ -316,6 +526,21 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
       .loadAsync(weaponAssetUrl(slug))
       .then((gltf) => {
         if (token !== loadToken) return
+
+        // Los viewmodels de Source se detectan por lo que traen adentro, no
+        // por lo que dice el índice (ver `animated` en la interfaz). Si no son
+        // uno, sigue el camino estático de siempre sin enterarse de nada.
+        const animated = buildAnimatedModel(gltf.scene, gltf.animations)
+        if (animated) {
+          if (animated.body) {
+            const handle = createSkinHandle(animated.body)
+            if (handle) skinHandles.set(slug, handle)
+          }
+          animCache.set(slug, animated)
+          if (requestedSlug === slug) attachAnimated(slug, animated)
+          return
+        }
+
         const parts = isolateParts(gltf.scene)
         if (!parts) {
           if (requestedSlug === slug) {
@@ -350,9 +575,39 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
     setWeaponSlug(slug: string): void {
       if (slug === requestedSlug) return
       requestedSlug = slug
+      const animated = animCache.get(slug)
+      if (animated) {
+        attachAnimated(slug, animated)
+        return
+      }
       const cached = cache.get(slug)
       if (cached) attach(slug, cached)
       else load(slug)
+    },
+
+    playClip(name: string, seconds: number): boolean {
+      if (attachedSlug === null) return false
+      const model = animCache.get(attachedSlug)
+      if (!model) return false
+      // Todo lo que no sea el reposo pasa una vez y vuelve: una recarga que se
+      // repitiera en bucle sería peor que no tener animación.
+      return playOn(model, name, seconds, name === 'idle')
+    },
+
+    advanceAnimation(dt: number): void {
+      if (attachedSlug === null) return
+      const model = animCache.get(attachedSlug)
+      if (!model) return
+      model.mixer.update(dt)
+      // Cuando el gesto de una vez termina, la mano vuelve al reposo. Se
+      // detecta por el tiempo del propio clip y no con el evento 'finished'
+      // del mezclador a propósito: el listener obligaría a registrar y
+      // desregistrar una función por arma equipada, y este chequeo es una
+      // comparación de números que no asigna nada.
+      const current = model.current
+      if (current && current.loop === LoopOnce && !current.isRunning()) {
+        playOn(model, 'idle', 0, true)
+      }
     },
 
     setSkin(skin: Skin | null): void {
@@ -369,9 +624,14 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
         skinHandles.get(attachedSlug)?.setTime(timeSeconds)
         magSkinHandles.get(attachedSlug)?.setTime(timeSeconds)
         const visual = getWeaponVisual(attachedSlug)
+        // La rotación base de los `v_` se SUMA al ajuste fino del arma en vez
+        // de reemplazarlo: `rotationOffset` sigue siendo lo que mueve el panel
+        // de tuning, y arranca en cero, así que sin tocar nada el arma queda
+        // exactamente en la orientación que le da la constante.
+        const yaw = animCache.has(attachedSlug) ? SOURCE_VIEWMODEL_YAW : 0
         modelRoot.rotation.set(
           visual.rotationOffset.rx,
-          visual.rotationOffset.ry,
+          visual.rotationOffset.ry + yaw,
           visual.rotationOffset.rz,
         )
         modelRoot.scale.setScalar(visual.scaleAdjust)
@@ -394,8 +654,16 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
     dispose(): void {
       for (const mesh of cache.values()) disposeModel(mesh)
       for (const mesh of magCache.values()) disposeModel(mesh)
+      for (const model of animCache.values()) {
+        model.mixer.stopAllAction()
+        model.mixer.uncacheRoot(model.scene)
+        model.scene.traverse((child) => {
+          if (child instanceof Mesh) disposeModel(child)
+        })
+      }
       cache.clear()
       magCache.clear()
+      animCache.clear()
       skinHandles.clear()
       magSkinHandles.clear()
     },
@@ -404,8 +672,20 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
       return attachedSlug
     },
 
+    get animated(): boolean {
+      return attachedSlug !== null && animCache.has(attachedSlug)
+    },
+
+    /**
+     * Falso en los viewmodels de Source aunque el arma tenga cargador: acá el
+     * cargador es un HUESO que mueve la animación importada, no una malla que
+     * mueva el pivote procedural. Devolver true haría que game.ts anime un
+     * cargador que no existe como objeto, encima del que sí se está moviendo.
+     */
     get hasMagazine(): boolean {
-      return attachedSlug !== null && magCache.has(attachedSlug)
+      return (
+        attachedSlug !== null && magCache.has(attachedSlug) && !animCache.has(attachedSlug)
+      )
     },
 
     get lastLoadError(): string | null {

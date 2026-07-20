@@ -12,7 +12,8 @@
     "test": "vitest run --pool=forks --execArgv=--expose-gc",
     "test:watch": "vitest --execArgv=--expose-gc",
     "convert:weapons": "node scripts/convert-weapons.ts",
-    "convert:source-weapons": "node scripts/convert-source-weapons.ts"
+    "convert:source-weapons": "node scripts/convert-source-weapons.ts",
+    "convert:source-viewmodels": "node scripts/convert-source-viewmodels.ts"
   },
   "dependencies": {
     "next": "16.2.10",

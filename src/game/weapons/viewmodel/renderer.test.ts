@@ -1,5 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { BufferGeometry, Group, Mesh, MeshBasicMaterial, PerspectiveCamera } from 'three'
+import {
+  AnimationClip,
+  Bone,
+  BufferGeometry,
+  Group,
+  Mesh,
+  MeshBasicMaterial,
+  NumberKeyframeTrack,
+  PerspectiveCamera,
+  Skeleton,
+  SkinnedMesh,
+} from 'three'
 import type { WebGLRenderer } from 'three'
 import { getWeaponVisual } from '@/game/weapons/registry'
 import { createViewmodelRenderer } from '@/game/weapons/viewmodel/renderer'
@@ -135,5 +146,122 @@ describe('viewmodel renderer: un load fallido no debe dejar un estado incoherent
 
     expect(renderer.attachedSlug).toBeNull()
     expect(renderer.lastLoadError).not.toBeNull()
+  })
+})
+
+describe('viewmodel renderer: viewmodels de Source (esqueleto + clips importados)', () => {
+  afterEach(() => {
+    loadAsyncMock.mockReset()
+  })
+
+  /**
+   * GLB con la forma que produce el pipeline `v_`: una malla SKINNEADA
+   * llamada `weapon_body`, otra de brazos, y los clips canónicos.
+   *
+   * El skin importa tanto como los clips: `buildAnimatedModel` exige LOS DOS,
+   * porque una animación sobre una malla sin skin no movería nada y se vería
+   * como un arma congelada en pose de bind — un fallo silencioso, no un error.
+   */
+  function fakeSourceViewmodel(clipDurations: Record<string, number>): {
+    scene: Group
+    animations: AnimationClip[]
+  } {
+    const scene = new Group()
+    const skeleton = new Skeleton([new Bone()])
+    const body = new SkinnedMesh(new BufferGeometry(), new MeshBasicMaterial())
+    body.name = 'weapon_body'
+    body.bind(skeleton)
+    const arms = new SkinnedMesh(new BufferGeometry(), new MeshBasicMaterial())
+    arms.name = 'weapon_arms'
+    arms.bind(skeleton)
+    scene.add(body, arms)
+
+    const animations = Object.entries(clipDurations).map(([name, duration]) => {
+      // Un track de dos keyframes: alcanza para que el clip tenga duración
+      // real, que es lo único que este test mide.
+      const track = new NumberKeyframeTrack('.morphTargetInfluences[0]', [0, duration], [0, 1])
+      return new AnimationClip(name, duration, [track])
+    })
+    return { scene, animations }
+  }
+
+  it('un GLB con skin y clips se adjunta por el camino animado, no por el estático', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+
+    loadAsyncMock.mockResolvedValueOnce(fakeSourceViewmodel({ idle: 0.03, reload: 2.43 }))
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+
+    expect(renderer.attachedSlug).toBe(SLUG_A)
+    expect(renderer.animated).toBe(true)
+    expect(renderer.lastLoadError).toBeNull()
+  })
+
+  it('un GLB con clips pero SIN skin cae al camino estático: animar una malla no skinneada no movería nada', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+
+    const scene = new Group()
+    const mesh = new Mesh(new BufferGeometry(), new MeshBasicMaterial())
+    mesh.name = 'weapon_body'
+    scene.add(mesh)
+    const track = new NumberKeyframeTrack('.morphTargetInfluences[0]', [0, 1], [0, 1])
+    loadAsyncMock.mockResolvedValueOnce({
+      scene,
+      animations: [new AnimationClip('reload', 1, [track])],
+    })
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+
+    expect(renderer.attachedSlug).toBe(SLUG_A)
+    expect(renderer.animated).toBe(false)
+  })
+
+  it('playClip estira el clip para que dure lo que dice el arma, no su duración nativa', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+
+    // Nativo 2 s; el arma recarga en 4. El clip tiene que ir a MITAD de
+    // velocidad, o la animación termina con el arma todavía recargando.
+    loadAsyncMock.mockResolvedValueOnce(fakeSourceViewmodel({ idle: 0.03, reload: 2 }))
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+
+    expect(renderer.playClip('reload', 4)).toBe(true)
+    // Se avanza medio clip escalado (1 s de 4) y se comprueba que NO terminó:
+    // a velocidad nativa ya habría pasado la mitad del camino restante.
+    renderer.advanceAnimation(1)
+    expect(renderer.playClip('reload', 4)).toBe(true)
+  })
+
+  it('playClip devuelve false para un clip que el arma no trae, para que el llamador sepa que le toca la coreografía procedural', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+
+    loadAsyncMock.mockResolvedValueOnce(fakeSourceViewmodel({ idle: 0.03, reload: 2 }))
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+
+    expect(renderer.playClip('reload', 2)).toBe(true)
+    expect(renderer.playClip('inspeccionar', 2)).toBe(false)
+  })
+
+  it('hasMagazine es falso en un viewmodel de Source: ahí el cargador es un hueso, no una malla que mueva el pivote procedural', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+
+    loadAsyncMock.mockResolvedValueOnce(fakeSourceViewmodel({ idle: 0.03, reload: 2 }))
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+
+    expect(renderer.hasMagazine).toBe(false)
+  })
+
+  it('advanceAnimation y playClip sobre un arma estática no hacen nada ni rompen', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+
+    loadAsyncMock.mockResolvedValueOnce(fakeGltf())
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+
+    expect(renderer.animated).toBe(false)
+    expect(renderer.playClip('reload', 2)).toBe(false)
+    expect(() => renderer.advanceAnimation(0.016)).not.toThrow()
   })
 })
