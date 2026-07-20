@@ -11,6 +11,36 @@ import { vec3 } from '@/game/math/vec3'
 
 const ARCHETYPE = ARCHETYPES['ar-1']
 
+/**
+ * Presupuesto de reloj para los dos guards de heap de este archivo, explícito
+ * en vez del timeout de 5s por defecto de vitest.
+ *
+ * Por qué existe (medido, no supuesto). Estos guards afirman algo sobre
+ * ASIGNACIONES, no sobre velocidad, y ese criterio NO depende de la carga de
+ * la máquina: con 12 procesos quemando CPU sobre 10 núcleos, 26 corridas de
+ * la suite completa produjeron CERO fallos del umbral de MB y 100% de fallos
+ * por "Test timed out in 5000ms". El ruido del heap medido bajo carga se
+ * mantuvo en centésimas de MB contra un umbral de 0.5MB.
+ *
+ * O sea: lo único que la carga rompía era el reloj, y el reloj acá no mide
+ * nada que nos importe. El timeout de 5s no era un presupuesto elegido para
+ * este test -- era el default, y quedaba a 2.3x del costo real (2145ms), así
+ * que cualquier máquina ocupada lo cruzaba. La flakiness era eso, y sólo eso.
+ *
+ * Derivación del número: el guard más caro mide ~800ms ya reducido (ver el
+ * comentario del escuadrón más abajo). 30s tolera ~37x de degradación, muy
+ * por encima del ~3x que llegamos a medir con la máquina saturada al doble de
+ * sus núcleos. Sigue siendo un techo real: si algún día uno de estos guards
+ * tarda 30s, es que alguien multiplicó el costo del motor por 37 y queremos
+ * enterarnos, no esperar callados.
+ *
+ * Lo que este número NO hace: aflojar la detección. El umbral de MB y la
+ * cantidad de ticks quedan intactos; una fuga de 8 bytes por tick sigue
+ * midiendo ~1.9MB contra el umbral de 0.5MB (verificado inyectando la fuga
+ * en stepAllBotsMotor y confirmando que el guard falla).
+ */
+const PRESUPUESTO_RELOJ_MS = 30_000
+
 describe('presupuesto de asignaciones de bots', () => {
   it('stepAllBotsMotor (apuntado + steering + stepPlayer, el camino de cada tick de simulación) no hace crecer el heap sostenidamente', () => {
     // Ver movement/allocations.test.ts para el patrón base y por qué falla
@@ -18,14 +48,46 @@ describe('presupuesto de asignaciones de bots', () => {
     expect(typeof global.gc, 'correr con --expose-gc').toBe('function')
 
     // Este guard era el más caro de la suite: 1.8M ticks x 10 bots con IA
-    // real medían ~15s y necesitaban subirle el timeout a 30s. Con el
-    // umbral bajado a 0.5MB (ver la derivación junto a TICKS) alcanzan
-    // 200_000 ticks para el mismo margen de detección, y vuelve a entrar
-    // cómodo en el timeout por defecto de vitest.
+    // real medían ~15s. Con el umbral bajado a 0.5MB (ver la derivación
+    // junto a TICKS) alcanzan 200_000 ticks para el mismo margen de
+    // detección. El presupuesto de reloj es explícito, no el default: ver
+    // PRESUPUESTO_RELOJ_MS arriba.
 
+    // El escuadrón es de 4 y no de 10 por TIEMPO, sin tocar la detección.
+    // Medido (Node v26.3.1, M1 Pro, 3 repeticiones por celda):
+    //
+    //   bots=10 200k ticks -> 1684ms  ruido -0.038MB  fuga inyectada 1.928MB
+    //   bots=4  200k ticks ->  668ms  ruido -0.017MB  fuga inyectada 1.948MB
+    //
+    // La fuga inyectada (un number retenido por TICK) se mide IGUAL con 4
+    // que con 10 bots -- es exactamente lo que predice la derivación de
+    // abajo, que cuenta bytes por iteración del loop de este test y nunca
+    // por bot. El tamaño del escuadrón no entra en el cálculo del umbral.
+    // De paso el ruido baja y se vuelve estable (-0.017/-0.018 en todas las
+    // repeticiones, contra -0.038..+0.012 con 10): menos bots es menos
+    // churn de asignaciones, así que la MEDICIÓN del heap queda mejor, no
+    // peor.
+    //
+    // Por qué importaba el tiempo: con 10 bots el test medía 2145ms contra
+    // el timeout de 5s por defecto, apenas 2.3x de margen. Con la máquina
+    // ocupada (medido: 12 procesos quemando CPU en 10 núcleos) se pasaba de
+    // 5s y fallaba por TIEMPO -- nunca por el umbral de MB, que bajo esa
+    // misma carga no falló ni una vez en 10 corridas. El criterio de este
+    // guard no depende de la carga; su reloj sí. Con 4 bots mide ~800ms.
+    //
+    // Bajar el costo era necesario pero no suficiente: con 24 procesos de
+    // carga sobre 10 núcleos, 4 bots contra el default de 5s todavía fallaba
+    // 2 de 6 corridas (siempre por timeout, nunca por MB). Por eso además
+    // hay un presupuesto de reloj explícito -- las dos cosas, no una.
+    //
+    // Ojo: reducir el escuadrón NO recorta caminos de código acá. El
+    // término de espacio personal (BOTS.personalSpaceM en bots/bot.ts) se
+    // activa con `world.neighbourDistM`, que lo escribe match/squad.ts, no
+    // stepAllBotsMotor: en este test queda en Infinity y esas ramas están
+    // apagadas con 4 bots y con 10 por igual.
     const grid = buildNavGrid(ARENA, 1, 1.8)
     const world = createBotWorld(ARENA.boxes, raycastMap, grid)
-    const squad = createBotSquad(ARENA.spawns, 10, 0.5, ARCHETYPE)
+    const squad = createBotSquad(ARENA.spawns, 4, 0.5, ARCHETYPE)
 
     // Un think inicial por bot para que cada uno arranque con un camino real
     // asignado en la caché (bots/pathfinding.ts) -- steady state realista,
@@ -66,12 +128,14 @@ describe('presupuesto de asignaciones de bots', () => {
     const despues = process.memoryUsage().heapUsed
     const crecimientoMB = (despues - antes) / 1024 / 1024
 
-    // Ruido medido (200k ticks, gc() de los dos lados, 6 corridas, Node
-    // v26.3.1): -0.057 a -0.060MB, siempre negativo. Fuga inyectada para
-    // verificar que este guard PUEDE fallar (push de un number por tick en
-    // stepAllBotsMotor(), bots/bot.ts): 1.86MB, 3.7x por encima del umbral.
+    // Ruido medido con el escuadrón de 4 (200k ticks, gc() de los dos lados,
+    // 3 repeticiones, Node v26.3.1): -0.017 a -0.018MB, siempre negativo y
+    // más estable que con 10 bots. Fuga inyectada para verificar que este
+    // guard PUEDE fallar (push de un number por tick en stepAllBotsMotor(),
+    // bots/bot.ts): 1.89MB, 3.8x por encima del umbral -- el mismo poder de
+    // detección que tenía con 10 bots (1.86MB).
     expect(crecimientoMB).toBeLessThan(0.5)
-  })
+  }, PRESUPUESTO_RELOJ_MS)
 
   it('stepBotCombat (el mismo stepCombat que el jugador) no hace crecer el heap sostenidamente', () => {
     expect(typeof global.gc, 'correr con --expose-gc').toBe('function')
@@ -123,5 +187,5 @@ describe('presupuesto de asignaciones de bots', () => {
     // esa función corre 10 veces por iteración (una por bot). El cálculo de
     // 3x es el piso conservador, no la predicción.
     expect(crecimientoMB).toBeLessThan(0.5)
-  })
+  }, PRESUPUESTO_RELOJ_MS)
 })
