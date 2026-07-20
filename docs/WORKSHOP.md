@@ -210,6 +210,27 @@ existe una rotación que las deje a las dos derechas y el rig de viewmodel
 —que anima un arma— no las puede posar. Entrarían visiblemente rotas. El
 razonamiento completo está en el encabezado de `source-catalog.ts`.
 
+**El cargador viaja separado.** Los `.mdl` de Source traen el cargador como
+una malla aparte (`w_ak47_mag.smd` junto a `w_ak47.smd`). El conversor de
+Blender lo preserva como un nodo propio llamado `weapon_mag` —todo lo demás,
+incluidos silenciador y visor, se une en `weapon_body`— y
+`convert-source-weapons.ts` lo mantiene separado usando `join({ keepNamed:
+true })`. Sin ese flag el join fusiona las dos partes y el cargador deja de
+existir como cosa animable: verificado, con `keepNamed: false` el índice sale
+con **0 de 39** armas con cargador, y con él, **35 de 39**.
+
+Las 4 que no lo tienen son las que no tienen cargador extraíble de verdad:
+`revolver`, `nova`, `sawedoff` y `xm1014`. Para ésas —y para las 40 CC0, que
+son modelos de una pieza— la recarga cae a la coreografía procedural sola
+(`src/game/weapons/viewmodel/reload.ts`), que se lee igual como una recarga
+porque no depende de la geometría: el arma rola para mostrar el pozo del
+cargador y acentúa los dos eventos.
+
+Cuesta **un draw call más** por arma equipada que tenga cargador (medido: 8
+draws con un arma CC0, 9 con el AK-47), y ninguno para las que no. Durante el
+tramo en que el cargador viejo ya cayó y el nuevo todavía no entró, el nodo se
+oculta y vuelve a costar 8.
+
 **Nombres.** El slug interno es el nombre del archivo de origen (`ak47`,
 `awp`) y nunca se muestra; lo que ve el jugador es el nombre genérico de la
 tabla ("Cárpato", "Lanza"). `source-catalog.test.ts` verifica contra una

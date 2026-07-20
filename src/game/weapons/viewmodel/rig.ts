@@ -1,6 +1,12 @@
 import { sanitizeDt } from '@/game/engine/dt'
 import { MOVEMENT } from '@/game/movement/tuning'
 import type { VmTransform, WeaponVisual } from '@/game/weapons/viewmodel/types'
+import {
+  chargeShape,
+  reloadEnvelope,
+  slapShape,
+  yankShape,
+} from '@/game/weapons/viewmodel/reload'
 import { VIEWMODEL } from '@/game/weapons/viewmodel/tuning'
 
 /** Entrada del rig por tick. Nada de esto asigna: todos los campos son primitivos. */
@@ -132,6 +138,20 @@ export function startDraw(state: ViewmodelState, weapon: WeaponVisual): void {
 
 function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x
+}
+
+/**
+ * Fracción de la recarga en curso, para alimentar `magazinePose()`.
+ *
+ * Sin recarga en curso devuelve 1, y eso NO es un valor centinela: 1 es
+ * "recarga terminada", y una recarga terminada tiene el cargador puesto, que
+ * es exactamente la pose que corresponde cuando no se está recargando. El
+ * caso normal y el caso borde son el mismo caso, así que no hay una rama que
+ * pueda quedar mal.
+ */
+export function reloadFraction(state: ViewmodelState): number {
+  if (!state.reloading) return 1
+  return state.reloadT / state.reloadTime
 }
 
 /** Exportada para combat/ads.ts: el FOV/sensibilidad/velocidad de ADS
@@ -332,20 +352,33 @@ export function stepViewmodel(
     // reloadT sólo avanza mientras reloading es true, así que una vez que
     // termina esta rama deja de ejecutarse: no hace falta un flag aparte
     // para saber si la capa está "activa", alcanza con `state.reloading`.
-    let reloadShape: number
-    if (frac <= VIEWMODEL.reloadMagOutAt) {
-      // Fase A: baja e inclina.
-      reloadShape = easeInOutCubic(frac / VIEWMODEL.reloadMagOutAt)
-    } else if (frac <= VIEWMODEL.reloadMagInAt) {
-      // Fase B: sostiene abajo, cargador afuera.
-      reloadShape = 1
-    } else {
-      // Fase C: vuelve a la posición.
-      const c = clamp01((frac - VIEWMODEL.reloadMagInAt) / (1 - VIEWMODEL.reloadMagInAt))
-      reloadShape = 1 - easeInOutCubic(c)
-    }
+    //
+    // Las formas salen de viewmodel/reload.ts, que las define como funciones
+    // PURAS de `frac`. Ese archivo explica el porqué de cada una; acá sólo se
+    // eligen los ejes sobre los que se aplican.
+    const reloadShape = reloadEnvelope(frac)
+
+    // Fase A/B/C: baja, inclina y —lo que hace que se lea como recarga y no
+    // como agachón— ROLA el arma para mostrar el pozo del cargador.
     out.py -= VIEWMODEL.reloadDrop * reloadShape
+    out.px -= VIEWMODEL.reloadPullIn * reloadShape
     out.rx += VIEWMODEL.reloadTilt * reloadShape
+    out.rz += VIEWMODEL.reloadRoll * reloadShape
+    out.ry += VIEWMODEL.reloadYaw * reloadShape
+
+    // Acento en magOut: el arma se sacude hacia abajo cuando el cargador se
+    // arranca. Acento en magIn: salta hacia arriba con la palmada que lo
+    // encaja. Los dos caen exactamente en las fracciones que ya emitían los
+    // eventos, así que la animación y el evento son el mismo instante.
+    out.py -= VIEWMODEL.reloadYankAmount * yankShape(frac)
+    out.py += VIEWMODEL.reloadSlapAmount * slapShape(frac)
+
+    // Manija de carga: el arma se va hacia atrás y vuelve. `pz` positivo es
+    // hacia el jugador (game.ts lo niega al escribir la posición), o sea que
+    // esto tira el arma hacia atrás, no hacia la escena.
+    const charge = chargeShape(frac)
+    out.pz += VIEWMODEL.reloadChargeAmount * charge
+    out.rx += VIEWMODEL.reloadChargeTilt * charge
 
     if (frac >= 1) state.reloading = false
   }

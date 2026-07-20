@@ -30,6 +30,9 @@ export interface Resultado {
   ok: boolean
   tris?: number
   partes?: number
+  /** El modelo traía el cargador como malla aparte y se preservó como
+   *  `weapon_mag`. Falso en revólveres y escopetas, que no tienen. */
+  cargador?: boolean
   dims?: [number, number, number]
   texturas?: number
   bytes?: number
@@ -122,13 +125,18 @@ function main(): void {
     const [x, y, z] = r.dims!
     console.log(
       `  ${basename(r.out!).padEnd(18)} ${String(r.tris).padStart(6)} tris  ` +
-        `${x}x${y}x${z}m  ${r.texturas} tex  ${(r.bytes! / 1024).toFixed(0)}KB`,
+        `${x}x${y}x${z}m  ${r.texturas} tex  ${(r.bytes! / 1024).toFixed(0)}KB` +
+        `${r.cargador ? '  +cargador' : ''}`,
     )
   }
   for (const r of fallados) console.log(`  FALLÓ ${basename(r.mdl)}: ${r.error}`)
 
+  const conCargador = ok.filter((r) => r.cargador).length
   console.log('')
   console.log(`convertidos: ${ok.length}/${resultados.length} en ${dirSalida}`)
+  // Se reporta explícito porque es el dato que decide si un arma puede animar
+  // la recarga con geometría o cae a la coreografía procedural sola.
+  console.log(`con cargador separado: ${conCargador}/${ok.length}`)
   if (fallados.length > 0) process.exitCode = 1
 }
 
