@@ -44,6 +44,15 @@ const PUEDEN_USAR_THREE = [
   // preview.ts dibuja el arma en la armería.
   'skins/material.ts',
   'skins/preview.ts',
+  // Rig de iluminación del viewmodel: el arma pasó de un material unlit a uno
+  // PBR, y la escena del viewmodel es propia, así que ni las luces del mapa ni
+  // su environment le llegan. Este archivo arma las tres direccionales y el
+  // environment procedural que las alimenta -- luces y texturas, o sea GPU
+  // pura. Va separado de weapons/viewmodel/renderer.ts (que ya estaba en la
+  // lista) por el mismo criterio que separó bots/character-material.ts de
+  // bots/renderer.ts: es una pieza distinta, y el criterio de iluminación se
+  // lee mejor solo. Única entrada NUEVA que suma esta tarea.
+  'weapons/viewmodel/lighting.ts',
   // Mapas importados de Source: la matemática (map/source-map.ts -- escala,
   // brushes convexos, validación de spawns) es pura y NO importa three, que
   // es justo la parte donde esta tarea se podía romper en silencio. Este

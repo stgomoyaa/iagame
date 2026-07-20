@@ -47,7 +47,32 @@
  * pura (skins/generator.ts), y la escena.
  */
 
-import { Color, type Mesh, MeshBasicMaterial, SRGBColorSpace, Vector3 } from 'three'
+import {
+  Color,
+  type Mesh,
+  MeshBasicMaterial,
+  MeshStandardMaterial,
+  SRGBColorSpace,
+  Vector3,
+} from 'three'
+
+/**
+ * Materiales a los que este módulo le sabe inyectar el camuflaje.
+ *
+ * Son dos y no uno porque las armas conviven en dos formatos: las 39 de
+ * Source ya salen del pipeline con textura y se dibujan con
+ * `MeshStandardMaterial` (iluminadas), y las 40 CC0 siguen viniendo con color
+ * por vértice sobre `MeshBasicMaterial`. Los dos exponen los mismos puntos de
+ * inyección (`common`, `begin_vertex`, `color_fragment`), así que el shader de
+ * camuflaje es literalmente el mismo para ambos.
+ *
+ * Esto es una costura sensible: `materialOf` devolvía null para todo lo que no
+ * fuera `MeshBasicMaterial`, y como `createSkinHandle` trata el null como
+ * "esta malla no lleva camuflaje", cambiar el material del arma apagaba los 79
+ * camuflajes EN SILENCIO, sin un error ni un warning. Hay un test que fija
+ * justamente eso.
+ */
+export type SkinnableMaterial = MeshBasicMaterial | MeshStandardMaterial
 import { CAMO_FAMILY_INDEX, ESCALA_FAMILIA } from '@/game/skins/camo-families'
 import type { Skin } from '@/game/skins/generator'
 import { PATTERN_INDEX } from '@/game/skins/patterns'
@@ -781,7 +806,21 @@ vec3 skinEntorno( vec3 R ) {
 `
 
 const FRAGMENT_BODY = /* glsl */ `
-#if defined( USE_COLOR_ALPHA )
+// "skinBaked" es el color PROPIO del arma: el que tiene sin camuflaje. De él
+// salen la luminancia y la saturación que más abajo deciden qué parte del arma
+// se lleva el acento, y por eso hay que sacarlo de la mejor fuente disponible.
+//
+// Las armas de Source ahora traen TEXTURA (pipeline convert-source-viewmodels),
+// y las 40 CC0 siguen trayendo color por vértice: los dos caminos tienen que
+// funcionar, así que se eligen por define en vez de asumir uno.
+#if defined( USE_MAP )
+  // Con textura no hay nada que muestrear acá: <map_fragment> ya corrió —va
+  // ANTES de <color_fragment> tanto en el shader basic como en el standard— y
+  // dejó el albedo en diffuseColor. Leerlo de ahí sale gratis y además da la
+  // anatomía POR PÍXEL en vez de por vértice, que es bastante más fino que lo
+  // que jamás dio el horneado.
+  vec3 skinBaked = diffuseColor.rgb;
+#elif defined( USE_COLOR_ALPHA )
   vec3 skinBaked = vColor.rgb;
   diffuseColor.a *= vColor.a;
 #elif defined( USE_COLOR )
@@ -792,7 +831,13 @@ const FRAGMENT_BODY = /* glsl */ `
 
 if ( uSkinEnabled < 0.5 ) {
 
+#if defined( USE_MAP )
+  // El albedo de la textura YA está en diffuseColor. Multiplicarlo por
+  // skinBaked —que acá es él mismo— lo elevaría al cuadrado y dejaría el arma
+  // notablemente más oscura sin camuflaje que con él.
+#else
   diffuseColor.rgb *= skinBaked;
+#endif
 
 } else {
 
@@ -1087,7 +1132,7 @@ if ( uSkinEnabled < 0.5 ) {
  * descarta con dispose(); con WeakMap, el registro se va con ellas sin que
  * nadie tenga que acordarse de limpiarlo.
  */
-const REGISTRY = new WeakMap<MeshBasicMaterial, SkinUniforms>()
+const REGISTRY = new WeakMap<SkinnableMaterial, SkinUniforms>()
 
 function createUniforms(): SkinUniforms {
   return {
@@ -1131,7 +1176,7 @@ function fillExtent(mesh: Mesh, out: Vector3): void {
  * cambio de arma es un tirón visible, y todo el diseño de este archivo
  * existe para no tener que hacerlo.
  */
-function patch(material: MeshBasicMaterial): SkinUniforms {
+function patch(material: SkinnableMaterial): SkinUniforms {
   const existing = REGISTRY.get(material)
   if (existing) return existing
 
@@ -1148,10 +1193,18 @@ function patch(material: MeshBasicMaterial): SkinUniforms {
       .replace('#include <color_fragment>', FRAGMENT_BODY)
   }
   // Clave de caché de programas: sin esto, three reusaría el programa
-  // compilado de cualquier otro MeshBasicMaterial con los mismos parámetros
+  // compilado de cualquier otro material con los mismos parámetros
   // y el arma saldría sin el código de skin inyectado.
   // v2: entraron las seis familias de camuflaje al mismo programa.
-  material.customProgramCacheKey = () => 'skin-v2'
+  // v3: el arma de Source pasó a MeshStandardMaterial con textura y el código
+  // inyectado cambió con ella (ahora lee el albedo del mapa).
+  //
+  // No hace falta meter el TIPO de material en la clave aunque el mismo código
+  // se compile contra dos shaders base distintos: three ya antepone el
+  // `shaderID` —'meshbasic' vs 'meshphysical'— al armar la clave de programa
+  // (WebGLPrograms.getProgramCacheKey), así que un basic y un standard nunca
+  // comparten programa por más que compartan esta cadena.
+  material.customProgramCacheKey = () => 'skin-v3'
   material.needsUpdate = true
 
   return uniforms
@@ -1172,64 +1225,99 @@ export interface SkinHandle {
   setTime(seconds: number): void
 }
 
-function materialOf(mesh: Mesh): MeshBasicMaterial | null {
-  const material = mesh.material
-  if (Array.isArray(material)) return null
-  return material instanceof MeshBasicMaterial ? material : null
+function esSkinnable(material: unknown): material is SkinnableMaterial {
+  return material instanceof MeshBasicMaterial || material instanceof MeshStandardMaterial
 }
 
 /**
- * Prepara una malla para llevar skins y devuelve su handle, o null si la
- * malla no tiene un `MeshBasicMaterial` único (nunca debería pasar con el
- * pipeline actual, que produce exactamente eso; si pasara, el arma se sigue
- * viendo con su material crudo en vez de reventar).
+ * TODOS los materiales parchables de una malla, no uno.
+ *
+ * Devolvía un material suelto y `null` ante un array, y eso dejaba sin
+ * camuflaje a las armas de COD con varias primitivas: `isolateParts` las
+ * fusiona en una malla con array de materiales (cuerpo, hierros,
+ * guardamanos...), así que caían justo en la rama que devolvía `null` y se
+ * quedaban con su textura cruda para siempre. No fallaba: simplemente la skin
+ * no aparecía.
+ *
+ * Se filtra lo no parchable en vez de rechazar la malla entera: si una
+ * primitiva trajera un material raro, el resto del arma igual lleva camuflaje.
+ */
+function materialsOf(mesh: Mesh): SkinnableMaterial[] {
+  const material = mesh.material
+  if (Array.isArray(material)) return material.filter(esSkinnable)
+  return esSkinnable(material) ? [material] : []
+}
+
+/**
+ * Prepara una malla para llevar skins y devuelve su handle, o null si no tiene
+ * ningún material inyectable (el arma se sigue viendo con su material crudo en
+ * vez de reventar).
+ *
+ * Parcha TODOS los materiales de la malla, no el primero: un arma de COD
+ * fusionada trae uno por pieza y hay que escribirles los uniforms a todos, o
+ * el camuflaje entraría sólo en el cuerpo y los hierros quedarían del color de
+ * fábrica — que es peor que no tener camuflaje, porque se ve como un error de
+ * render y no como una decisión.
+ *
+ * `uSkinExtent` se calcula UNA vez sobre la malla ya fusionada y se copia al
+ * uniform de cada material: es el tamaño del arma ENTERA, y es lo que hace que
+ * el patrón tenga la misma escala en todas sus piezas. Calculado por pieza,
+ * los hierros saldrían con el camuflaje ampliado como si fueran un arma
+ * completa del tamaño de un dedo.
  */
 export function createSkinHandle(mesh: Mesh): SkinHandle | null {
-  const material = materialOf(mesh)
-  if (!material) return null
+  const materiales = materialsOf(mesh)
+  if (materiales.length === 0) return null
 
-  const uniforms = patch(material)
-  fillExtent(mesh, uniforms.uSkinExtent.value)
+  const todos = materiales.map((m) => patch(m))
+  const extent = new Vector3()
+  fillExtent(mesh, extent)
+  for (const u of todos) u.uSkinExtent.value.copy(extent)
 
   return {
     setSkin(skin: Skin | null): void {
-      if (!skin) {
-        uniforms.uSkinEnabled.value = 0
-        return
+      for (const uniforms of todos) {
+        if (!skin) {
+          uniforms.uSkinEnabled.value = 0
+          continue
+        }
+        uniforms.uSkinEnabled.value = 1
+        // setRGB con SRGBColorSpace: las paletas se escriben en hex sRGB
+        // (skins/palettes.ts) y el render trabaja en lineal. Sin la
+        // conversión, todas las skins salen lavadas.
+        uniforms.uSkinBase.value.setRGB(
+          skin.colorBase.r,
+          skin.colorBase.g,
+          skin.colorBase.b,
+          SRGBColorSpace,
+        )
+        uniforms.uSkinAccent.value.setRGB(
+          skin.colorAccent.r,
+          skin.colorAccent.g,
+          skin.colorAccent.b,
+          SRGBColorSpace,
+        )
+        uniforms.uSkinPattern.value = PATTERN_INDEX[skin.pattern]
+        uniforms.uSkinFamily.value = CAMO_FAMILY_INDEX[skin.family]
+        // La escala de la familia se premultiplica acá y no en el shader: una
+        // familia puede caer sobre patrones anfitriones con rangos de escala muy
+        // distintos (hidrografico va de 2.5 a 6, degradado de 0.8 a 1.6), y sin
+        // corregir saldría con cuatro veces más repeticiones en un anfitrión que
+        // en otro. Como familia y patrón clásico son excluyentes por skin, el
+        // mismo uniform sirve para los dos sin ambigüedad.
+        uniforms.uSkinPatternScale.value = skin.patternScale * ESCALA_FAMILIA[skin.family]
+        uniforms.uSkinWear.value = skin.wear
+        uniforms.uSkinMetal.value = skin.metalness
+        uniforms.uSkinEmissive.value = skin.emissive
+        uniforms.uSkinAnim.value = ANIMATION_INDEX[skin.animation]
       }
-      uniforms.uSkinEnabled.value = 1
-      // setRGB con SRGBColorSpace: las paletas se escriben en hex sRGB
-      // (skins/palettes.ts) y el render trabaja en lineal. Sin la
-      // conversión, todas las skins salen lavadas.
-      uniforms.uSkinBase.value.setRGB(
-        skin.colorBase.r,
-        skin.colorBase.g,
-        skin.colorBase.b,
-        SRGBColorSpace,
-      )
-      uniforms.uSkinAccent.value.setRGB(
-        skin.colorAccent.r,
-        skin.colorAccent.g,
-        skin.colorAccent.b,
-        SRGBColorSpace,
-      )
-      uniforms.uSkinPattern.value = PATTERN_INDEX[skin.pattern]
-      uniforms.uSkinFamily.value = CAMO_FAMILY_INDEX[skin.family]
-      // La escala de la familia se premultiplica acá y no en el shader: una
-      // familia puede caer sobre patrones anfitriones con rangos de escala muy
-      // distintos (hidrografico va de 2.5 a 6, degradado de 0.8 a 1.6), y sin
-      // corregir saldría con cuatro veces más repeticiones en un anfitrión que
-      // en otro. Como familia y patrón clásico son excluyentes por skin, el
-      // mismo uniform sirve para los dos sin ambigüedad.
-      uniforms.uSkinPatternScale.value = skin.patternScale * ESCALA_FAMILIA[skin.family]
-      uniforms.uSkinWear.value = skin.wear
-      uniforms.uSkinMetal.value = skin.metalness
-      uniforms.uSkinEmissive.value = skin.emissive
-      uniforms.uSkinAnim.value = ANIMATION_INDEX[skin.animation]
     },
 
+    // Se llama una vez por frame. El bucle recorre un array ya existente y
+    // escribe un número en cada uno: cero asignaciones, igual que antes. En
+    // el 80% del arsenal el array tiene un solo elemento.
     setTime(seconds: number): void {
-      uniforms.uSkinTime.value = seconds
+      for (const uniforms of todos) uniforms.uSkinTime.value = seconds
     },
   }
 }

@@ -82,30 +82,64 @@ import {
 // bundler y para vitest, no para Node crudo.
 import { boundsOf, buildNormalizeMatrix, WEAPON_CLASS_LENGTHS_M } from './lib/geometry.ts'
 import { mergeIndex, type IndexEntry } from './lib/merge-index.ts'
+import {
+  MAX_LADO_CUERPO,
+  prepararMaterialesPbr,
+  verificarAtributosPbr,
+} from './lib/pbr-doc.ts'
 import { decodePng, samplePngRgb, type DecodedPng } from './lib/png-reader.ts'
 import { detectSightLine, type SightType } from './lib/sight.ts'
 import { ARCHETYPES, type WeaponClass } from '../src/game/weapons/archetypes.ts'
 import {
   SOURCE_WEAPONS,
   sourceWeaponDisplayName,
+  type SourceGame,
   type SourceWeaponEntry,
 } from '../src/game/weapons/source-catalog.ts'
 
 /**
  * Convención de ejes de los modelos crudos, declarada (ver punto 2 del
- * encabezado). `RAW_BARREL_AXIS` es el eje largo, `RAW_BARREL_SIGN` el
- * sentido en el que está la boca sobre ese eje, y `RAW_UP_AXIS` el eje
- * vertical del arma.
+ * encabezado). `barrelAxis` es el eje largo, `barrelSign` el sentido en el
+ * que está la boca sobre ese eje, y `upAxis` el eje vertical del arma.
  *
- * Cómo se verificó, porque "lo declaré" no es una verificación: las tres
- * mediciones independientes del encabezado convergen en esto, y además las
- * 39 armas se miraron en el navegador después de convertirlas — un arma dada
- * vuelta o acostada de lado es de las cosas más obvias que hay en una
- * captura.
+ * Es **por pack de origen, no por arma**: dentro de un pack todos los modelos
+ * salieron del mismo autor y del mismo conversor, así que comparten
+ * convención. Entre packs NO: los `w_` de CS tienen el eje largo en Z y los
+ * `c_` de COD en X. Ésa es toda la diferencia de orientación entre las dos
+ * familias, y por eso vive acá como una tabla de dos filas en vez de una
+ * columna en el catálogo.
+ *
+ * Cómo se verificó cada fila, porque "lo declaré" no es una verificación:
+ *
+ * - **CS**: las tres mediciones independientes del encabezado convergen, y
+ *   las 39 armas se miraron en el navegador después de convertirlas — un arma
+ *   dada vuelta o acostada de lado es de las cosas más obvias que hay en una
+ *   captura.
+ * - **COD**: no hizo falta ninguna heurística. Estos modelos traen un hueso
+ *   `tag_flash` puesto por el autor en la BOCA DE FUEGO, así que el sentido
+ *   del cañón es un dato del archivo y no una inferencia: medido sobre AK-47,
+ *   MP7, ACR, Barrett y M1911, `tag_flash` cae siempre en el extremo de MAYOR
+ *   X (p.ej. Barrett 0.7711 contra un máximo de caja de 0.7709; MP7 0.2377
+ *   contra 0.2377). Que el vertical sea +Z sale del mismo lado: `tag_clip`
+ *   (el cargador) queda por DEBAJO de `tag_flash` en Z en todos.
+ *
+ * OJO con `tag_ads`: NO sirve como punto de alineación de ADS del arma, aunque
+ * el nombre lo sugiera. Medido, es la posición de la CÁMARA del jugador
+ * (0,-0.10,1.17 en los modelos de MW3, y el origen en los de COD4: el mismo
+ * valor para todas las armas del pack). La línea de puntería se sigue midiendo
+ * con `detectSightLine()` sobre la malla ya normalizada, que es lo que mira la
+ * geometría real de cada mira.
  */
-const RAW_BARREL_AXIS = 2
-const RAW_BARREL_SIGN = 1
-const RAW_UP_AXIS = 1
+interface RawAxes {
+  readonly barrelAxis: 0 | 1 | 2
+  readonly barrelSign: 1 | -1
+  readonly upAxis: 0 | 1 | 2
+}
+
+const RAW_AXES_BY_GAME: Record<SourceGame, RawAxes> = {
+  CS: { barrelAxis: 2, barrelSign: 1, upAxis: 1 },
+  COD: { barrelAxis: 0, barrelSign: 1, upAxis: 2 },
+}
 
 /**
  * Nombres de las dos partes que produce `scripts/blender/mdl-to-glb.py`. Son
@@ -313,27 +347,61 @@ async function convertOne(
   // mediciones pero sí en pantalla. Mismo motivo que en convert-weapons.ts.
   for (const node of doc.getRoot().listNodes()) clearNodeTransform(node)
 
-  bakeTextureToVertexColors(doc)
-  // Recién ahora join() puede fusionar: antes cada primitiva tenía su propio
-  // material y se quedaban separadas. Sigue con `keepNamed`, si no este
-  // segundo pase se comería la separación cuerpo/cargador que el primero
-  // preservó — que es justo el error fácil de cometer acá.
-  await doc.transform(joinMeshes(KEEP_PARTS))
+  // Dos caminos de material, y cuál se toma lo decide el pack de origen.
+  //
+  // Los `w_` de CS siguen horneando la textura en `COLOR_0`: son modelos de
+  // MUNDO, de malla pobre, y lo que se ve de ellos en pantalla ya está
+  // decidido por ese camino. Cambiarlos acá sería re-convertir 39 armas que
+  // hoy se ven bien, sin haber mirado ni una.
+  //
+  // Los `c_` de COD van por PBR (`lib/pbr-doc.ts`), que es el camino nuevo:
+  // conserva UVs, normales y texturas, y saca del alfa qué parte del arma es
+  // metal. La diferencia no es estética-opcional — sin NORMAL no hay
+  // iluminación posible y el arma sale plana, que es el bug que ese camino
+  // vino a cerrar. Estos modelos además lo justifican: traen 26 texturas y
+  // hierros modelados, y hornearlos a color por vértice tiraría exactamente
+  // eso a la basura.
+  const pbr = entry.game === 'COD'
+
+  if (!pbr) {
+    bakeTextureToVertexColors(doc)
+    // Recién ahora join() puede fusionar: antes cada primitiva tenía su propio
+    // material y se quedaban separadas. Sigue con `keepNamed`, si no este
+    // segundo pase se comería la separación cuerpo/cargador que el primero
+    // preservó — que es justo el error fácil de cometer acá.
+    await doc.transform(joinMeshes(KEEP_PARTS))
+  }
 
   const positions = collectPositions(doc)
   if (positions.length === 0) throw new Error('el modelo no tiene vértices')
 
   const targetLengthM = CLASS_TARGET_LENGTH_M[ARCHETYPES[entry.archetype].class]
+  // La escala de origen no importa: `buildNormalizeMatrix` reescala el arma al
+  // largo canónico de su clase. Por eso que el AK de COD mida 0.71 m crudo y
+  // el de CS 0.80 no es una discrepancia a corregir a mano — los dos salen del
+  // pipeline midiendo `CLASS_TARGET_LENGTH_M.ar`.
+  const axes = RAW_AXES_BY_GAME[entry.game]
   const matrix = buildNormalizeMatrix(
     positions,
-    RAW_BARREL_AXIS,
-    RAW_BARREL_SIGN,
-    RAW_UP_AXIS,
+    axes.barrelAxis,
+    axes.barrelSign,
+    axes.upAxis,
     targetLengthM,
   )
   for (const mesh of doc.getRoot().listMeshes()) transformMesh(mesh, matrix)
 
-  await doc.transform(unlit(), prune())
+  if (pbr) {
+    // Sin `unlit()`: la gracia entera de este camino es que el arma RECIBA
+    // luz. Marcarla unlit acá la dejaría con el mismo color plano que se
+    // buscaba evitar, y sin ningún error que lo delate.
+    prepararMaterialesPbr(doc, () => MAX_LADO_CUERPO)
+    await doc.transform(prune())
+    // Después de prune(), no antes: lo que importa no es que Blender haya
+    // escrito las normales, sino que hayan SOBREVIVIDO el pipeline entero.
+    verificarAtributosPbr(doc)
+  } else {
+    await doc.transform(unlit(), prune())
+  }
 
   const finalPositions = collectPositions(doc)
   const b = boundsOf(finalPositions)

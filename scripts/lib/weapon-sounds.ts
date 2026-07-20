@@ -303,6 +303,142 @@ export const ASIGNACION: Readonly<Record<string, string>> = {
   'sniperrifle-4': 'mwclassic__mw3e_msr',
   'sniperrifle-5': 'blackops__waw_kar98k',
   'sniperrifle-6': 'mwclassic__mw3e_barrett',
+
+  // =======================================================================
+  // PACK DE CALL OF DUTY (ARC9): las 69 armas de `game: 'COD'`.
+  // =======================================================================
+  //
+  // Estas armas son un TERCER caso, distinto de los dos que documenta el
+  // encabezado de la tabla, y conviene decirlo porque invita a un atajo que
+  // está mal.
+  //
+  // El atajo: los modelos salen del MISMO pack ARC9 que los sonidos, así que
+  // el slug del modelo y la carpeta de sonido se llaman igual
+  // (`cod4_ak47.mdl` <-> `sound/weapons/arc9/cod4_ak47/`). Acá la identidad
+  // no es una inferencia de strings: es el mismo autor y el mismo pack. Uno
+  // pensaría entonces que estas 69 filas se pueden generar solas.
+  //
+  // Por qué NO se generaron solas, medido y no supuesto:
+  //
+  //  1. **46 de las 69 tienen su carpeta propia ya TOMADA** por un arma de
+  //     CS o CC0 que la reclamó primero (`assaultrifle-1` se quedó con
+  //     `cod4_ak47`, `mp7` con `mw3e_mp7`, `nova` con `cod4_w1200`). El test
+  //     `sólo comparte fuente entre un arma y su variante sin mira` prohíbe
+  //     que dos armas distintas compartan fuente, así que la carpeta obvia
+  //     no está disponible y hay que elegir otra a mano.
+  //
+  //  2. **7 no tienen disparo en su carpeta propia**, aunque la carpeta
+  //     exista: `cod4_mp44` (el StG-44) trae `chamber.wav` e `in.wav` y nada
+  //     más, y `mw3e_spas12` sólo trae `back/fwd/lift/loop`. Asignarlas a su
+  //     carpeta homónima las dejaría MUDAS, y el nombre coincidiendo es
+  //     justo lo que haría que nadie lo revisara.
+  //
+  //  3. **El match por token miente feo acá.** `normalizarToken` borra el
+  //     sufijo numérico, así que `mw2e_m16` y `waw_m1919` colapsan los dos a
+  //     `"m"` y matchean entre sí; lo mismo `cod4_m1911` con `waw_m1919`, y
+  //     `mw2e_g17` con `waw_g43`. Un generador por tokens le habría puesto a
+  //     un M16 el sonido de una ametralladora Browning de 1919 sin que nada
+  //     fallara. Es la misma razón por la que `medirAutomatch` sólo mide.
+  //
+  // El criterio con el que se eligió cada fila, en este orden:
+  //   a. la carpeta propia del arma, si tiene disparo y está libre (23 casos);
+  //   b. si no, LA MISMA ARMA REAL en otro sub-pack — el pack trae el AK-47 en
+  //      `cod4`, `mw2e` y `mw3e`, y M9k trae media OTAN con su nombre real
+  //      (`m9k__fnscarh`, `m9k__hk_g3`, `m9k__beretta92`, `m9k__svd`,
+  //      `m9k__kriss` para el Vector, `m9k__masadamagpul` para el ACR);
+  //   c. sólo si no existe la misma arma, el pariente real más cercano, y en
+  //      esos casos el comentario dice cuál es el parentesco.
+  //
+  // No hay ninguna asignación arbitraria en este bloque: a diferencia de las
+  // 40 CC0, estas 69 SÍ son armas reales identificadas, así que "de la clase
+  // correcta" no era suficiente.
+
+  // --- COD: fusiles de asalto ---
+  cod4_ak47: 'mwclassic__mw3e_ak47', // el mismo AK-47 del pack, sub-pack MW3
+  mw3e_m4a1: 'm9k__dmg_m4a1',
+  mw2e_acr: 'mwclassic__mw3e_acr', // el mismo ACR, sub-pack MW3
+  cod4_g36c: 'mwclassic__cod4_g36c', // carpeta propia, libre
+  mw3e_g36: 'm9k__g36',
+  mw2e_f2000: 'm9k__fokku_tc_f2000',
+  mw2e_tavor: 'm9k__tavor',
+  // El StG-44 propio no trae disparo (ver punto 2). Se le da el AK-47 de
+  // MW2E: el AK es el descendiente directo del StG-44 y comparte cartucho
+  // intermedio, que es lo que define el timbre.
+  cod4_mp44: 'mwclassic__mw2e_ak47',
+  mw3e_scarl: 'blackops__bo2_generic_ar__scar',
+  mw3e_fad: 'mwclassic__mw3e_fad', // carpeta propia, libre
+  mw3e_cm901: 'mwclassic__mw3e_cm901', // carpeta propia, libre
+  mw2e_m16: 'm9k__dmg_m16a4',
+  mw2e_famas: 'm9k__fokku_tc_famas',
+  mw3e_qbz97: 'mwclassic__mw3e_qbz97', // carpeta propia, libre
+  mw2e_scar: 'm9k__fnscarh',
+  mw2e_fnfal: 'm9k__fn_fal',
+  cod4_g3: 'm9k__hk_g3',
+  cod4_m14: 'mwclassic__cod4_m14', // carpeta propia, libre
+  mw2e_aug: 'mwclassic__mw2e_aug', // carpeta propia, libre
+
+  // --- COD: subfusiles ---
+  cod4_mp5: 'mwclassic__cod4_mp5', // carpeta propia, libre
+  mw3e_ump45: 'm9k__hk_ump45',
+  mw3e_ak74u: 'mwclassic__mw3e_ak74u', // carpeta propia, libre
+  mw2e_mp5k: 'blackops__bo2_mp5', // el MP5K es un MP5 de cañón corto
+  cod4_uzi: 'm9k__uzi',
+  cod4_p90: 'mwclassic__mw3e_p90', // el mismo P90, sub-pack MW3
+  cod4_skorpion: 'blackops__bo1_skorpion',
+  mw2e_vector: 'm9k__kriss', // el Vector ES el KRISS Vector
+  mw2e_pp2000: 'mwclassic__mw2e_pp2000', // carpeta propia, libre
+  mw3e_pp90m1: 'mwclassic__mw3e_pp90m1', // carpeta propia, libre
+  mw3e_mp7: 'm9k__mp7',
+  mw3e_mp9: 'm9k__mp9',
+  mw3e_fmg9: 'mwclassic__mw3e_fmg9', // carpeta propia, libre
+  mw3e_pm9: 'mwclassic__mw3e_pm9', // carpeta propia, libre
+
+  // --- COD: escopetas ---
+  cod4_w1200: 'm9k__m37', // W1200 y M37 son las dos de corredera del mismo porte
+  cod4_m1014: 'm9k__benellim3', // el M1014 ES el Benelli M4
+  mw2e_spas12: 'm9k__spas_12', // la carpeta propia no trae disparo (punto 2)
+  mw3e_striker: 'm9k__striker12',
+  mw3e_aa12: 'm9k__jackhammer', // las dos son escopeta automática de tambor
+  mw3e_ksg12: 'blackops__bo2_generic_shotgun__ksg',
+  mw3e_usas12: 'm9k__usas12',
+  mw3e_m1887: 'm9k__winchester73', // las dos son de palanca Winchester
+
+  // --- COD: francotiradores ---
+  cod4_m40a3: 'm9k__dmg_m24', // el M24 es la versión Army del mismo M40/R700
+  cod4_r700: 'm9k__remington',
+  mw2e_cheytac: 'mwclassic__mw2e_cheytac', // carpeta propia, libre
+  mw3e_awm: 'blackops__bo2_generic_sniper__ballista',
+  mw3e_msr: 'blackops__bo2_generic_sniper__dsr',
+  cod4_m82: 'm9k__m82',
+  mw3e_as50: 'mwclassic__mw3e_as50', // carpeta propia, libre
+  cod4_dragunov: 'm9k__svd', // el Dragunov ES el SVD
+  mw3e_rsass: 'mwclassic__mw3e_rsass', // carpeta propia, libre
+  mw3e_mk14: 'mwclassic__mw3e_mk14', // carpeta propia, libre
+
+  // --- COD: ametralladoras ---
+  // La carpeta `cod4_m249` no tiene disparo canónico y se parte en variantes:
+  // `__mn` ya la tomó el M249 de CS, así que acá va `__sl`. Es la MISMA arma
+  // grabada distinto, no otra.
+  cod4_m249: 'mwclassic__cod4_m249__sl',
+  cod4_m60: 'mwclassic__cod4_m60', // carpeta propia, libre
+  cod4_rpd: 'mwclassic__cod4_rpd', // carpeta propia, libre
+  mw2e_m240: 'mwclassic__mw2e_m240', // carpeta propia, libre
+  mw2e_mg4: 'mwclassic__mw2e_mg4', // carpeta propia, libre
+  mw3e_mk46: 'mwclassic__mw3e_mk46', // carpeta propia, libre
+  mw3e_pkp: 'm9k__pkm', // el Pecheneg es un PKM modernizado
+  mw3e_l86: 'mwclassic__mw3e_l86', // carpeta propia, libre
+  mw3e_mg36: 'mwclassic__mw3e_mg36', // carpeta propia, libre
+
+  // --- COD: pistolas y revólveres ---
+  cod4_m1911: 'mwclassic__cod4_1911', // carpeta propia, libre
+  cod4_m9: 'm9k__beretta92', // la M9 ES la Beretta 92
+  cod4_usp: 'blackops__bo2_generic_pistol__heavy', // no hay USP libre; .45 pesada
+  mw2e_g17: 'm9k__dmg_glock',
+  mw3e_deagle: 'mwclassic__mw3e_deagle__44', // el mismo Deagle, calibre .44
+  mw3e_fiveseven: 'blackops__bo2_generic_pistol__kard',
+  mw3e_p99: 'blackops__bo2_generic_pistol__light',
+  mw3e_anaconda: 'm9k__coltpython', // la Anaconda es la Python en .44
+  mw3e_mp412: 'm9k__r_bull', // los dos son revólver de armazón grande
 }
 
 /**

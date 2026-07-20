@@ -49,9 +49,13 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { basename, join } from 'node:path'
 import { type Document, NodeIO } from '@gltf-transform/core'
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions'
-import { dedup, prune, unlit } from '@gltf-transform/functions'
+import { dedup, prune } from '@gltf-transform/functions'
 import { mergeIndex, type IndexEntry } from './lib/merge-index.ts'
-import { decodePng, samplePngRgb, type DecodedPng } from './lib/png-reader.ts'
+import {
+  MAX_LADO_CUERPO,
+  prepararMaterialesPbr,
+  verificarAtributosPbr,
+} from './lib/pbr-doc.ts'
 import { detectSightLine, type SightType } from './lib/sight.ts'
 import {
   SOURCE_WEAPONS,
@@ -104,11 +108,10 @@ export interface ViewmodelIndexEntry extends IndexEntry {
   armTriangles: number
 }
 
-/** sRGB -> lineal. Mismo motivo que en convert-source-weapons.ts: `COLOR_0`
- *  vive en espacio lineal y copiar los bytes del PNG deja todo lavado. */
-function srgbToLinear(c: number): number {
-  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
-}
+// La conversión sRGB -> lineal que vivía acá se fue con el horneado a
+// `COLOR_0`: ahora la textura viaja como textura y es el propio glTF el que
+// declara su espacio de color (`baseColorTexture` es sRGB por especificación),
+// así que la conversión la hace el sampler de la GPU y no este script.
 
 /**
  * Posiciones de las primitivas de una malla concreta.
@@ -170,67 +173,15 @@ function countTriangles(doc: Document, meshName?: string): number {
 }
 
 /**
- * Hornea el color de textura en `COLOR_0` por vértice, y deja UN material por
- * MALLA (no uno para todo el documento, como hace el pipeline `w_`).
+ * Lado máximo de las texturas de los BRAZOS.
  *
- * Uno por malla y no uno global porque cuerpo y brazos tienen que poder llevar
- * materiales distintos en Three: `skins/material.ts` parcha el shader del
- * material de la malla del arma, y si el material fuera compartido con los
- * brazos, el camuflaje aparecería también en los guantes. Un material por
- * malla es la separación mínima que garantiza que eso no pase.
+ * La mitad que el cuerpo porque los brazos ocupan menos pantalla, están casi
+ * siempre parcialmente fuera de cuadro y —esto es lo que decide— son los
+ * MISMOS en las 42 armas: cada byte que pesen se paga 42 veces en disco y una
+ * vez por cada cambio de arma en carga.
  */
-function bakeTextureToVertexColors(doc: Document): void {
-  const root = doc.getRoot()
-  const buffer = root.listBuffers()[0]
-  const decoded = new Map<string, DecodedPng>()
+const MAX_LADO_BRAZOS = 512
 
-  for (const mesh of root.listMeshes()) {
-    const baked = doc.createMaterial(`baked_${mesh.getName()}`).setBaseColorFactor([1, 1, 1, 1])
-    for (const prim of mesh.listPrimitives()) {
-      const position = prim.getAttribute('POSITION')
-      if (!position) continue
-      const count = position.getCount()
-      const colors = new Float32Array(count * 3)
-
-      const material = prim.getMaterial()
-      const texture = material?.getBaseColorTexture() ?? null
-      const uv = prim.getAttribute('TEXCOORD_0')
-      const image = texture?.getImage() ?? null
-
-      if (texture && image && uv) {
-        const key = texture.getName() || String(texture.listParents().length)
-        let png = decoded.get(key)
-        if (!png) {
-          png = decodePng(Buffer.from(image))
-          decoded.set(key, png)
-        }
-        for (let i = 0; i < count; i++) {
-          const u = uv.getElement(i, [0, 0])
-          const c = samplePngRgb(png, u[0], u[1])
-          colors[i * 3] = srgbToLinear(c.r)
-          colors[i * 3 + 1] = srgbToLinear(c.g)
-          colors[i * 3 + 2] = srgbToLinear(c.b)
-        }
-      } else {
-        const factor = material ? material.getBaseColorFactor() : [1, 1, 1, 1]
-        for (let i = 0; i < count; i++) {
-          colors[i * 3] = factor[0]
-          colors[i * 3 + 1] = factor[1]
-          colors[i * 3 + 2] = factor[2]
-        }
-      }
-
-      const accessor = doc.createAccessor(undefined, buffer).setType('VEC3').setArray(colors)
-      prim.setAttribute('COLOR_0', accessor)
-      prim.setAttribute('TEXCOORD_0', null)
-      // Las normales tampoco se leen: el viewmodel se dibuja con
-      // MeshBasicMaterial, que no tiene iluminación. Tirarlas ahorra un tercio
-      // de los bytes de vértice de un modelo de 24 mil triángulos.
-      prim.setAttribute('NORMAL', null)
-      prim.setMaterial(baked)
-    }
-  }
-}
 
 /**
  * Borra los nodos que SourceIO deja sueltos y que no aportan nada al runtime.
@@ -296,8 +247,16 @@ async function convertOne(
   // punto 1 del encabezado.
   await doc.transform(dedup())
   pruneLooseNodes(doc)
-  bakeTextureToVertexColors(doc)
-  await doc.transform(unlit(), prune())
+  // Los brazos van a media resolución; el cuerpo al lado por defecto. Es lo
+  // único que este pipeline necesita decidir sobre las texturas.
+  prepararMaterialesPbr(doc, (malla) => (malla === NODE_ARMS ? MAX_LADO_BRAZOS : MAX_LADO_CUERPO))
+  // Sin `unlit()`: marcar el material como KHR_materials_unlit es justamente
+  // lo que le decía al runtime "este arma no se ilumina". Ahora sí se ilumina.
+  // `prune()` se conserva —limpia accessors y nodos que quedaron sueltos— y
+  // `verificarAtributosPbr` corre después para confirmar que no se llevó
+  // puesto nada que haga falta.
+  await doc.transform(prune())
+  verificarAtributosPbr(doc)
 
   const bodyPositions = positionsOfMesh(doc, NODE_BODY)
   if (bodyPositions.length === 0) throw new Error(`no hay malla "${NODE_BODY}" con vértices`)

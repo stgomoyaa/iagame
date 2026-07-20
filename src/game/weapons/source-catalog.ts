@@ -83,17 +83,20 @@ export type SourceSightType = 'hierros' | 'optica'
 /**
  * Juego del que viene el pack de origen. Es la etiqueta que se muestra entre
  * paréntesis detrás del nombre (`AK-47 (CS)`), y no es decoración: el jugador
- * elige por ella ("hoy juego estilo COD"). Hoy los 39 modelos salen de packs
- * de Counter-Strike y por eso `'CS'` es el único valor que aparece en la tabla
- * — el tipo es una unión y no un string suelto justamente para que sumar un
- * pack de otro juego sea agregar un miembro acá, no inventar una convención de
- * texto en cada fila.
+ * elige por ella ("hoy juego estilo COD").
+ *
+ * El tipo se dejó como unión de un solo miembro esperando exactamente esto, y
+ * sumar COD fue agregar el miembro: ni una convención de texto nueva, ni una
+ * columna más, ni tocar `sourceWeaponDisplayName()`.
  *
  * Que la etiqueta viva en el catálogo (y no pegada dentro de `name`) es lo que
  * permite que dos armas homónimas de packs distintos convivan: el nombre real
- * puede repetirse entre juegos, la combinación nombre+juego no.
+ * puede repetirse entre juegos, la combinación nombre+juego no. Con COD
+ * adentro eso dejó de ser hipotético — hay un AK-47, un FAMAS, un AUG, un P90,
+ * un MP7, un MP9, una Desert Eagle, una Five-seveN y un M249 en los DOS packs,
+ * y conviven como `AK-47 (CS)` y `AK-47 (COD)`.
  */
-export type SourceGame = 'CS'
+export type SourceGame = 'CS' | 'COD'
 
 export interface SourceWeaponEntry {
   /** Nombre del archivo de origen, sin extensión. Nunca se muestra. */
@@ -179,6 +182,143 @@ export const SOURCE_WEAPONS: readonly SourceWeaponEntry[] = [
   // --- Ametralladoras ----------------------------------------------------
   { slug: 'm249', name: 'M249', game: 'CS', archetype: 'lmg', sight: 'hierros' },
   { slug: 'negev', name: 'Negev', game: 'CS', archetype: 'lmg', sight: 'hierros' },
+
+  // =======================================================================
+  // PACK DE CALL OF DUTY (ARC9): 69 armas de los 103 modelos `c_*.mdl`.
+  // =======================================================================
+  //
+  // Mismas tres columnas y mismo criterio que arriba. Lo que cambia es de
+  // dónde salen los modelos y, por lo tanto, qué hubo que decidir:
+  //
+  // **Los 34 modelos que NO entraron, y por qué.** Ninguno se descartó por
+  // "no me gustó": cada motivo es estructural.
+  //
+  // - **11 no son armas de fuego de mano**: cinco lanzacohetes (`rpg7`,
+  //   `at4`, `javelin`, `stinger`, `smaw`), tres lanzagranadas (`m79`,
+  //   `m320`, `xm25`), una granada (`frag`), un escudo antidisturbios
+  //   (`riotshield`, cuya caja de 0.12 x 0.42 x 0.71 m ya dice que no es un
+  //   arma) y un `item`. No hay arquetipo al que mapearlos sin inventar uno,
+  //   y inventar arquetipos está prohibido.
+  // - **1 es de puño doble** (`1887_akimbo`), exactamente el caso de `elite`
+  //   y `mac10_dual` de CS: dos armas espejadas en el mismo plano, que el rig
+  //   de viewmodel no puede posar. Mismo motivo, misma decisión.
+  // - **22 son el MISMO arma repetida en otro pack de COD.** El AK-47 viene
+  //   en `cod4`, `mw2e` y `mw3e`; la M1911 en `cod4` y `mw3e` (955 triángulos
+  //   las dos: es el mismo archivo). Entrarían como tres `AK-47 (COD)`, que
+  //   ni siquiera es representable — el nombre mostrado tiene que ser único.
+  //   Se eligió UN modelo por arma real, el de malla más limpia, y se
+  //   descartaron los demás.
+  //
+  // **La escala del pack no se toca.** Los `c_` de COD miden distinto que los
+  // `w_` de CS (el AK-47 de COD 0.71 m contra 0.80 m del de CS), pero eso no
+  // llega a este archivo: `buildNormalizeMatrix` reescala cada arma al largo
+  // canónico de su clase, así que las dos salen midiendo lo mismo. Lo que sí
+  // cambia por pack es la ORIENTACIÓN (eje largo en +X acá, en +Z en CS), y
+  // vive en `RAW_AXES_BY_GAME` de convert-source-weapons.ts.
+  //
+  // **Ninguna trae cargador separable.** Los `w_` de CS traen el cargador como
+  // malla aparte (`weapon_mag`) y por eso la recarga lo puede sacar y poner.
+  // En los `c_` de COD el cargador es un HUESO (`tag_clip`), no una malla, y
+  // el pipeline descarta el esqueleto: salen con un solo nodo. La consecuencia
+  // es concreta y conocida — estas 69 recargan con la coreografía procedural
+  // sola, como las 40 CC0, no con el cargador animado. Cuestan 1 draw call en
+  // vez de 2.
+
+  // --- COD: fusiles de asalto --------------------------------------------
+  // `ar-1` es la línea base: automático, cartucho intermedio.
+  { slug: 'cod4_ak47', name: 'AK-47', game: 'COD', archetype: 'ar-1', sight: 'hierros' },
+  { slug: 'mw3e_m4a1', name: 'M4A1', game: 'COD', archetype: 'ar-1', sight: 'hierros' },
+  { slug: 'mw2e_acr', name: 'ACR', game: 'COD', archetype: 'ar-1', sight: 'hierros' },
+  { slug: 'cod4_g36c', name: 'G36C', game: 'COD', archetype: 'ar-1', sight: 'hierros' },
+  { slug: 'mw3e_g36', name: 'G36', game: 'COD', archetype: 'ar-1', sight: 'hierros' },
+  { slug: 'mw2e_f2000', name: 'F2000', game: 'COD', archetype: 'ar-1', sight: 'hierros' },
+  { slug: 'mw2e_tavor', name: 'TAR-21', game: 'COD', archetype: 'ar-1', sight: 'hierros' },
+  { slug: 'cod4_mp44', name: 'STG-44', game: 'COD', archetype: 'ar-1', sight: 'hierros' },
+  { slug: 'mw3e_scarl', name: 'SCAR-L', game: 'COD', archetype: 'ar-1', sight: 'hierros' },
+  { slug: 'mw3e_fad', name: 'FAD', game: 'COD', archetype: 'ar-1', sight: 'hierros' },
+  { slug: 'mw3e_cm901', name: 'CM901', game: 'COD', archetype: 'ar-1', sight: 'hierros' },
+
+  // Ráfaga de 3 -> `ar-2`, el único arquetipo `burst`. Las tres lo son en su
+  // juego de origen, y es la razón por la que se las eligió para este
+  // arquetipo y no por su silueta.
+  { slug: 'mw2e_m16', name: 'M16A4', game: 'COD', archetype: 'ar-2', sight: 'hierros' },
+  { slug: 'mw2e_famas', name: 'FAMAS', game: 'COD', archetype: 'ar-2', sight: 'hierros' },
+  { slug: 'mw3e_qbz97', name: 'Type 95', game: 'COD', archetype: 'ar-2', sight: 'hierros' },
+
+  // Fusil de batalla (7.62, más daño y alcance, menos cadencia) -> `ar-3`.
+  { slug: 'mw2e_scar', name: 'SCAR-H', game: 'COD', archetype: 'ar-3', sight: 'hierros' },
+  { slug: 'mw2e_fnfal', name: 'FN FAL', game: 'COD', archetype: 'ar-3', sight: 'hierros' },
+  { slug: 'cod4_g3', name: 'G3', game: 'COD', archetype: 'ar-3', sight: 'hierros' },
+  { slug: 'cod4_m14', name: 'M14', game: 'COD', archetype: 'ar-3', sight: 'hierros' },
+  { slug: 'mw2e_aug', name: 'AUG HBAR', game: 'COD', archetype: 'ar-3', sight: 'hierros' },
+
+  // --- COD: subfusiles ---------------------------------------------------
+  // Mismo corte que en CS: `smg-2` para los de cartucho pesado o cañón corto
+  // de fusil (cadencia contenida, más alcance); `smg-1` para el resto.
+  { slug: 'cod4_mp5', name: 'MP5', game: 'COD', archetype: 'smg-2', sight: 'hierros' },
+  { slug: 'mw3e_ump45', name: 'UMP45', game: 'COD', archetype: 'smg-2', sight: 'hierros' },
+  { slug: 'mw3e_ak74u', name: 'AK-74u', game: 'COD', archetype: 'smg-2', sight: 'hierros' },
+  { slug: 'mw2e_mp5k', name: 'MP5K', game: 'COD', archetype: 'smg-1', sight: 'hierros' },
+  { slug: 'cod4_uzi', name: 'Uzi', game: 'COD', archetype: 'smg-1', sight: 'hierros' },
+  { slug: 'cod4_p90', name: 'P90', game: 'COD', archetype: 'smg-1', sight: 'hierros' },
+  { slug: 'cod4_skorpion', name: 'Skorpion', game: 'COD', archetype: 'smg-1', sight: 'hierros' },
+  { slug: 'mw2e_vector', name: 'Vector', game: 'COD', archetype: 'smg-1', sight: 'hierros' },
+  { slug: 'mw2e_pp2000', name: 'PP-2000', game: 'COD', archetype: 'smg-1', sight: 'hierros' },
+  { slug: 'mw3e_pp90m1', name: 'PP90M1', game: 'COD', archetype: 'smg-1', sight: 'hierros' },
+  { slug: 'mw3e_mp7', name: 'MP7', game: 'COD', archetype: 'smg-1', sight: 'hierros' },
+  { slug: 'mw3e_mp9', name: 'MP9', game: 'COD', archetype: 'smg-1', sight: 'hierros' },
+  { slug: 'mw3e_fmg9', name: 'FMG9', game: 'COD', archetype: 'smg-1', sight: 'hierros' },
+  { slug: 'mw3e_pm9', name: 'PM-9', game: 'COD', archetype: 'smg-1', sight: 'hierros' },
+
+  // --- COD: escopetas ----------------------------------------------------
+  { slug: 'cod4_w1200', name: 'W1200', game: 'COD', archetype: 'shotgun', sight: 'hierros' },
+  { slug: 'cod4_m1014', name: 'M1014', game: 'COD', archetype: 'shotgun', sight: 'hierros' },
+  { slug: 'mw2e_spas12', name: 'SPAS-12', game: 'COD', archetype: 'shotgun', sight: 'hierros' },
+  { slug: 'mw3e_striker', name: 'Striker', game: 'COD', archetype: 'shotgun', sight: 'hierros' },
+  { slug: 'mw3e_aa12', name: 'AA-12', game: 'COD', archetype: 'shotgun', sight: 'hierros' },
+  { slug: 'mw3e_ksg12', name: 'KSG 12', game: 'COD', archetype: 'shotgun', sight: 'hierros' },
+  { slug: 'mw3e_usas12', name: 'USAS 12', game: 'COD', archetype: 'shotgun', sight: 'hierros' },
+  { slug: 'mw3e_m1887', name: 'Model 1887', game: 'COD', archetype: 'shotgun', sight: 'hierros' },
+
+  // --- COD: precisión ----------------------------------------------------
+  // Cerrojo -> `sniper-bolt`; semiautomático de precisión ->
+  // `sniper-marksman`. Las diez van con `optica` porque en estos modelos el
+  // visor viene MODELADO DENTRO del cuerpo (a diferencia de CS, donde es una
+  // pieza aparte y por eso existen las variantes `_scopeless`). Acá no hay
+  // variante sin visor que ofrecer: sacarlo implicaría editar la malla.
+  { slug: 'cod4_m40a3', name: 'M40A3', game: 'COD', archetype: 'sniper-bolt', sight: 'optica' },
+  { slug: 'cod4_r700', name: 'R700', game: 'COD', archetype: 'sniper-bolt', sight: 'optica' },
+  { slug: 'mw2e_cheytac', name: 'Intervention', game: 'COD', archetype: 'sniper-bolt', sight: 'optica' },
+  { slug: 'mw3e_awm', name: 'L118A', game: 'COD', archetype: 'sniper-bolt', sight: 'optica' },
+  { slug: 'mw3e_msr', name: 'MSR', game: 'COD', archetype: 'sniper-bolt', sight: 'optica' },
+  { slug: 'cod4_m82', name: 'Barrett .50cal', game: 'COD', archetype: 'sniper-marksman', sight: 'optica' },
+  { slug: 'mw3e_as50', name: 'AS50', game: 'COD', archetype: 'sniper-marksman', sight: 'optica' },
+  { slug: 'cod4_dragunov', name: 'Dragunov', game: 'COD', archetype: 'sniper-marksman', sight: 'optica' },
+  { slug: 'mw3e_rsass', name: 'RSASS', game: 'COD', archetype: 'sniper-marksman', sight: 'optica' },
+  { slug: 'mw3e_mk14', name: 'Mk14 EBR', game: 'COD', archetype: 'sniper-marksman', sight: 'optica' },
+
+  // --- COD: ametralladoras -----------------------------------------------
+  { slug: 'cod4_m249', name: 'M249 SAW', game: 'COD', archetype: 'lmg', sight: 'hierros' },
+  { slug: 'cod4_m60', name: 'M60E4', game: 'COD', archetype: 'lmg', sight: 'hierros' },
+  { slug: 'cod4_rpd', name: 'RPD', game: 'COD', archetype: 'lmg', sight: 'hierros' },
+  { slug: 'mw2e_m240', name: 'M240', game: 'COD', archetype: 'lmg', sight: 'hierros' },
+  { slug: 'mw2e_mg4', name: 'MG4', game: 'COD', archetype: 'lmg', sight: 'hierros' },
+  { slug: 'mw3e_mk46', name: 'Mk46', game: 'COD', archetype: 'lmg', sight: 'hierros' },
+  { slug: 'mw3e_pkp', name: 'PKP Pecheneg', game: 'COD', archetype: 'lmg', sight: 'hierros' },
+  { slug: 'mw3e_l86', name: 'L86 LSW', game: 'COD', archetype: 'lmg', sight: 'hierros' },
+  { slug: 'mw3e_mg36', name: 'MG36', game: 'COD', archetype: 'lmg', sight: 'hierros' },
+
+  // --- COD: armas cortas -------------------------------------------------
+  // Todas a `pistol`, igual que en CS: es el único arquetipo de arma corta.
+  { slug: 'cod4_m1911', name: 'M1911', game: 'COD', archetype: 'pistol', sight: 'hierros' },
+  { slug: 'cod4_m9', name: 'M9', game: 'COD', archetype: 'pistol', sight: 'hierros' },
+  { slug: 'cod4_usp', name: 'USP .45', game: 'COD', archetype: 'pistol', sight: 'hierros' },
+  { slug: 'mw2e_g17', name: 'G18', game: 'COD', archetype: 'pistol', sight: 'hierros' },
+  { slug: 'mw3e_deagle', name: 'Desert Eagle', game: 'COD', archetype: 'pistol', sight: 'hierros' },
+  { slug: 'mw3e_fiveseven', name: 'Five-seveN', game: 'COD', archetype: 'pistol', sight: 'hierros' },
+  { slug: 'mw3e_p99', name: 'P99', game: 'COD', archetype: 'pistol', sight: 'hierros' },
+  { slug: 'mw3e_anaconda', name: '.44 Magnum', game: 'COD', archetype: 'pistol', sight: 'hierros' },
+  { slug: 'mw3e_mp412', name: 'MP-412 REX', game: 'COD', archetype: 'pistol', sight: 'hierros' },
 ]
 
 /** Índice por slug, para el pipeline y el registry. */

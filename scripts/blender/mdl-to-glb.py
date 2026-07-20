@@ -7,7 +7,8 @@ cuesta ~5s, no se paga 84 veces).
 
     blender --background --python scripts/blender/mdl-to-glb.py -- trabajos.json
 
-El archivo de trabajos es una lista de {"mdl": ruta, "out": ruta}.
+El archivo de trabajos es una lista de {"mdl": ruta, "out": ruta} y, opcional,
+{"keep": [nombres de malla]} — ver `filtrar_bodygroups`.
 
 Tres cosas que este script decide, y el porqué:
 
@@ -66,6 +67,67 @@ NOMBRE_CARGADOR = "weapon_mag"
 # `.001` opcionales cubren la extensión que deja SourceIO y el sufijo que
 # agrega Blender ante nombres repetidos.
 PATRON_CARGADOR = re.compile(r"_mag(\.smd)?(\.\d+)?$", re.IGNORECASE)
+
+# Blender le agrega `.001`, `.002`... a un nombre repetido, y SourceIO deja la
+# extensión `.smd`. Las dos cosas sobran para comparar contra la lista de
+# piezas elegidas, que viene con nombres pelados (`stock_h`).
+PATRON_SUFIJO_BLENDER = re.compile(r"(\.smd)?(\.\d+)?$", re.IGNORECASE)
+
+
+def nombre_pelado(nombre: str) -> str:
+    """`new/stock_h.smd.001` -> `stock_h`.
+
+    La CARPETA también se pela, y no es cosmético: 3 de los 103 modelos
+    (`c_mw3e_m4a1`, `c_mw3e_m16a4`, `c_mw2e_m9`) declaran sus piezas con ruta
+    (`new/m4.smd`, `25chunk/m92.smd`) y Blender la conserva en el nombre del
+    objeto. Con la carpeta puesta de un lado y no del otro, la comparación
+    fallaba para TODAS las piezas y el filtro borraba el arma entera.
+
+    Los dos lados de la comparación pasan por esta misma función justamente
+    para que no puedan normalizar distinto.
+    """
+    sin_carpeta = nombre[nombre.rfind("/") + 1 :]
+    return PATRON_SUFIJO_BLENDER.sub("", sin_carpeta, count=1)
+
+
+def filtrar_bodygroups(keep) -> int:
+    """Borra las mallas que NO son parte del arma elegida. Devuelve cuántas.
+
+    Un `.mdl` con bodygroups declara piezas MUTUAMENTE EXCLUYENTES ("culata
+    corta O culata larga O ninguna"), pero SourceIO las importa todas juntas y
+    encimadas: el `c_cod4_ak47.mdl` entra con un AK normal Y un AK táctico
+    completo ocupando el mismo espacio, más un lanzagranadas y dos culatas.
+    Convertirlo así da un arma con el cuerpo duplicado.
+
+    Cuál es la pieza buena no se puede ver en la malla —es un dato de la
+    cabecera del `.mdl`—, así que la decide `scripts/lib/mdl-bodyparts.ts` y
+    llega acá ya resuelta en `keep`. Este script sólo la aplica.
+
+    Si `keep` viene vacío o ausente (los `w_` de CS, que no tienen bodygroups
+    encimados) no se toca nada: el filtro es opt-in.
+    """
+    if not keep:
+        return 0
+
+    permitidas = {nombre_pelado(n).lower() for n in keep}
+    borradas = 0
+    for obj in list(bpy.data.objects):
+        if obj.type != "MESH":
+            continue
+        if nombre_pelado(obj.name).lower() not in permitidas:
+            bpy.data.objects.remove(obj, do_unlink=True)
+            borradas += 1
+
+    # Si el filtro se comió todo, algo no coincide entre lo que dice la
+    # cabecera y lo que nombró SourceIO. Fallar acá es MUY preferible a
+    # exportar un GLB vacío: un arma invisible en el juego se descubre tarde y
+    # se confunde con un problema de render.
+    if not [o for o in bpy.data.objects if o.type == "MESH"]:
+        raise RuntimeError(
+            f"el filtro de bodygroups borró todas las mallas (keep={sorted(permitidas)})"
+        )
+
+    return borradas
 
 
 def limpiar_escena() -> None:
@@ -151,7 +213,7 @@ def unir_por_parte() -> dict:
     }
 
 
-def convertir(mdl: str, out: str) -> dict:
+def convertir(mdl: str, out: str, keep=None) -> dict:
     limpiar_escena()
 
     # El operador ignora `filepath` a secas: usa `directory` + `files`.
@@ -171,6 +233,10 @@ def convertir(mdl: str, out: str) -> dict:
 
     if not [o for o in bpy.data.objects if o.type == "MESH"]:
         raise RuntimeError("el import no dejó ninguna malla")
+
+    # Antes de unir nada: unir primero fusionaría la variante descartada con la
+    # buena y ya no habría forma de separarlas.
+    descartadas = filtrar_bodygroups(keep)
 
     piezas = unir_por_parte()
     cuerpo = piezas["cuerpo"]
@@ -203,6 +269,7 @@ def convertir(mdl: str, out: str) -> dict:
         "ok": True,
         "tris": tris_total,
         "partes": piezas["partes"],
+        "descartadas": descartadas,
         "cargador": cargador is not None,
         "dims": [round(dims.x, 4), round(dims.y, 4), round(dims.z, 4)],
         "texturas": len(bpy.data.images),
@@ -220,7 +287,9 @@ def main() -> None:
     resultados = []
     for trabajo in trabajos:
         try:
-            resultados.append(convertir(trabajo["mdl"], trabajo["out"]))
+            resultados.append(
+                convertir(trabajo["mdl"], trabajo["out"], trabajo.get("keep"))
+            )
         except Exception as e:
             traceback.print_exc()
             resultados.append({"mdl": trabajo["mdl"], "ok": False, "error": str(e)})
