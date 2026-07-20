@@ -21,6 +21,7 @@ import { encodePng } from './lib/png-writer.ts'
 import {
   analizarLegibilidad,
   CARAS,
+  CROMA_ESTRUCTURA_PISO,
   hornearCara,
   LUMINANCIA_PISO,
   LUMINANCIA_TECHO,
@@ -160,6 +161,9 @@ function main(): void {
   console.log(`  p99.9 (con estrellas) ${a.luminanciaP999.toFixed(3)}  -- no se controla: son puntos`)
   console.log(`  contraste local p99.9 ${a.contrasteLocalP999.toFixed(4)}  (ventana ${ventana} texels)`)
   console.log(`  contraste local medio ${a.contrasteLocalMedio.toFixed(4)}`)
+  console.log(
+    `  contraste croma p99.9  ${a.contrasteCromaP999.toFixed(4)}  (piso ${CROMA_ESTRUCTURA_PISO})`,
+  )
   console.log(`  texels de estrella    ${(a.fraccionEstrellas * 100).toFixed(3)}%`)
 
   const problemas: string[] = []
@@ -174,6 +178,13 @@ function main(): void {
       `luminancia máxima sin estrellas ${maxSinEstrellas.toFixed(3)} por encima del techo ` +
         `${LUMINANCIA_TECHO}: el cielo deja de leerse como noche y le come contraste a los ` +
         'colores de equipo claros',
+    )
+  }
+  if (a.contrasteCromaP999 < CROMA_ESTRUCTURA_PISO) {
+    problemas.push(
+      `contraste cromático p99.9 ${a.contrasteCromaP999.toFixed(4)} por debajo del piso ` +
+        `${CROMA_ESTRUCTURA_PISO}: el cielo no tiene estructura de color a escala de silueta, ` +
+        'o sea que volvió a ser un degradado plano',
     )
   }
   if (a.contrasteLocalP999 > 0.05) {

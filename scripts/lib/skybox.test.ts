@@ -3,6 +3,8 @@ import {
   analizarLegibilidad,
   CARAS,
   colorDelCielo,
+  CROMA_ESTRUCTURA_PISO,
+  marcoGalaxia,
   direccionDeTexel,
   fbm,
   hornearCara,
@@ -86,34 +88,65 @@ describe('direccionDeTexel', () => {
 })
 
 describe('continuidad entre caras (la razón de generar desde la dirección)', () => {
-  it('la arista compartida px/nz da el mismo color desde las dos caras', () => {
+  /** Peor diferencia de canal entre dos colores. */
+  function diferencia(a: ColorLineal, b: ColorLineal): number {
+    return Math.max(Math.abs(a.r - b.r), Math.abs(a.g - b.g), Math.abs(a.b - b.b))
+  }
+
+  /**
+   * Peor salto entre texels VECINOS dentro de una cara, sobre la misma
+   * columna que se compara en el test de la costura. Es la vara contra la que
+   * se mide la costura.
+   */
+  function saltoEntreVecinos(n: number): number {
+    let peor = 0
+    for (let y = 0; y < n; y++) {
+      peor = Math.max(
+        peor,
+        diferencia(color(dir('px', n - 1, y, n), SIN_ESTRELLAS), color(dir('px', n - 2, y, n), SIN_ESTRELLAS)),
+      )
+    }
+    return peor
+  }
+
+  // Por qué la costura se compara contra el salto entre vecinos y no contra
+  // una constante: la versión anterior de estos dos tests exigía < 0.008 con
+  // caras de 64 texels, y ese número no es una propiedad del diseño sino del
+  // CONTENIDO. Al meterle grano fino a la galaxia (frecuencias 16 y 48, que
+  // es de donde sale la estructura granular de la referencia) dos texels
+  // vecinos pasaron a diferir naturalmente ~0.03, así que el umbral fijo
+  // empezó a fallar sin que hubiera ninguna costura: sólo se estaba midiendo
+  // "el cielo cambia rápido". La propiedad que de verdad importa es que la
+  // arista NO SEA ESPECIAL -- que cruzarla cueste lo mismo que moverse un
+  // texel adentro de una cara -- y esa formulación no depende de cuánta
+  // frecuencia tenga el cielo.
+
+  it('la arista compartida px/nz no es más brusca que un paso de un texel', () => {
     // px con sc = +1 mira a z = -1; nz con sc = -1 mira a x = +1. Es la
     // misma arista del cubo, recorrida por las dos caras.
     const n = 64
-    let peor = 0
+    let peorCostura = 0
     for (let y = 0; y < n; y++) {
       const a = color(dir('px', n - 1, y, n), SIN_ESTRELLAS)
       const b = color(dir('nz', 0, y, n), SIN_ESTRELLAS)
-      peor = Math.max(peor, Math.abs(a.r - b.r), Math.abs(a.g - b.g), Math.abs(a.b - b.b))
+      peorCostura = Math.max(peorCostura, diferencia(a, b))
     }
     // Los dos texels no son la MISMA dirección: están a medio texel de la
-    // arista cada uno, o sea separados ~1/n. Con el cielo siendo continuo en
-    // la dirección, la diferencia de color tiene que ser de ese orden.
-    // Medido: 0.0054. El umbral deja margen sin volverse decorativo.
-    expect(peor).toBeLessThan(0.008)
+    // arista cada uno, o sea separados lo mismo que dos texels vecinos.
+    expect(peorCostura).toBeLessThanOrEqual(saltoEntreVecinos(n) * 1.5)
   })
 
-  it('la arista compartida px/py da el mismo color desde las dos caras', () => {
+  it('la arista compartida px/py no es más brusca que un paso de un texel', () => {
     // Arista x=+1, y=+1. En px es la fila 0; en py es la columna sc = +1.
     const n = 64
-    let peor = 0
+    let peorCostura = 0
     for (let i = 0; i < n; i++) {
       const a = color(dir('px', i, 0, n), SIN_ESTRELLAS)
       // px fila 0, columna i -> z = -sc(i). py necesita z = tc = -sc_px(i).
       const b = color(dir('py', n - 1, n - 1 - i, n), SIN_ESTRELLAS)
-      peor = Math.max(peor, Math.abs(a.r - b.r), Math.abs(a.g - b.g), Math.abs(a.b - b.b))
+      peorCostura = Math.max(peorCostura, diferencia(a, b))
     }
-    expect(peor).toBeLessThan(0.01)
+    expect(peorCostura).toBeLessThanOrEqual(saltoEntreVecinos(n) * 1.5)
   })
 
   it('la tolerancia de la costura es exigente contra lo que varía el cielo', () => {
@@ -333,6 +366,85 @@ describe('analizarLegibilidad', () => {
     expect(a.luminanciaP999).toBeGreaterThan(0.98)
     // ...pero variación despreciable a la escala de una silueta.
     expect(a.contrasteLocalP999).toBeLessThan(0.02)
+  })
+})
+
+describe('estructura de la galaxia (el defecto que se estaba arreglando)', () => {
+  // El presupuesto de legibilidad son todos TECHOS, así que un degradado
+  // liso los cumple todos. Estos tests son el otro lado: verifican que el
+  // cielo efectivamente TIENE galaxia. Sin ellos una regresión a lavanda
+  // plano -- que es lo que el dueño rechazó -- pasaría en verde.
+
+  it('el cielo tiene estructura cromática a escala de silueta', () => {
+    const tamano = 256
+    const caras = new Map<Cara, Uint8Array>()
+    for (const cara of CARAS) caras.set(cara, hornearCara(cara, tamano, PARAMS_POR_DEFECTO))
+    const a = analizarLegibilidad(caras, tamano)
+    expect(a.contrasteCromaP999).toBeGreaterThanOrEqual(CROMA_ESTRUCTURA_PISO)
+  })
+
+  it('la estructura es de COLOR y no de brillo', () => {
+    // La afirmación central del diseño, como número: a la escala de la
+    // silueta el cielo cambia mucho más de tono que de luminancia. Es lo que
+    // permite que quepa una galaxia entera adentro de una ventana de
+    // luminancia de 0.23 de ancho.
+    const tamano = 256
+    const caras = new Map<Cara, Uint8Array>()
+    for (const cara of CARAS) caras.set(cara, hornearCara(cara, tamano, PARAMS_POR_DEFECTO))
+    const a = analizarLegibilidad(caras, tamano)
+    expect(a.contrasteCromaP999).toBeGreaterThan(a.contrasteLocalP999 * 1.5)
+  })
+
+  it('un cielo plano NO pasa el piso de estructura', () => {
+    // Control positivo: sin esto el test de arriba no prueba nada, porque no
+    // se sabría si el piso es exigente o si cualquier cosa lo pasa. Este es
+    // literalmente el cielo que se rechazó: base sin galaxia ni banda.
+    const tamano = 256
+    const plano: ParamsCielo = {
+      ...PARAMS_POR_DEFECTO,
+      intensidadGalaxia: 0,
+      intensidadNucleo: 0,
+      intensidadBanda: 0,
+      densidadEstrellas: 0,
+    }
+    const caras = new Map<Cara, Uint8Array>()
+    for (const cara of CARAS) caras.set(cara, hornearCara(cara, tamano, plano))
+    const a = analizarLegibilidad(caras, tamano)
+    expect(a.contrasteCromaP999).toBeLessThan(CROMA_ESTRUCTURA_PISO)
+  })
+
+  it('la galaxia tiene brazos: el color varía al girar alrededor del eje', () => {
+    // Un disco sin brazos (una mancha radial) da el mismo color en todo un
+    // anillo centrado en el eje. Con brazos espirales, recorrer ese anillo
+    // tiene que atravesar brazos y calles de polvo. Se mide sobre el anillo
+    // y no sobre un radio para no confundir "hay brazos" con "hay núcleo".
+    const marco = marcoGalaxia(PARAMS_POR_DEFECTO)
+    // Anillo a 30 grados del eje: bien adentro del disco (radio 62) y afuera
+    // del bulbo, o sea donde los brazos son el rasgo dominante.
+    const anguloAnillo = (30 * Math.PI) / 180
+    const sinEstrellas: ParamsCielo = { ...PARAMS_POR_DEFECTO, densidadEstrellas: 0 }
+
+    let min = Infinity
+    let max = -Infinity
+    for (let i = 0; i < 360; i++) {
+      const t = (i / 360) * 2 * Math.PI
+      // Punto del anillo: eje inclinado `anguloAnillo` en la dirección (u, v).
+      const c = Math.cos(anguloAnillo)
+      const s = Math.sin(anguloAnillo)
+      const v: Vec3 = {
+        x: marco.ax * c + (marco.ux * Math.cos(t) + marco.vx * Math.sin(t)) * s,
+        y: marco.ay * c + (marco.uy * Math.cos(t) + marco.vy * Math.sin(t)) * s,
+        z: marco.az * c + (marco.uz * Math.cos(t) + marco.vz * Math.sin(t)) * s,
+      }
+      const col = color(normalizar(v), sinEstrellas)
+      // El eje rojo-verde es el que separa el magenta del brazo del índigo
+      // de la calle de polvo.
+      const rg = linealASrgb(col.r) - linealASrgb(col.g)
+      min = Math.min(min, rg)
+      max = Math.max(max, rg)
+    }
+    // Medido: 0.20. Un disco liso sin brazos daría ~0.
+    expect(max - min).toBeGreaterThan(0.1)
   })
 })
 
