@@ -49,9 +49,11 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { basename, join } from 'node:path'
 import { type Document, NodeIO } from '@gltf-transform/core'
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions'
-import { dedup, prune, unlit } from '@gltf-transform/functions'
+import { dedup, prune } from '@gltf-transform/functions'
 import { mergeIndex, type IndexEntry } from './lib/merge-index.ts'
-import { decodePng, samplePngRgb, type DecodedPng } from './lib/png-reader.ts'
+import { decodePng } from './lib/png-reader.ts'
+import { encodePngRaw, type RawImage, resizeArea, targetSide } from './lib/png-writer.ts'
+import { analizarMascaraPhong, construirMetalRough, descartarAlfa } from './lib/source-pbr.ts'
 import { detectSightLine, type SightType } from './lib/sight.ts'
 import {
   SOURCE_WEAPONS,
@@ -104,11 +106,10 @@ export interface ViewmodelIndexEntry extends IndexEntry {
   armTriangles: number
 }
 
-/** sRGB -> lineal. Mismo motivo que en convert-source-weapons.ts: `COLOR_0`
- *  vive en espacio lineal y copiar los bytes del PNG deja todo lavado. */
-function srgbToLinear(c: number): number {
-  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
-}
+// La conversión sRGB -> lineal que vivía acá se fue con el horneado a
+// `COLOR_0`: ahora la textura viaja como textura y es el propio glTF el que
+// declara su espacio de color (`baseColorTexture` es sRGB por especificación),
+// así que la conversión la hace el sampler de la GPU y no este script.
 
 /**
  * Posiciones de las primitivas de una malla concreta.
@@ -170,64 +171,199 @@ function countTriangles(doc: Document, meshName?: string): number {
 }
 
 /**
- * Hornea el color de textura en `COLOR_0` por vértice, y deja UN material por
- * MALLA (no uno para todo el documento, como hace el pipeline `w_`).
+ * Lado máximo de la textura del CUERPO del arma.
  *
- * Uno por malla y no uno global porque cuerpo y brazos tienen que poder llevar
- * materiales distintos en Three: `skins/material.ts` parcha el shader del
- * material de la malla del arma, y si el material fuera compartido con los
- * brazos, el camuflaje aparecería también en los guantes. Un material por
- * malla es la separación mínima que garantiza que eso no pase.
+ * Los `v_` de CS vienen en 2048x2048. A la distancia a la que se ve un
+ * viewmodel —el arma ocupa cerca de un tercio de la pantalla y nunca se
+ * acerca más— 1024 no se distingue de 2048, y el archivo pasa de 7.5 MB a
+ * poco más de 1 MB. La textura sigue siendo el grueso del GLB, así que este
+ * número es el que manda en el tiempo de carga de un arma.
  */
-function bakeTextureToVertexColors(doc: Document): void {
+const MAX_LADO_CUERPO = 1024
+
+/**
+ * Lado máximo de las texturas de los BRAZOS.
+ *
+ * La mitad que el cuerpo porque los brazos ocupan menos pantalla, están casi
+ * siempre parcialmente fuera de cuadro y —esto es lo que decide— son los
+ * MISMOS en las 42 armas: cada byte que pesen se paga 42 veces en disco y una
+ * vez por cada cambio de arma en carga.
+ */
+const MAX_LADO_BRAZOS = 512
+
+/** Rugosidad de un material sin máscara de phong utilizable. */
+const RUGOSIDAD_SIN_MASCARA = 0.75
+
+export interface EstadisticasTexturas {
+  /** Texturas reescaladas y reescritas. */
+  procesadas: number
+  /** Materiales que recibieron un mapa metallic-roughness derivado del alfa. */
+  conMascara: number
+  /** Bytes de imagen después de procesar. */
+  bytes: number
+}
+
+/**
+ * Conserva UVs, normales y texturas, y traduce el material de Source a
+ * metallic-roughness de glTF.
+ *
+ * Es el reemplazo del horneado a `COLOR_0` que hacía este script antes. Aquel
+ * horneado nació cuando el presupuesto de 2.5 ms mandaba y se buscaba una sola
+ * llamada de dibujo por arma; el costo escondido era que dejaba el arma SIN
+ * NORMALES y sin UVs, y sin normales no hay iluminación posible: por más luces
+ * que se le pongan a la escena, un material sin normales devuelve color plano.
+ * De ahí el "parece Roblox".
+ *
+ * Lo que hace ahora, por material:
+ *
+ * 1. Reescala la textura base a `maxLado` y le SACA el alfa.
+ * 2. Si ese alfa era una máscara de phong (ver `lib/source-pbr.ts`), la
+ *    convierte en un mapa metallic-roughness. Eso es lo que hace que el
+ *    cerrojo brille y la culata no.
+ * 3. Si no lo era —guantes, piel—, deja factores constantes mate.
+ *
+ * Lo que NO hace y antes sí: tocar `COLOR_0`, `TEXCOORD_0` ni `NORMAL`. Los
+ * tres se conservan tal como vinieron de Blender.
+ *
+ * Se mantiene un material por PRIMITIVA en vez de colapsar a uno por malla:
+ * ahora cada uno lleva su propia textura, así que fusionarlos perdería
+ * exactamente la información que este cambio vino a rescatar. El cuerpo del
+ * arma sigue siendo una sola primitiva con un solo material, que es lo que
+ * `skins/material.ts` necesita para que el camuflaje caiga en el arma y no en
+ * los guantes.
+ */
+function prepararMaterialesPbr(doc: Document): EstadisticasTexturas {
   const root = doc.getRoot()
-  const buffer = root.listBuffers()[0]
-  const decoded = new Map<string, DecodedPng>()
+  const stats: EstadisticasTexturas = { procesadas: 0, conMascara: 0, bytes: 0 }
 
+  // Lado máximo por material, según la malla que lo usa. Se resuelve mirando
+  // qué primitiva lo referencia: un material del cuerpo va a 1024 y uno de los
+  // brazos a 512.
+  const ladoPorMaterial = new Map<string, number>()
   for (const mesh of root.listMeshes()) {
-    const baked = doc.createMaterial(`baked_${mesh.getName()}`).setBaseColorFactor([1, 1, 1, 1])
+    const lado = mesh.getName() === NODE_ARMS ? MAX_LADO_BRAZOS : MAX_LADO_CUERPO
     for (const prim of mesh.listPrimitives()) {
-      const position = prim.getAttribute('POSITION')
-      if (!position) continue
-      const count = position.getCount()
-      const colors = new Float32Array(count * 3)
-
       const material = prim.getMaterial()
-      const texture = material?.getBaseColorTexture() ?? null
-      const uv = prim.getAttribute('TEXCOORD_0')
-      const image = texture?.getImage() ?? null
+      if (material) ladoPorMaterial.set(material.getName(), lado)
+    }
+  }
 
-      if (texture && image && uv) {
-        const key = texture.getName() || String(texture.listParents().length)
-        let png = decoded.get(key)
-        if (!png) {
-          png = decodePng(Buffer.from(image))
-          decoded.set(key, png)
-        }
-        for (let i = 0; i < count; i++) {
-          const u = uv.getElement(i, [0, 0])
-          const c = samplePngRgb(png, u[0], u[1])
-          colors[i * 3] = srgbToLinear(c.r)
-          colors[i * 3 + 1] = srgbToLinear(c.g)
-          colors[i * 3 + 2] = srgbToLinear(c.b)
-        }
-      } else {
-        const factor = material ? material.getBaseColorFactor() : [1, 1, 1, 1]
-        for (let i = 0; i < count; i++) {
-          colors[i * 3] = factor[0]
-          colors[i * 3 + 1] = factor[1]
-          colors[i * 3 + 2] = factor[2]
-        }
+  // Una textura puede estar compartida por varios materiales; se reescribe una
+  // sola vez.
+  const yaProcesadas = new Set<unknown>()
+
+  const procesarImagen = (texture: ReturnType<Document['createTexture']>, lado: number, quitarAlfa: boolean): RawImage | null => {
+    const image = texture.getImage()
+    if (!image) return null
+    const png = decodePng(Buffer.from(image))
+    const original: RawImage = {
+      width: png.width,
+      height: png.height,
+      data: png.rgba,
+      channels: 4,
+    }
+    // El lado objetivo se calcula sobre el lado MAYOR y se aplica a los dos
+    // ejes por separado, para no deformar texturas que no son cuadradas (la
+    // piel de los brazos es 1024x2048).
+    const mayor = Math.max(original.width, original.height)
+    const destino = targetSide(mayor, lado)
+    const factor = destino / mayor
+    const escalada = resizeArea(
+      original,
+      Math.max(1, Math.round(original.width * factor)),
+      Math.max(1, Math.round(original.height * factor)),
+    )
+
+    if (!yaProcesadas.has(texture)) {
+      const final = quitarAlfa ? descartarAlfa(escalada) : escalada
+      const bytes = encodePngRaw(final)
+      texture.setImage(bytes).setMimeType('image/png')
+      yaProcesadas.add(texture)
+      stats.procesadas++
+      stats.bytes += bytes.length
+    }
+    return escalada
+  }
+
+  for (const material of root.listMaterials()) {
+    const lado = ladoPorMaterial.get(material.getName()) ?? MAX_LADO_CUERPO
+
+    const normal = material.getNormalTexture()
+    if (normal) procesarImagen(normal, lado, true)
+
+    const base = material.getBaseColorTexture()
+    if (!base) {
+      material.setMetallicFactor(0).setRoughnessFactor(RUGOSIDAD_SIN_MASCARA)
+      continue
+    }
+
+    // El análisis de la máscara va sobre la textura YA reescalada: es la que
+    // se va a muestrear en el juego, y promediar por área puede achatar
+    // máscaras muy finas. Medir sobre la original diría que hay máscara donde
+    // después no la hay.
+    const escalada = procesarImagen(base, lado, true)
+    if (!escalada) {
+      material.setMetallicFactor(0).setRoughnessFactor(RUGOSIDAD_SIN_MASCARA)
+      continue
+    }
+
+    const mascara = analizarMascaraPhong(escalada.data)
+    if (!mascara.usable) {
+      material.setMetallicFactor(0).setRoughnessFactor(RUGOSIDAD_SIN_MASCARA)
+      continue
+    }
+
+    // El mapa metallic-roughness va a la MITAD del lado de la base. La
+    // rugosidad de un arma es una señal de baja frecuencia —"esta pieza es
+    // acero, esta otra es polímero"— y sus bordes coinciden con bordes de
+    // geometría que la normal ya define con nitidez. A resolución completa
+    // pesaba tanto como el albedo sin aportar nada visible.
+    const mrCompleto = construirMetalRough(escalada)
+    const mr = resizeArea(
+      mrCompleto,
+      Math.max(1, mrCompleto.width >> 1),
+      Math.max(1, mrCompleto.height >> 1),
+    )
+    const textura = doc
+      .createTexture(`${material.getName()}_mr`)
+      .setImage(encodePngRaw(mr))
+      .setMimeType('image/png')
+    stats.bytes += (textura.getImage()?.byteLength ?? 0)
+    // Factores en 1: los valores salen ENTEROS de la textura. glTF multiplica
+    // factor por textura, así que un factor en 0 —el default de este material
+    // tras venir de Blender— anularía el mapa entero y dejaría el arma mate,
+    // que es el bug silencioso de este bloque.
+    material
+      .setMetallicRoughnessTexture(textura)
+      .setMetallicFactor(1)
+      .setRoughnessFactor(1)
+      .setAlphaMode('OPAQUE')
+    stats.conMascara++
+  }
+
+  return stats
+}
+
+/**
+ * Verifica que las mallas conserven lo que la iluminación necesita.
+ *
+ * Va aparte y corre DESPUÉS de `prune()` a propósito: `prune()` borra
+ * atributos que considera sin usar, y un cambio de versión de la librería que
+ * decidiera que las normales sobran dejaría las armas planas otra vez sin
+ * ningún error. Ese es exactamente el modo de falla que este proyecto ya vivió
+ * —el pipeline que tiraba las normales en silencio— y no se vuelve a dejar
+ * abierto.
+ */
+function verificarAtributosPbr(doc: Document): void {
+  for (const mesh of doc.getRoot().listMeshes()) {
+    for (const prim of mesh.listPrimitives()) {
+      const material = prim.getMaterial()
+      if (!prim.getAttribute('NORMAL')) {
+        throw new Error(`la malla "${mesh.getName()}" quedó sin NORMAL: se vería sin iluminación`)
       }
-
-      const accessor = doc.createAccessor(undefined, buffer).setType('VEC3').setArray(colors)
-      prim.setAttribute('COLOR_0', accessor)
-      prim.setAttribute('TEXCOORD_0', null)
-      // Las normales tampoco se leen: el viewmodel se dibuja con
-      // MeshBasicMaterial, que no tiene iluminación. Tirarlas ahorra un tercio
-      // de los bytes de vértice de un modelo de 24 mil triángulos.
-      prim.setAttribute('NORMAL', null)
-      prim.setMaterial(baked)
+      if (material?.getBaseColorTexture() && !prim.getAttribute('TEXCOORD_0')) {
+        throw new Error(`la malla "${mesh.getName()}" tiene textura pero quedó sin TEXCOORD_0`)
+      }
     }
   }
 }
@@ -296,8 +432,14 @@ async function convertOne(
   // punto 1 del encabezado.
   await doc.transform(dedup())
   pruneLooseNodes(doc)
-  bakeTextureToVertexColors(doc)
-  await doc.transform(unlit(), prune())
+  prepararMaterialesPbr(doc)
+  // Sin `unlit()`: marcar el material como KHR_materials_unlit es justamente
+  // lo que le decía al runtime "este arma no se ilumina". Ahora sí se ilumina.
+  // `prune()` se conserva —limpia accessors y nodos que quedaron sueltos— y
+  // `verificarAtributosPbr` corre después para confirmar que no se llevó
+  // puesto nada que haga falta.
+  await doc.transform(prune())
+  verificarAtributosPbr(doc)
 
   const bodyPositions = positionsOfMesh(doc, NODE_BODY)
   if (bodyPositions.length === 0) throw new Error(`no hay malla "${NODE_BODY}" con vértices`)

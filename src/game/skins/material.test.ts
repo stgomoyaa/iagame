@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { BufferAttribute, BufferGeometry, Color, Mesh, MeshBasicMaterial } from 'three'
+import {
+  BufferAttribute,
+  BufferGeometry,
+  Color,
+  Mesh,
+  MeshBasicMaterial,
+  MeshStandardMaterial,
+} from 'three'
 import { CAMO_FAMILY_INDEX, ESCALA_FAMILIA } from '@/game/skins/camo-families'
 import { generateSkin } from '@/game/skins/generator'
 import { createSkinHandle } from '@/game/skins/material'
@@ -22,7 +29,7 @@ function mallaDeArma(): Mesh {
 }
 
 /** Corre el onBeforeCompile del material y devuelve el shader resultante. */
-function compilar(material: MeshBasicMaterial): {
+function compilar(material: MeshBasicMaterial | MeshStandardMaterial): {
   vertexShader: string
   fragmentShader: string
   uniforms: Record<string, { value: unknown }>
@@ -295,5 +302,79 @@ describe('material de skin', () => {
       expect(shaderMapa.uniforms.uSkinAccent).toBeUndefined()
       expect(shaderMapa.fragmentShader).not.toContain('uSkinAccent')
     })
+  })
+})
+
+/**
+ * Las armas de Source pasaron a `MeshStandardMaterial` con textura para poder
+ * recibir luz. Este bloque cubre esa costura, que es de las peligrosas del
+ * proyecto: `materialOf` devolvía null para todo lo que no fuera
+ * `MeshBasicMaterial`, y `createSkinHandle` traduce null como "esta malla no
+ * lleva camuflaje". O sea que cambiar el material apagaba los 79 camuflajes
+ * sin un error, sin un warning y sin que ningún test existente se enterara.
+ */
+describe('material de skin sobre MeshStandardMaterial', () => {
+  function mallaEstandarConTextura(): Mesh {
+    const geometry = new BufferGeometry()
+    geometry.setAttribute(
+      'position',
+      new BufferAttribute(Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]), 3),
+    )
+    geometry.setAttribute('uv', new BufferAttribute(Float32Array.from([0, 0, 1, 0, 0, 1]), 2))
+    return new Mesh(geometry, new MeshStandardMaterial())
+  }
+
+  it('devuelve un handle en vez de null: el camuflaje NO se apaga al cambiar de material', () => {
+    expect(createSkinHandle(mallaEstandarConTextura())).not.toBeNull()
+  })
+
+  it('inyecta los uniforms del camuflaje en el shader standard', () => {
+    const mesh = mallaEstandarConTextura()
+    const handle = createSkinHandle(mesh)
+    expect(handle).not.toBeNull()
+    const shader = compilar(mesh.material as MeshStandardMaterial)
+    expect(shader.uniforms.uSkinEnabled).toBeDefined()
+    expect(shader.uniforms.uSkinFamily).toBeDefined()
+    expect(shader.fragmentShader).toContain('uSkinEnabled')
+  })
+
+  it('equipar y sacar una skin mueve uSkinEnabled igual que en el basic', () => {
+    const mesh = mallaEstandarConTextura()
+    const handle = createSkinHandle(mesh)!
+    const shader = compilar(mesh.material as MeshStandardMaterial)
+
+    handle.setSkin(generateSkin('estandar:3'))
+    expect(shader.uniforms.uSkinEnabled.value).toBe(1)
+    handle.setSkin(null)
+    expect(shader.uniforms.uSkinEnabled.value).toBe(0)
+  })
+
+  it('con textura, el camino sin camuflaje no vuelve a multiplicar el albedo', () => {
+    // Con USE_MAP el albedo YA está en diffuseColor cuando corre este bloque.
+    // Multiplicarlo otra vez por sí mismo lo elevaría al cuadrado y dejaría el
+    // arma más oscura SIN camuflaje que con él: un bug que no lanza nada y que
+    // sólo se ve comparando dos capturas.
+    const mesh = mallaEstandarConTextura()
+    createSkinHandle(mesh)
+    const shader = compilar(mesh.material as MeshStandardMaterial)
+
+    const cuerpo = shader.fragmentShader
+    const usaMapa = cuerpo.indexOf('#if defined( USE_MAP )')
+    expect(usaMapa).toBeGreaterThanOrEqual(0)
+    // La multiplicación tiene que estar detrás de un #else, nunca suelta.
+    const multiplicacion = cuerpo.indexOf('diffuseColor.rgb *= skinBaked')
+    expect(multiplicacion).toBeGreaterThan(usaMapa)
+    const elseAntes = cuerpo.lastIndexOf('#else', multiplicacion)
+    expect(elseAntes).toBeGreaterThan(usaMapa)
+  })
+
+  it('el camuflaje sigue leyendo la anatomía del arma, ahora por píxel', () => {
+    // skinBaked sale de diffuseColor cuando hay mapa: es lo que conserva la
+    // regla de "lo saturado del arma se lleva el acento" al pasar de color por
+    // vértice a textura.
+    const mesh = mallaEstandarConTextura()
+    createSkinHandle(mesh)
+    const shader = compilar(mesh.material as MeshStandardMaterial)
+    expect(shader.fragmentShader).toContain('vec3 skinBaked = diffuseColor.rgb')
   })
 })
