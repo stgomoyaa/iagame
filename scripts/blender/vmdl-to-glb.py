@@ -92,6 +92,24 @@ FPS_ESCENA = 30.0
 # los dos que conserva el bodypart.
 PATRON_BRAZOS = re.compile(r"_arms_", re.IGNORECASE)
 
+# Fallback por MATERIAL, para los modelos que no separan los brazos en un
+# bodypart. No es un caso hipotético: `v_knife_t.mdl` (los cuchillos de
+# GameBanana) trae UN solo bodypart `studio` con un solo `ref.smd` adentro que
+# fusiona hoja, manos y mangas, así que PATRON_BRAZOS no encuentra nada y las
+# 22.484 caras caen enteras en `weapon_body`.
+#
+# Eso importa porque `weapon_body` es la malla a la que el runtime le engancha
+# el camuflaje: con los brazos adentro, la skin del cuchillo pintaría también
+# los guantes. La única costura que queda en ese modelo es el MATERIAL --el
+# .smd usa uno para la hoja y otros para manga y piel-- así que se clasifica
+# por ahí.
+#
+# Va como FALLBACK y no como criterio principal a propósito: para las 39 armas
+# de fuego el bodypart ya funciona y es más confiable (un arma puede tener un
+# material llamado "hand_grip" en la empuñadura y no es un brazo). Sólo se
+# consulta cuando el bodypart no separó nada.
+PATRON_BRAZOS_MATERIAL = re.compile(r"sleeve|arm|hand|glove|skin", re.IGNORECASE)
+
 # Secuencias que el runtime reproduce, en orden de prioridad de match. La
 # clave es el nombre canónico de salida; el valor es la lista de patrones que
 # se prueban EN ORDEN sobre el nombre crudo (ya sin el `@` que Source le
@@ -441,6 +459,38 @@ def _unir_grupo(objetos: list, nombre: str):
     return resultado
 
 
+def _material_de(obj) -> str:
+    """Nombre del material que usa la malla, leído de su primera cara.
+
+    Se lee de la CARA y no de `data.materials[0]` porque `separate(MATERIAL)`
+    conserva todos los slots en cada pedazo y sólo cambia a cuál apunta cada
+    cara: mirar el slot 0 devolvería el mismo material para todos los pedazos.
+    """
+    if not obj.data.materials or not obj.data.polygons:
+        return ""
+    indice = obj.data.polygons[0].material_index
+    material = obj.data.materials[indice] if indice < len(obj.data.materials) else None
+    return material.name if material else ""
+
+
+def _separar_por_material(mallas: list) -> list:
+    """Parte cada malla en una por material. Las de un solo material pasan igual."""
+    salida = []
+    for obj in mallas:
+        if len(obj.data.materials) <= 1:
+            salida.append(obj)
+            continue
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.separate(type="MATERIAL")
+        bpy.ops.object.mode_set(mode="OBJECT")
+        # `separate` deja seleccionados el original y los pedazos nuevos.
+        salida.extend([o for o in bpy.context.selected_objects if o.type == "MESH"])
+    return salida
+
+
 def unir_por_parte() -> dict:
     """Une las mallas en `weapon_body` y `weapon_arms`.
 
@@ -452,6 +502,17 @@ def unir_por_parte() -> dict:
     """
     mallas = [o for o in bpy.data.objects if o.type == "MESH"]
     brazos = [o for o in mallas if PATRON_BRAZOS.search(o.data.name)]
+
+    # Fallback por material (ver PATRON_BRAZOS_MATERIAL): sólo si el bodypart
+    # no separó NADA. Se parte por material y se reclasifica; si aún así no
+    # aparece ningún brazo, se sigue con todo como cuerpo, que es exactamente
+    # lo que hacía antes este código. O sea: no puede empeorar ningún caso que
+    # hoy funcione, sólo agrega separación donde no había ninguna.
+    if not brazos:
+        piezas = _separar_por_material(mallas)
+        brazos = [o for o in piezas if PATRON_BRAZOS_MATERIAL.search(_material_de(o))]
+        mallas = piezas
+
     cuerpos = [o for o in mallas if o not in brazos]
 
     if not cuerpos:
