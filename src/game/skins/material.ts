@@ -49,10 +49,16 @@
 
 import {
   Color,
+  LinearFilter,
+  LinearMipmapLinearFilter,
   type Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  NoColorSpace,
+  RepeatWrapping,
   SRGBColorSpace,
+  type Texture,
+  TextureLoader,
   Vector3,
 } from 'three'
 
@@ -77,6 +83,7 @@ import { CAMO_FAMILY_INDEX, ESCALA_FAMILIA } from '@/game/skins/camo-families'
 import type { Skin } from '@/game/skins/generator'
 import { PATTERN_INDEX } from '@/game/skins/patterns'
 import type { AnimationId } from '@/game/skins/rarity'
+import { type CamoTextura, patronUrl } from '@/game/skins/texturas'
 
 /** Índice de animación que consume el shader. Contrato con el `switch` del GLSL. */
 const ANIMATION_INDEX: Record<AnimationId, number> = {
@@ -100,6 +107,18 @@ interface SkinUniforms {
   /** Semiejes del bounding box del arma. Normaliza el patrón por tamaño. */
   uSkinExtent: { value: Vector3 }
   uSkinFamily: { value: number }
+  /* --- Vía por textura (skins/texturas.ts). Todo lo de abajo sólo se lee
+   *     cuando uSkinTexEnabled = 1; con la vía procedural queda inerte. --- */
+  /** 1 = camo por textura activo, 0 = vía procedural (familias o clásico). */
+  uSkinTexEnabled: { value: number }
+  /** El patrón en escala de grises. `null` mientras no cargó: three liga una
+   *  textura 1x1 por defecto, así que el sampler nunca queda sin ligar. */
+  uSkinPatternMap: { value: Texture | null }
+  /** Color de la emisión de la vía por textura (verde 115, cian, etc.). */
+  uSkinGlow: { value: Color }
+  /** (rugosidad, metalicidad, barniz) del camo por textura. Reemplaza a
+   *  `skinSuperficie` cuando la vía por textura está activa. */
+  uSkinSurface: { value: Vector3 }
 }
 
 const VERTEX_PARS = /* glsl */ `
@@ -134,6 +153,11 @@ uniform float uSkinTime;
 uniform vec3 uSkinExtent;
 /** 0 = ninguna familia (patrón procedural de siempre), 1..6 = las familias. */
 uniform int uSkinFamily;
+/** Vía por textura: sampler del heightmap gris y sus parámetros. */
+uniform float uSkinTexEnabled;
+uniform sampler2D uSkinPatternMap;
+uniform vec3 uSkinGlow;
+uniform vec3 uSkinSurface;
 varying vec3 vSkinObj;
 varying vec3 vSkinView;
 
@@ -803,6 +827,46 @@ vec3 skinEntorno( vec3 R ) {
     ? mix( piso, horizonte, smoothstep( 0.0, 0.5, h ) )
     : mix( horizonte, cielo, smoothstep( 0.5, 1.0, h ) );
 }
+
+/**
+ * Muestreo TRIPLANAR del heightmap gris en espacio de objeto.
+ *
+ * POR QUÉ TRIPLANAR Y NO UNA PROYECCIÓN PLANA. Las familias que necesitan
+ * grilla (filigrana, gema) proyectan sobre el plano ZY y aceptan que la cara
+ * de arriba se estire: es un mal menor porque su dibujo es una retícula que el
+ * estiramiento no delata tanto. Un patrón de textura arbitrario SÍ se delata
+ * —una veta estirada al triple se ve rota—, y encima la costura de la
+ * proyección plana caería justo cruzando el arma, que es exactamente la línea
+ * que la verificación de teselado existe para evitar. El triplanar muestrea en
+ * los tres planos y mezcla por la normal, así ninguna cara se estira y no hay
+ * costura de proyección. Cuesta tres samples; se paga una sola vez por arma
+ * (un solo viewmodel) y la rama de textura es excluyente con la de familias,
+ * así que un arma con camo por textura no paga además el switch de las seis.
+ *
+ * nObj es la normal en espacio de OBJETO, reconstruida por derivadas igual
+ * que la de vista (los GLB no traen NORMAL): es la que decide el peso de cada
+ * plano, y tiene que ser la de objeto y no la de vista porque los planos de
+ * proyección son del objeto.
+ *
+ * desliz desplaza las coordenadas a lo largo del eje largo (Z): es lo que
+ * hace FLUIR el patrón cuando la animación es flujo. Un remolino que se
+ * desplaza mientras la luz real no se mueve es justo lo que una imagen fija no
+ * puede dar, y la mitad del motivo de toda esta vía.
+ */
+float skinPatronTriplanar( vec3 p, float scale, float desliz ) {
+  vec3 c = p * scale + vec3( 0.0, 0.0, desliz );
+  vec3 nObj = abs( normalize( cross( dFdx( vSkinObj ), dFdy( vSkinObj ) ) ) );
+  // Peso muy contrastado (^4) para que las caras oblicuas no promedien tres
+  // muestras distintas y emborronen el patrón; normalizado para conservar
+  // energía.
+  vec3 w = nObj * nObj;
+  w *= w;
+  w /= max( w.x + w.y + w.z, 0.0001 );
+  float gx = texture2D( uSkinPatternMap, c.yz ).r;
+  float gy = texture2D( uSkinPatternMap, c.zx ).r;
+  float gz = texture2D( uSkinPatternMap, c.xy ).r;
+  return gx * w.x + gy * w.y + gz * w.z;
+}
 `
 
 const FRAGMENT_BODY = /* glsl */ `
@@ -879,15 +943,55 @@ if ( uSkinEnabled < 0.5 ) {
 
   float accent = clamp( max( region, relleno ), 0.0, 1.0 );
 
-  // Qué se enciende, y de qué color. Las dos cosas cambian según haya familia
-  // o no, así que se resuelven acá y el resto del shader (luz, especular,
-  // desgaste, animación) sigue siendo uno solo para los dos caminos.
+  // Qué se enciende, y de qué color. Las dos cosas cambian según la vía, así
+  // que se resuelven acá y el resto del shader (luz, especular, desgaste,
+  // animación) sigue siendo uno solo para los tres caminos.
   vec3 color;
   float mascaraGlow;
   vec3 tintGlow;
   float rampa;
+  // Altura del relieve. La vía por textura la toma del heightmap gris directo
+  // (ver su rama); las otras dos la derivan del color más abajo. -1 marca "sin
+  // fijar todavía".
+  float texAltura = -1.0;
 
-  if ( uSkinFamily > 0 ) {
+  if ( uSkinTexEnabled > 0.5 ) {
+
+    // VÍA POR TEXTURA. El heightmap gris llega por triplanar; el color, la
+    // emisión y la respuesta de superficie los pone el motor desde los
+    // uniforms del catálogo (skins/texturas.ts). Es la división que hace que
+    // un mismo patrón con otra paleta y otra animación sea otro camo.
+    //
+    // Con flujo, el patrón SE DESPLAZA a lo largo del arma: es el remolino que
+    // fluye de Afterlife, y lo que una imagen fija no puede dar.
+    float desliz = uSkinAnim == 2 ? uSkinTime * 0.12 : 0.0;
+    float g = skinPatronTriplanar( p, uSkinPatternScale, desliz );
+    texAltura = g;
+
+    // El glow puede ciclar el tono igual que el acento (espectro): así una
+    // nebulosa barre todo el arcoíris en vez de encender siempre el mismo
+    // rosa.
+    vec3 glowColor = uSkinGlow;
+    if ( uSkinAnim == 3 ) glowColor = skinHueShift( glowColor, uSkinTime * 0.11 );
+
+    // Paleta de dos paradas más la punta tirando al color de emisión: el valle
+    // del heightmap es la base, la cresta el acento, y los picos más altos
+    // arrastran hacia el glow AUNQUE emissive sea 0. Eso da color caro en las
+    // crestas incluso a un camo mate, y hace que el mismo patrón se lea
+    // distinto sólo cambiando la paleta.
+    color = mix( uSkinBase, accentColor, smoothstep( 0.10, 0.72, g ) );
+    color = mix( color, glowColor, smoothstep( 0.78, 1.0, g ) * 0.5 );
+
+    // La emisión vive en las CRESTAS del patrón —las vetas de Element 115, no
+    // el fondo—: un glow que baña el valle lava el arma, el mismo principio
+    // que en las familias. El umbral alto deja fuera el fondo y los medios.
+    mascaraGlow = smoothstep( 0.62, 0.95, g );
+    tintGlow = glowColor;
+    // Rampa suave: el patrón trae su propia estructura de valor, el horneado
+    // sólo diferencia las piezas del arma sin imponerle su luminancia.
+    rampa = 0.85 + 0.30 * skinLum;
+
+  } else if ( uSkinFamily > 0 ) {
 
     // Rama de familia. La familia cubre la superficie con su propio dibujo,
     // así que NO se aplica "region" (el acento sobre lo saturado del
@@ -937,10 +1041,16 @@ if ( uSkinEnabled < 0.5 ) {
   vec3 V = normalize( -vSkinView );
   if ( dot( N, V ) < 0.0 ) N = -N;
 
-  // Parámetros de superficie de esta familia. uSkinMetal sigue mandando en
-  // el camino clásico y además modula a las familias: dos skins de la misma
-  // familia con metalness distinto no salen idénticas.
-  vec4 sup = skinSuperficie( uSkinFamily, uSkinMetal );
+  // Parámetros de superficie. La vía por textura los toma tal cual del
+  // catálogo (uSkinSurface); las procedurales, de skinSuperficie. El cuarto
+  // componente es la fuerza del relieve: 1.2 en la textura porque el heightmap
+  // gris tiene relieve REAL —no derivado del color, medido del propio dibujo—,
+  // así que aguanta y agradece más relieve que las familias. uSkinMetal sigue
+  // mandando en el camino clásico y modula a las familias: dos skins de la
+  // misma familia con metalness distinto no salen idénticas.
+  vec4 sup = uSkinTexEnabled > 0.5
+    ? vec4( uSkinSurface, 1.2 )
+    : skinSuperficie( uSkinFamily, uSkinMetal );
   float rugosidad = sup.x;
   float metalico = sup.y;
   float barniz = sup.z;
@@ -953,7 +1063,11 @@ if ( uSkinEnabled < 0.5 ) {
   // se vería en el especular. El grueso de la sensación de talla viene del
   // difuso —es el que dibuja el lado iluminado y el lado en sombra de cada
   // celda—, así que perturbar tarde deja el efecto a medias.
-  float altura = dot( color, vec3( 0.2126, 0.7152, 0.0722 ) );
+  // En la vía por textura la altura es el gris muestreado tal cual: el patrón
+  // ES un heightmap, así que su relieve es de verdad y no una lectura del
+  // color ya coloreado. En las otras dos se deriva de la luminancia del
+  // camuflaje calculado, que es lo único disponible.
+  float altura = texAltura >= 0.0 ? texAltura : dot( color, vec3( 0.2126, 0.7152, 0.0722 ) );
   // El 0.55 está medido, no elegido a ojo: con 0.90 el relieve se ve MÁS
   // marcado pero el detalle fino medido no sube (gradiente local 20.3 contra
   // 20.7) y la saturación baja, porque a esa escala el gradiente da vuelta la
@@ -1148,6 +1262,10 @@ function createUniforms(): SkinUniforms {
     uSkinTime: { value: 0 },
     uSkinExtent: { value: new Vector3(1, 1, 1) },
     uSkinFamily: { value: 0 },
+    uSkinTexEnabled: { value: 0 },
+    uSkinPatternMap: { value: null },
+    uSkinGlow: { value: new Color(1, 1, 1) },
+    uSkinSurface: { value: new Vector3(0.5, 0.3, 0.3) },
   }
 }
 
@@ -1198,13 +1316,16 @@ function patch(material: SkinnableMaterial): SkinUniforms {
   // v2: entraron las seis familias de camuflaje al mismo programa.
   // v3: el arma de Source pasó a MeshStandardMaterial con textura y el código
   // inyectado cambió con ella (ahora lee el albedo del mapa).
+  // v4: entró la vía por textura (sampler2D uSkinPatternMap y su rama), que
+  // cambia el código inyectado. Sin bumpear la clave, un material parchado con
+  // v3 reusaría su programa viejo y la rama de textura no existiría en él.
   //
   // No hace falta meter el TIPO de material en la clave aunque el mismo código
   // se compile contra dos shaders base distintos: three ya antepone el
   // `shaderID` —'meshbasic' vs 'meshphysical'— al armar la clave de programa
   // (WebGLPrograms.getProgramCacheKey), así que un basic y un standard nunca
   // comparten programa por más que compartan esta cadena.
-  material.customProgramCacheKey = () => 'skin-v3'
+  material.customProgramCacheKey = () => 'skin-v4'
   material.needsUpdate = true
 
   return uniforms
@@ -1213,10 +1334,22 @@ function patch(material: SkinnableMaterial): SkinUniforms {
 /** Handle de una malla ya preparada para llevar skins. */
 export interface SkinHandle {
   /**
-   * Equipa una skin, o la saca con `null` (vuelve al horneado crudo del
-   * GLB). No recompila: sólo escribe uniforms.
+   * Equipa una skin procedural, o la saca con `null` (vuelve al horneado
+   * crudo del GLB). No recompila: sólo escribe uniforms. Apaga la vía por
+   * textura si estaba activa.
    */
   setSkin(skin: Skin | null): void
+  /**
+   * Equipa un camuflaje por textura (skins/texturas.ts). `mapa` es el
+   * heightmap gris ya cargado (ver `cargarPatron`); con `null` en cualquiera
+   * de los dos, vuelve al horneado crudo. Escribe uniforms, no recompila.
+   *
+   * La textura se pasa aparte del camo a propósito: el catálogo es data pura
+   * (no importa three) y la carga es asíncrona y cacheada, así que quien
+   * equipa decide CUÁNDO se bajó el patrón. Es lo que mantiene la carga bajo
+   * demanda.
+   */
+  setCamoTextura(camo: CamoTextura | null, mapa: Texture | null): void
   /**
    * Avanza el tiempo de las animaciones. Se llama una vez por frame: es una
    * asignación de número sobre un objeto ya existente, cero asignaciones de
@@ -1277,6 +1410,10 @@ export function createSkinHandle(mesh: Mesh): SkinHandle | null {
   return {
     setSkin(skin: Skin | null): void {
       for (const uniforms of todos) {
+        // Las dos vías son excluyentes: equipar una skin procedural apaga la
+        // de textura. Sin esto, un arma que tuvo un camo por textura y después
+        // recibe una skin procedural seguiría muestreando el patrón viejo.
+        uniforms.uSkinTexEnabled.value = 0
         if (!skin) {
           uniforms.uSkinEnabled.value = 0
           continue
@@ -1313,6 +1450,35 @@ export function createSkinHandle(mesh: Mesh): SkinHandle | null {
       }
     },
 
+    setCamoTextura(camo: CamoTextura | null, mapa: Texture | null): void {
+      for (const uniforms of todos) {
+        // Hace falta el camo Y su textura: un camo sin patrón cargado dibujaría
+        // sobre la textura 1x1 por defecto de three, que se ve como un color
+        // plano. Mejor caer al horneado crudo hasta que el patrón esté.
+        if (!camo || !mapa) {
+          uniforms.uSkinTexEnabled.value = 0
+          uniforms.uSkinEnabled.value = 0
+          continue
+        }
+        uniforms.uSkinEnabled.value = 1
+        uniforms.uSkinTexEnabled.value = 1
+        uniforms.uSkinPatternMap.value = mapa
+        // Hex sRGB a lineal, igual que las paletas procedurales.
+        uniforms.uSkinBase.value.set(camo.base).convertSRGBToLinear()
+        uniforms.uSkinAccent.value.set(camo.accent).convertSRGBToLinear()
+        uniforms.uSkinGlow.value.set(camo.glow).convertSRGBToLinear()
+        uniforms.uSkinSurface.value.set(camo.rugosidad, camo.metal, camo.barniz)
+        uniforms.uSkinPatternScale.value = camo.escala
+        uniforms.uSkinEmissive.value = camo.emissive
+        uniforms.uSkinMetal.value = camo.metal
+        uniforms.uSkinAnim.value = ANIMATION_INDEX[camo.animation]
+        // El desgaste no aplica a la vía por textura: un mastery camo no se
+        // pela. Se pone en cero para que un arma que venía con una skin
+        // procedural gastada no arrastre su wear al camo nuevo.
+        uniforms.uSkinWear.value = 0
+      }
+    },
+
     // Se llama una vez por frame. El bucle recorre un array ya existente y
     // escribe un número en cada uno: cero asignaciones, igual que antes. En
     // el 80% del arsenal el array tiene un solo elemento.
@@ -1320,4 +1486,52 @@ export function createSkinHandle(mesh: Mesh): SkinHandle | null {
       for (const uniforms of todos) uniforms.uSkinTime.value = seconds
     },
   }
+}
+
+/**
+ * Carga un patrón de camuflaje en gris bajo demanda, cacheado por URL.
+ *
+ * ES EL PUNTO QUE MANTIENE LA CARGA BAJO DEMANDA. El catálogo (texturas.ts) no
+ * baja nada al importarse; esta función baja el PNG recién cuando alguien va a
+ * mostrar el camo, y la promesa se cachea, así que dos armas con el mismo
+ * patrón lo descargan una sola vez. Entrar al juego no gasta un byte de
+ * textura de camo.
+ *
+ * La textura se configura como corresponde para un HEIGHTMAP, no para un color:
+ *
+ * - `RepeatWrapping`: el patrón tesela (por eso existe la verificación de
+ *   scripts/verificar-teselado.ts), y el triplanar lo repite sobre el arma.
+ * - `NoColorSpace`: el gris es un DATO de altura, no un color. Con la decodi-
+ *   ficación sRGB por defecto, el 0.5 del archivo llegaría al shader como
+ *   ~0.21 y el patrón saldría aplastado hacia lo oscuro. Sin conversión, el
+ *   byte/255 es exactamente la altura que se quiso.
+ * - Mipmaps con filtrado trilineal: sin ellos, el patrón repetido muchas veces
+ *   a lo largo del cañón chisporrotea (aliasing) al girar el arma.
+ */
+const CACHE_PATRONES = new Map<string, Promise<Texture>>()
+
+export function cargarPatron(camo: CamoTextura): Promise<Texture> {
+  const url = patronUrl(camo)
+  const cacheada = CACHE_PATRONES.get(url)
+  if (cacheada) return cacheada
+
+  const promesa = new Promise<Texture>((resolve, reject) => {
+    new TextureLoader().load(
+      url,
+      (tex) => {
+        tex.wrapS = RepeatWrapping
+        tex.wrapT = RepeatWrapping
+        tex.colorSpace = NoColorSpace
+        tex.magFilter = LinearFilter
+        tex.minFilter = LinearMipmapLinearFilter
+        tex.generateMipmaps = true
+        tex.needsUpdate = true
+        resolve(tex)
+      },
+      undefined,
+      () => reject(new Error(`no se pudo cargar el patrón de camo "${url}"`)),
+    )
+  })
+  CACHE_PATRONES.set(url, promesa)
+  return promesa
 }

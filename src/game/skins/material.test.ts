@@ -7,12 +7,14 @@ import {
   MeshBasicMaterial,
   MeshDepthMaterial,
   MeshStandardMaterial,
+  Texture,
   Vector3,
 } from 'three'
 import { CAMO_FAMILY_INDEX, ESCALA_FAMILIA } from '@/game/skins/camo-families'
 import { generateSkin } from '@/game/skins/generator'
 import { createSkinHandle } from '@/game/skins/material'
 import { PATTERN_INDEX } from '@/game/skins/patterns'
+import { CATALOGO_CAMOS, type CamoTextura } from '@/game/skins/texturas'
 
 /** Malla mínima con el mismo perfil que sale del pipeline: una primitiva,
  *  un material unlit, colores horneados en COLOR_0. */
@@ -346,6 +348,97 @@ describe('material de skin', () => {
       expect(shaderMapa.uniforms.uSkinEnabled).toBeUndefined()
       expect(shaderMapa.uniforms.uSkinAccent).toBeUndefined()
       expect(shaderMapa.fragmentShader).not.toContain('uSkinAccent')
+    })
+  })
+
+  /**
+   * La VÍA POR TEXTURA (skins/texturas.ts): un heightmap gris que el motor
+   * viste con paleta, emisión, superficie y animación. Corre sobre el mismo
+   * programa que las procedurales, elegida por el uniform uSkinTexEnabled.
+   */
+  describe('vía por textura', () => {
+    const camo: CamoTextura = CATALOGO_CAMOS[0]
+
+    it('el GLSL trae el muestreo triplanar y su rama, detrás de un uniform', () => {
+      const mesh = mallaDeArma()
+      createSkinHandle(mesh)
+      const fs = compilar(mesh.material as MeshBasicMaterial).fragmentShader
+      // El sampler y la función de muestreo del heightmap.
+      expect(fs).toContain('uniform sampler2D uSkinPatternMap;')
+      expect(fs).toContain('skinPatronTriplanar')
+      // Tres samples: uno por plano. Menos de tres sería una proyección plana,
+      // que mete costura cruzando el arma.
+      const samples = fs.match(/texture2D\( uSkinPatternMap/g) ?? []
+      expect(samples.length).toBe(3)
+      // La rama es sobre un uniform, igual que la de familias: así todos los
+      // fragmentos de la llamada de dibujo toman la misma y la GPU no paga las
+      // dos vías por píxel.
+      expect(fs).toContain('if ( uSkinTexEnabled > 0.5 )')
+    })
+
+    it('equipar un camo por textura enciende la vía y escribe sus uniforms', () => {
+      const mesh = mallaDeArma()
+      const handle = createSkinHandle(mesh)!
+      const shader = compilar(mesh.material as MeshBasicMaterial)
+      const tex = new Texture()
+
+      handle.setCamoTextura(camo, tex)
+      expect(shader.uniforms.uSkinEnabled.value).toBe(1)
+      expect(shader.uniforms.uSkinTexEnabled.value).toBe(1)
+      expect(shader.uniforms.uSkinPatternMap.value).toBe(tex)
+      expect(shader.uniforms.uSkinPatternScale.value).toBe(camo.escala)
+      expect(shader.uniforms.uSkinEmissive.value).toBe(camo.emissive)
+      // La superficie viaja como (rugosidad, metalicidad, barniz).
+      const sup = shader.uniforms.uSkinSurface.value as Vector3
+      expect(sup.toArray()).toEqual([camo.rugosidad, camo.metal, camo.barniz])
+    })
+
+    it('sin la textura cargada NO enciende: cae al horneado, no a un color plano', () => {
+      // Un camo sin su patrón dibujaría sobre la textura 1x1 por defecto de
+      // three y saldría de un solo color. Mejor mostrar el arma cruda hasta que
+      // el patrón baje.
+      const mesh = mallaDeArma()
+      const handle = createSkinHandle(mesh)!
+      const shader = compilar(mesh.material as MeshBasicMaterial)
+
+      handle.setCamoTextura(camo, null)
+      expect(shader.uniforms.uSkinEnabled.value).toBe(0)
+      expect(shader.uniforms.uSkinTexEnabled.value).toBe(0)
+    })
+
+    it('las dos vías son excluyentes: una skin procedural apaga la textura', () => {
+      const mesh = mallaDeArma()
+      const handle = createSkinHandle(mesh)!
+      const shader = compilar(mesh.material as MeshBasicMaterial)
+
+      handle.setCamoTextura(camo, new Texture())
+      expect(shader.uniforms.uSkinTexEnabled.value).toBe(1)
+
+      // Equipar una skin procedural encima tiene que apagar la textura, o el
+      // arma seguiría muestreando el patrón viejo debajo del camuflaje nuevo.
+      handle.setSkin(generateSkin('drop:9'))
+      expect(shader.uniforms.uSkinTexEnabled.value).toBe(0)
+      expect(shader.uniforms.uSkinEnabled.value).toBe(1)
+    })
+
+    it('cambiar de camo por textura no recompila el shader', () => {
+      const mesh = mallaDeArma()
+      const material = mesh.material as MeshBasicMaterial
+      const handle = createSkinHandle(mesh)!
+      compilar(material)
+      const version = material.version
+
+      for (const c of CATALOGO_CAMOS) handle.setCamoTextura(c, new Texture())
+      expect(material.version).toBe(version)
+    })
+
+    it('la clave de caché de programa subió a v4 con la nueva rama', () => {
+      // Sin bumpear la clave, un material parchado con v3 reusaría su programa
+      // viejo y la rama de textura no existiría en él.
+      const mesh = mallaDeArma()
+      createSkinHandle(mesh)
+      const material = mesh.material as MeshBasicMaterial
+      expect(material.customProgramCacheKey?.()).toBe('skin-v4')
     })
   })
 })
