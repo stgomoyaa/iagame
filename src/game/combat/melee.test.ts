@@ -10,6 +10,7 @@ import {
   type MeleeInput,
 } from '@/game/combat/melee'
 import { KNIFE_ARCHETYPE } from '@/game/weapons/melee-catalog'
+import { applyDamageToBot, createBotHealthState } from '@/game/bots/health'
 
 const K = KNIFE_ARCHETYPE
 
@@ -231,6 +232,56 @@ describe('EVIDENCIA MEDIBLE: tajo daña, estocada daña más, backstab mata de u
     expect(out.backstab).toBe(true)
     expect(out.damage).toBe(180)
     expect(VIDA - out.damage).toBeLessThanOrEqual(0) // muerto
+  })
+})
+
+describe('INTEGRACIÓN: golpe → vida REAL de un bot (bots/health.ts) → muerte', () => {
+  // Prueba el camino completo con el mismo `applyDamageToBot` que usa game.ts,
+  // no un 100 hardcodeado: stepMelee resuelve el golpe, y su daño se aplica a
+  // un bot de vida llena (BOTS.maxHealth = 100).
+  const hb = victimaAlFrente(1.0)
+  const deFrente = [vec3(0, 0, 1)] // víctima mirándome: no backstab
+  const deEspaldas = [vec3(0, 0, -1)] // víctima dándome la espalda: backstab
+
+  function golpear(input: MeleeInput, ownerForward: ReturnType<typeof vec3>[]) {
+    const state = createMeleeState(K)
+    const out = createMeleeResult()
+    stepMelee(state, K, input, hb, ownerForward, 1 / 60, out)
+    return out
+  }
+
+  it('una ESTOCADA POR LA ESPALDA mata a un bot de 100 de un solo golpe', () => {
+    const bot = createBotHealthState() // 100
+    expect(bot.health).toBe(100)
+    const out = golpear({ slashHeld: false, stabHeld: true, origin: ORIGIN, pitch: 0, yaw: 0 }, deEspaldas)
+    expect(out.backstab).toBe(true)
+    const murio = applyDamageToBot(bot, out.damage)
+    expect(murio).toBe(true)
+    expect(bot.alive).toBe(false)
+  })
+
+  it('un TAJO de frente daña pero NO mata (queda vivo con 60)', () => {
+    const bot = createBotHealthState()
+    const out = golpear({ slashHeld: true, stabHeld: false, origin: ORIGIN, pitch: 0, yaw: 0 }, deFrente)
+    const murio = applyDamageToBot(bot, out.damage)
+    expect(murio).toBe(false)
+    expect(bot.alive).toBe(true)
+    expect(bot.health).toBe(60)
+  })
+
+  it('dos ESTOCADAS de frente matan (65 + 65 = 130 ≥ 100), la primera no', () => {
+    const bot = createBotHealthState()
+    const out = createMeleeResult()
+    const state = createMeleeState(K)
+    const input: MeleeInput = { slashHeld: false, stabHeld: true, origin: ORIGIN, pitch: 0, yaw: 0 }
+    // Primera estocada.
+    stepMelee(state, K, input, hb, deFrente, 1 / 60, out)
+    expect(applyDamageToBot(bot, out.damage)).toBe(false)
+    expect(bot.alive).toBe(true)
+    // Segunda estocada, pasado el cooldown del secondary.
+    stepMelee(state, K, input, hb, deFrente, K.stabInterval, out)
+    expect(applyDamageToBot(bot, out.damage)).toBe(true)
+    expect(bot.alive).toBe(false)
   })
 })
 

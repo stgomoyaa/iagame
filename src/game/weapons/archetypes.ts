@@ -6,6 +6,13 @@
  * al disparar sale de acá, no del modelo 3D.
  *
  * Unidades: metros, segundos, radianes, RPM (rondas por minuto).
+ *
+ * OJO — esto es SÓLO armas de FUEGO. El cuchillo (y todo lo melee) NO es un
+ * arquetipo de acá: no tiene cargador, cadencia, modo de disparo ni retroceso,
+ * así que no pasa por esta validación (`ARCHETYPE_LIST.length === 10`,
+ * `magazine > 0`, patrón de retroceso no vacío — archetypes.test.ts). La rama
+ * melee vive aparte: contrato y mecánica en combat/melee.ts, dato del arma en
+ * weapons/melee-catalog.ts. No agregues un cuchillo acá.
  */
 
 export type WeaponClass = 'smg' | 'ar' | 'sniper' | 'shotgun' | 'lmg' | 'pistol' | 'marksman'
