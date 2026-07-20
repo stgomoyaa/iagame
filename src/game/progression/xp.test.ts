@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyXp, XP, xpForMatch } from '@/game/progression/xp'
 import type { MatchPerformance } from '@/game/progression/combat-score'
-import { XP_POR_NIVEL } from '@/game/progression/unlocks'
+import { NIVEL_MAXIMO, xpParaNivel } from '@/game/progression/unlocks'
 
 function perf(over: Partial<MatchPerformance> = {}): MatchPerformance {
   return {
@@ -66,15 +66,26 @@ describe('acumulacion de XP', () => {
 
   it('detecta la subida de nivel', () => {
     // Justo debajo de un nivel: cualquier partida lo cruza.
-    const r = applyXp(XP_POR_NIVEL - 1, perf())
+    const r = applyXp(xpParaNivel(2) - 1, perf())
     expect(r.subioDeNivel).toBe(true)
     expect(r.level).toBeGreaterThan(r.levelAnterior)
   })
 
   it('no inventa subidas de nivel cuando no las hubo', () => {
     const r = applyXp(0, perf({ kills: 0, deaths: 5, damage: 0, headshots: 0, win: false }))
-    expect(r.ganada).toBeLessThan(XP_POR_NIVEL)
+    expect(r.ganada).toBeLessThan(xpParaNivel(2))
     expect(r.subioDeNivel).toBe(false)
+  })
+
+  it('en el techo la XP sigue sumando pero el nivel no sube', () => {
+    // La barra llena es la señal de que se puede prestigiar (prestige.ts).
+    // La XP igual se acumula: quien decide tirarla es el jugador al
+    // prestigiar, no una resta silenciosa acá.
+    const r = applyXp(xpParaNivel(NIVEL_MAXIMO), perf())
+    expect(r.level).toBe(NIVEL_MAXIMO)
+    expect(r.levelAnterior).toBe(NIVEL_MAXIMO)
+    expect(r.subioDeNivel).toBe(false)
+    expect(r.xp).toBeGreaterThan(xpParaNivel(NIVEL_MAXIMO))
   })
 
   it('trata una XP previa corrupta como cero en vez de propagarla', () => {
