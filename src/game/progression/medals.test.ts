@@ -23,6 +23,7 @@ import {
 } from '@/game/progression/medals'
 import {
   createDefaultProgress,
+  CURVA_XP_ACTUAL,
   parseProgress,
   progressWithMedals,
   PROGRESS_VERSION,
@@ -153,6 +154,11 @@ describe('persistencia dentro de ProgressData', () => {
     // por haber jugado antes de que existieran las medallas.
     const viejo = {
       version: PROGRESS_VERSION,
+      // Declara su curva: este test prueba que falta el campo `medallas`, no
+      // la migracion de XP. Sin `curvaXp`, `parseProgress` lo toma por un
+      // guardado de la curva lineal vieja y le migra la XP, y la asercion
+      // falla por un motivo que no tiene nada que ver con las medallas.
+      curvaXp: CURVA_XP_ACTUAL,
       xp: 5000,
       skins: ['inicial:2'],
       loadout: {},

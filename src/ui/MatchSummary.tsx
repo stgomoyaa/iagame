@@ -25,7 +25,7 @@ import { PLAYER_ID } from '@/game/match/types'
 import type { MatchProgress } from '@/game/progression/career'
 import { rankColor, rankLabel, RR_MAXIMO } from '@/game/progression/ranks'
 import { PLACEMENT } from '@/game/progression/placement'
-import { XP_POR_NIVEL, xpParaNivel } from '@/game/progression/unlocks'
+import { xpParaNivel } from '@/game/progression/unlocks'
 import { RARITY_BY_ID } from '@/game/skins/rarity'
 import type { Skin } from '@/game/skins/generator'
 import { participantLabel } from '@/ui/participant-label'
@@ -185,7 +185,7 @@ function BloqueXp({ progress }: { progress: MatchProgress }) {
       <div className="flex items-baseline justify-between gap-3">
         <Rotulo>XP DE CUENTA</Rotulo>
         <span className="pg-mono text-[9px] tracking-[.12em]" style={{ color: 'var(--pg-acento)' }}>
-          {XP_POR_NIVEL} XP / NIVEL
+          {(techo - piso).toLocaleString('es-CL')} XP AL PRÓXIMO
         </span>
       </div>
       <div className="mt-2.5 flex items-baseline justify-between gap-3">
@@ -202,7 +202,7 @@ function BloqueXp({ progress }: { progress: MatchProgress }) {
       <p className="pg-mono mt-1.5 text-[10px]" style={{ color: 'var(--pg-mudo)' }}>
         {xp.subioDeNivel
           ? 'Subiste de nivel. Tienes armas nuevas en la armería.'
-          : `${(xp.xp - piso).toLocaleString('es-CL')} / ${XP_POR_NIVEL} hacia el nivel ${xp.level + 1}`}
+          : `${(xp.xp - piso).toLocaleString('es-CL')} / ${(techo - piso).toLocaleString('es-CL')} hacia el nivel ${xp.level + 1}`}
       </p>
     </div>
   )

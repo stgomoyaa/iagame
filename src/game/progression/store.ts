@@ -20,7 +20,12 @@
  */
 
 import { defaultLoadout, normalizeLoadout, type Loadout } from '@/game/progression/loadout'
-import { levelForXp, NIVEL_INICIAL } from '@/game/progression/unlocks'
+import { levelForXp, NIVEL_INICIAL, NIVEL_MAXIMO, xpParaNivel } from '@/game/progression/unlocks'
+import {
+  createDefaultPrestige,
+  PRESTIGIO_MAX,
+  type PrestigeData,
+} from '@/game/progression/prestige'
 import { createDefaultCareer, type CareerData } from '@/game/progression/career'
 import { createPlacementState, PLACEMENT, type PlacementState } from '@/game/progression/placement'
 import { HISTORIAL_MAX, type MatchHistoryEntry } from '@/game/progression/history'
@@ -42,8 +47,37 @@ export const PROGRESS_VERSION = 2
 
 export const PROGRESS_STORAGE_KEY = 'iagame:progreso'
 
+/**
+ * Generación de la CURVA de XP con la que se escribió el guardado. Nada que
+ * ver con `PROGRESS_VERSION`, y esa diferencia es todo el punto:
+ *
+ * - `PROGRESS_VERSION` cambia cuando cambia la FORMA del guardado, y subirlo
+ *   TIRA lo viejo (ver `parseProgress`).
+ * - `curvaXp` cambia cuando cambia el SIGNIFICADO de un campo que sigue
+ *   estando, y se MIGRA.
+ *
+ * Acá pasó lo segundo: la forma no cambió (sigue habiendo un número `xp`),
+ * pero 30.000 XP ya no quieren decir el mismo nivel que antes. Subir la
+ * versión habría sido el camino fácil y habría borrado la carrera de
+ * cualquiera que ya estuviera jugando, que es exactamente lo que no se puede
+ * hacer.
+ *
+ * 0 = curva lineal de 1200 XP por nivel (la que no escribía este campo).
+ * 1 = curva cuadrática con techo 55 (unlocks.ts).
+ */
+export const CURVA_XP_ACTUAL = 1
+
+/**
+ * XP por nivel de la curva 0. Se conserva sólo para poder leer un guardado
+ * viejo: es la constante con la que ESE guardado calculó su nivel, así que
+ * borrarla no simplificaría nada, haría imposible la migración.
+ */
+const XP_POR_NIVEL_CURVA_0 = 1200
+
 export interface ProgressData {
   version: number
+  /** Ver `CURVA_XP_ACTUAL`. Un guardado sin este campo es de la curva 0. */
+  curvaXp: number
   /** XP acumulada. El nivel se deriva de acá (unlocks.ts, `levelForXp`). */
   xp: number
   /** Seeds de las skins del inventario. */
@@ -93,6 +127,10 @@ export interface ProgressData {
    * campo nuevo con default, nunca un cambio de forma de lo que ya estaba.
    */
   medallas: MedalTally
+  /** Cuántas veces prestigió (prestige.ts). */
+  prestigio: number
+  /** Armas que las fichas de prestigio dejaron desbloqueadas para siempre. */
+  desbloqueosPermanentes: string[]
 }
 
 /**
@@ -143,8 +181,10 @@ export const SKINS_INICIALES: readonly string[] = [
 
 export function createDefaultProgress(): ProgressData {
   const carrera = createDefaultCareer()
+  const prestigio = createDefaultPrestige()
   return {
     version: PROGRESS_VERSION,
+    curvaXp: CURVA_XP_ACTUAL,
     xp: 0,
     skins: [...SKINS_INICIALES],
     loadout: defaultLoadout(NIVEL_INICIAL),
@@ -156,6 +196,8 @@ export function createDefaultProgress(): ProgressData {
     historial: [],
     armas: {},
     medallas: emptyTally(),
+    prestigio: prestigio.prestigio,
+    desbloqueosPermanentes: prestigio.desbloqueosPermanentes,
   }
 }
 
@@ -272,6 +314,32 @@ function leerArmas(raw: unknown): Record<string, number> {
 }
 
 /**
+ * Convierte la XP de un guardado de la curva 0 (lineal, 1200 por nivel) a la
+ * curva actual.
+ *
+ * **Se conserva el NIVEL, no la XP.** Es la decisión importante de toda la
+ * migración y va contra el reflejo de "es el mismo número, dejalo quieto":
+ * la curva nueva es más cara, así que arrastrar la XP tal cual bajaría de
+ * nivel a todo el que ya venía jugando —30.000 XP eran nivel 26 y pasarían a
+ * ser nivel 22— y bajar de nivel BLOQUEA ARMAS que el jugador ya tenía. No
+ * rompe nada (normalizeLoadout las reemplaza y el juego arranca igual), pero
+ * el jugador abre la armería y le faltan armas, que es indistinguible de un
+ * guardado roto.
+ *
+ * Convirtiendo el nivel, nadie baja nunca. Lo único que se pierde es el
+ * avance parcial dentro del nivel en curso, que a lo sumo es media partida.
+ *
+ * El clamp al techo importa: con la curva vieja una cuenta de 60 partidas
+ * andaba por el nivel 120, y ese número no existe más. Cae en 55, el techo,
+ * o sea listo para prestigiar. Es la lectura correcta: esa cuenta terminó el
+ * ciclo hace rato.
+ */
+function migrarXpDeCurva0(xpVieja: number): number {
+  const nivelViejo = NIVEL_INICIAL + Math.floor(xpVieja / XP_POR_NIVEL_CURVA_0)
+  return xpParaNivel(Math.min(NIVEL_MAXIMO, Math.max(NIVEL_INICIAL, nivelViejo)))
+}
+
+/**
  * Interpreta lo que salió del almacenamiento. Todo lo que llega es `unknown`
  * a propósito: localStorage lo puede haber escrito una versión anterior del
  * juego, otra pestaña, o el propio usuario desde la consola. Nada de lo que
@@ -285,8 +353,11 @@ export function parseProgress(raw: unknown): ProgressData {
   const obj = raw as Record<string, unknown>
   if (obj.version !== PROGRESS_VERSION) return base
 
-  const xp = typeof obj.xp === 'number' && Number.isFinite(obj.xp) && obj.xp >= 0 ? obj.xp : 0
+  const xpGuardada = typeof obj.xp === 'number' && Number.isFinite(obj.xp) && obj.xp >= 0 ? obj.xp : 0
+  const curvaXp = Math.max(0, Math.floor(numeroSeguro(obj.curvaXp, 0)))
+  const xp = curvaXp >= CURVA_XP_ACTUAL ? xpGuardada : migrarXpDeCurva0(xpGuardada)
   const skins = esArrayDeStrings(obj.skins) ? obj.skins : [...SKINS_INICIALES]
+  const permanentes = esArrayDeStrings(obj.desbloqueosPermanentes) ? obj.desbloqueosPermanentes : []
 
   const loadoutRaw = (typeof obj.loadout === 'object' && obj.loadout !== null
     ? obj.loadout
@@ -298,9 +369,10 @@ export function parseProgress(raw: unknown): ProgressData {
 
   return {
     version: PROGRESS_VERSION,
+    curvaXp: CURVA_XP_ACTUAL,
     xp,
     skins,
-    loadout: normalizeLoadout(loadout, levelForXp(xp), skins),
+    loadout: normalizeLoadout(loadout, levelForXp(xp), skins, permanentes),
     rank: leerRank(obj.rank),
     placement: leerPlacement(obj.placement),
     partidasJugadas: Math.max(0, Math.floor(numeroSeguro(obj.partidasJugadas, 0))),
@@ -311,6 +383,8 @@ export function parseProgress(raw: unknown): ProgressData {
     // Campo agregado después de v2: ausente cae a {} en vez de invalidar el
     // guardado entero (ver el comentario del campo en ProgressData).
     medallas: parseTally(obj.medallas),
+    prestigio: clamp(Math.floor(numeroSeguro(obj.prestigio, 0)), 0, PRESTIGIO_MAX),
+    desbloqueosPermanentes: permanentes,
   }
 }
 
@@ -374,7 +448,59 @@ export function progressWithCareer(data: ProgressData, career: CareerData): Prog
     victorias: career.victorias,
     derrotas: career.derrotas,
     historial: [...career.historial],
-    loadout: normalizeLoadout(data.loadout, levelForXp(career.xp), career.skins),
+    // Los desbloqueos permanentes entran acá y no son opcionales: son las
+    // armas que las fichas de prestigio dejaron abiertas para siempre. Sin
+    // pasarlas, `normalizeLoadout` las trataría como bloqueadas por nivel y
+    // se las sacaría al jugador justo después de prestigiar, que es cuando
+    // más importa que sigan.
+    loadout: normalizeLoadout(
+      data.loadout,
+      levelForXp(career.xp),
+      career.skins,
+      data.desbloqueosPermanentes,
+    ),
+  }
+}
+
+/** Vista de prestigio del guardado (mismo patrón que `careerFromProgress`). */
+export function prestigeFromProgress(data: ProgressData): PrestigeData {
+  return {
+    prestigio: data.prestigio,
+    desbloqueosPermanentes: data.desbloqueosPermanentes,
+    xp: data.xp,
+  }
+}
+
+/**
+ * Devuelve un guardado nuevo con el prestigio aplicado.
+ *
+ * **El `...data` de la primera línea es la garantía de la tabla de "qué se
+ * mantiene", y no es un atajo de escritura.** Todo campo que este objeto no
+ * nombre explícitamente sobrevive al prestigio por construcción: el rango, el
+ * RR, las colocaciones, las skins, los contadores de partidas, y también los
+ * campos que TODAVÍA NO EXISTEN. El XP por arma y las medallas los están
+ * construyendo en paralelo y van a entrar a `ProgressData` como campos
+ * nuevos; con esta forma entran ya protegidos, sin que nadie tenga que
+ * acordarse de agregarlos a una lista de excepciones.
+ *
+ * El loadout se renormaliza porque el nivel volvió a 1: las armas que ya no
+ * corresponden se reemplazan solas, salvo las permanentes, que pasan como
+ * `permanentes` justamente para que sobrevivan al reinicio.
+ */
+export function progressWithPrestige(data: ProgressData, prestige: PrestigeData): ProgressData {
+  return {
+    ...data,
+    version: PROGRESS_VERSION,
+    curvaXp: CURVA_XP_ACTUAL,
+    xp: prestige.xp,
+    prestigio: prestige.prestigio,
+    desbloqueosPermanentes: prestige.desbloqueosPermanentes,
+    loadout: normalizeLoadout(
+      data.loadout,
+      levelForXp(prestige.xp),
+      data.skins,
+      prestige.desbloqueosPermanentes,
+    ),
   }
 }
 

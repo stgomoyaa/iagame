@@ -35,8 +35,12 @@ export interface LoadoutEntry {
 
 export type Loadout = Record<LoadoutSlot, LoadoutEntry>
 
-function firstUnlockedOfClass(accountLevel: number, wanted: string): string | null {
-  for (const slug of unlockedWeapons(accountLevel)) {
+function firstUnlockedOfClass(
+  accountLevel: number,
+  wanted: string,
+  permanentes: readonly string[],
+): string | null {
+  for (const slug of unlockedWeapons(accountLevel, permanentes)) {
     if (resolveArchetype(slug).class === wanted) return slug
   }
   return null
@@ -48,12 +52,12 @@ function firstUnlockedOfClass(accountLevel: number, wanted: string): string | nu
  * desbloqueos (unlocks.ts) garantiza que existe desde el nivel 1. Sin skin:
  * la primera skin equipada es una decisión del jugador, no del sistema.
  */
-export function defaultLoadout(accountLevel: number): Loadout {
-  const disponibles = unlockedWeapons(accountLevel)
+export function defaultLoadout(accountLevel: number, permanentes: readonly string[] = []): Loadout {
+  const disponibles = unlockedWeapons(accountLevel, permanentes)
   const primary =
-    firstUnlockedOfClass(accountLevel, 'ar') ?? disponibles[0] ?? null
+    firstUnlockedOfClass(accountLevel, 'ar', permanentes) ?? disponibles[0] ?? null
   const secondary =
-    firstUnlockedOfClass(accountLevel, 'pistol') ??
+    firstUnlockedOfClass(accountLevel, 'pistol', permanentes) ??
     disponibles.find((s) => s !== primary) ??
     null
 
@@ -63,10 +67,14 @@ export function defaultLoadout(accountLevel: number): Loadout {
   }
 }
 
-function slugValido(slug: string | null, accountLevel: number): boolean {
+function slugValido(
+  slug: string | null,
+  accountLevel: number,
+  permanentes: readonly string[],
+): boolean {
   if (slug === null) return false
   if (!(slug in WEAPON_REGISTRY)) return false
-  return isWeaponUnlocked(slug, accountLevel)
+  return isWeaponUnlocked(slug, accountLevel, permanentes)
 }
 
 /**
@@ -74,18 +82,24 @@ function slugValido(slug: string | null, accountLevel: number): boolean {
  * el nivel no habilita, y skins que no están en el inventario. Lo que se
  * descarta se reemplaza por el default de la ranura, así el jugador nunca
  * termina spawneando sin arma por un dato viejo en localStorage.
+ *
+ * `permanentes` (las armas de las fichas de prestigio, prestige.ts) pasan el
+ * filtro sin importar el nivel. Es el camino que hace que prestigiar no te
+ * saque de las manos el arma que elegiste llevarte: el reinicio deja el nivel
+ * en 1, y sin esto la renormalización posterior la descartaría enseguida.
  */
 export function normalizeLoadout(
   loadout: Loadout,
   accountLevel: number,
   inventory: readonly string[],
+  permanentes: readonly string[] = [],
 ): Loadout {
-  const fallback = defaultLoadout(accountLevel)
+  const fallback = defaultLoadout(accountLevel, permanentes)
   const owned = new Set(inventory)
 
   const fix = (slot: LoadoutSlot): LoadoutEntry => {
     const entry = loadout[slot]
-    const slug = slugValido(entry?.slug ?? null, accountLevel)
+    const slug = slugValido(entry?.slug ?? null, accountLevel, permanentes)
       ? (entry.slug as string)
       : fallback[slot].slug
     const skinSeed =

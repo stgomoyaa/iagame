@@ -11,15 +11,26 @@ import {
   accountLevel,
   createDefaultProgress,
   createMemoryProgressStore,
+  CURVA_XP_ACTUAL,
   parseProgress,
   progressWithWeaponXp,
+  prestigeFromProgress,
+  progressWithPrestige,
   PROGRESS_VERSION,
   SKINS_INICIALES,
+  type ProgressData,
 } from '@/game/progression/store'
 import { HISTORIAL_MAX } from '@/game/progression/history'
 import { XP_ARMA_MAESTRIA } from '@/game/progression/weapon-xp'
+import { prestigiar, PRESTIGIO_MAX } from '@/game/progression/prestige'
 import { generateSkin } from '@/game/skins/generator'
-import { NIVEL_INICIAL, xpParaNivel } from '@/game/progression/unlocks'
+import {
+  NIVEL_INICIAL,
+  NIVEL_MAXIMO,
+  unlockedWeapons,
+  unlockLevelFor,
+  xpParaNivel,
+} from '@/game/progression/unlocks'
 import { weaponIndex } from '@/game/weapons/registry'
 
 const TODAS = weaponIndex().map((e) => e.slug)
@@ -188,6 +199,24 @@ describe('lectura de datos guardados', () => {
     }
   })
 
+  it('lee el prestigio y los desbloqueos permanentes, y los clampea', () => {
+    const data = parseProgress({
+      ...createDefaultProgress(),
+      prestigio: 99,
+      desbloqueosPermanentes: [TODAS[30]],
+    })
+    expect(data.prestigio).toBe(PRESTIGIO_MAX)
+    expect(data.desbloqueosPermanentes).toEqual([TODAS[30]])
+
+    const basura = parseProgress({
+      ...createDefaultProgress(),
+      prestigio: 'tres',
+      desbloqueosPermanentes: [1, 2],
+    })
+    expect(basura.prestigio).toBe(0)
+    expect(basura.desbloqueosPermanentes).toEqual([])
+  })
+
   it('ignora campos con el tipo equivocado sin perder el resto', () => {
     const data = parseProgress({
       version: PROGRESS_VERSION,
@@ -210,6 +239,13 @@ describe('lectura de datos guardados', () => {
 describe('compatibilidad con guardados anteriores al historial', () => {
   const guardadoViejo = {
     version: PROGRESS_VERSION,
+    // Declara su curva a proposito. Este bloque prueba que faltan CAMPOS
+    // (historial, armas, medallas, prestigio), no que cambie la curva de XP:
+    // sin `curvaXp`, `parseProgress` lo tomaria por un guardado lineal viejo
+    // y migraria la XP, mezclando dos preocupaciones y haciendo fallar la
+    // asercion por el motivo equivocado. La migracion tiene sus propios
+    // tests mas abajo.
+    curvaXp: CURVA_XP_ACTUAL,
     xp: xpParaNivel(9),
     skins: [...SKINS_INICIALES],
     loadout: defaultLoadout(9),
@@ -282,7 +318,14 @@ describe('xp por arma en el guardado', () => {
     const data = parseProgress(viejo)
     expect(data.armas).toEqual({})
     // Y NADA MAS se perdio: el resto del guardado sobrevivio.
-    expect(data.xp).toBe(4800)
+    //
+    // La XP NO vuelve con el mismo numero, y esta bien: un guardado sin
+    // `curvaXp` es de la curva lineal vieja y `parseProgress` lo migra a la
+    // cuadratica. Lo que se conserva es el NIVEL, que es lo que el jugador
+    // percibe como su progreso; el numero crudo es una unidad interna que
+    // cambio de significado. Afirmar el numero seria fijar la curva vieja.
+    // 4800 con la curva vieja (1200 por nivel) era nivel 5: 1 + 4800/1200.
+    expect(accountLevel(data)).toBe(5)
     expect(data.partidasJugadas).toBe(7)
     expect(data.victorias).toBe(4)
     expect(data.loadout.primary.slug).not.toBeNull()
@@ -319,5 +362,164 @@ describe('xp por arma en el guardado', () => {
     for (const basura of [null, 42, 'texto', [], [7, 8], [{ ak47: 1 }]]) {
       expect(parseProgress({ ...createDefaultProgress(), armas: basura }).armas).toEqual({})
     }
+  })
+})
+
+describe('migración de la curva de xp', () => {
+  /** Un guardado escrito por la versión anterior: misma forma, misma
+   *  `version`, pero sin `curvaXp` y con la XP de la curva lineal de 1200. */
+  function guardadoViejo(xp: number): Record<string, unknown> {
+    const resto: Record<string, unknown> = { ...createDefaultProgress(), xp }
+    delete resto.curvaXp
+    return resto
+  }
+
+  const nivelViejo = (xp: number): number => 1 + Math.floor(xp / 1200)
+
+  it('nadie baja de nivel al migrar', () => {
+    // La propiedad que hace que la migración sea segura: si el nivel bajara,
+    // se bloquearían armas que el jugador ya tenía en la armería.
+    for (const xpVieja of [0, 1199, 1200, 5000, 28800, 30000, 100000, 480000]) {
+      const migrado = parseProgress(guardadoViejo(xpVieja))
+      expect(accountLevel(migrado)).toBe(Math.min(NIVEL_MAXIMO, nivelViejo(xpVieja)))
+    }
+  })
+
+  it('una cuenta con mucha xp queda en el techo, no en cero', () => {
+    // Con la curva vieja, 60 partidas dejaban al jugador en el nivel ~120.
+    const migrado = parseProgress(guardadoViejo(486_000))
+    expect(accountLevel(migrado)).toBe(NIVEL_MAXIMO)
+    expect(migrado.xp).toBe(xpParaNivel(NIVEL_MAXIMO))
+  })
+
+  it('conserva las armas que el jugador ya tenía desbloqueadas', () => {
+    const xpVieja = 30_000 // nivel 26 con la curva lineal
+    const armasAntes = unlockedWeapons(nivelViejo(xpVieja))
+    const migrado = parseProgress(guardadoViejo(xpVieja))
+    for (const slug of armasAntes) {
+      expect(unlockedWeapons(accountLevel(migrado))).toContain(slug)
+    }
+  })
+
+  it('migra una sola vez: la segunda lectura ya no toca la xp', () => {
+    // Si la marca de curva no se guardara, cada carga volvería a "migrar" y
+    // la XP se iría multiplicando sola en cada arranque del juego.
+    const migrado = parseProgress(guardadoViejo(30_000))
+    expect(migrado.curvaXp).toBe(CURVA_XP_ACTUAL)
+    const otraVez = parseProgress(JSON.parse(JSON.stringify(migrado)))
+    expect(otraVez.xp).toBe(migrado.xp)
+    const tercera = parseProgress(JSON.parse(JSON.stringify(otraVez)))
+    expect(tercera.xp).toBe(migrado.xp)
+  })
+
+  it('un guardado nuevo no se migra', () => {
+    const nuevo = { ...createDefaultProgress(), xp: 30_000 }
+    expect(parseProgress(nuevo).xp).toBe(30_000)
+  })
+
+  it('el guardado viejo conserva rango, skins y contadores', () => {
+    // La migración es de la XP y de nada más: el rango mide otra cosa.
+    const viejo = {
+      ...guardadoViejo(30_000),
+      rank: { rank: 14, rr: 62, cushion: 1 },
+      partidasJugadas: 41,
+      victorias: 25,
+      derrotas: 16,
+    }
+    const migrado = parseProgress(viejo)
+    expect(migrado.rank).toEqual({ rank: 14, rr: 62, cushion: 1 })
+    expect(migrado.partidasJugadas).toBe(41)
+    expect(migrado.victorias).toBe(25)
+    expect(migrado.derrotas).toBe(16)
+    expect(migrado.skins).toEqual([...SKINS_INICIALES])
+  })
+})
+
+describe('prestigio sobre el guardado completo', () => {
+  const enElTecho = (): ProgressData => ({
+    ...createDefaultProgress(),
+    xp: xpParaNivel(NIVEL_MAXIMO),
+    skins: [...SKINS_INICIALES, 'drop:9:12:2600'],
+    rank: { rank: 17, rr: 45, cushion: 2 },
+    partidasJugadas: 60,
+    victorias: 33,
+    derrotas: 27,
+  })
+
+  it('la tabla de qué se reinicia y qué se mantiene', () => {
+    const antes = enElTecho()
+    const resultado = prestigiar(prestigeFromProgress(antes), TODAS[35])
+    expect(resultado.hecho).toBe(true)
+    const despues = progressWithPrestige(antes, resultado.data)
+
+    // Se reinicia.
+    expect(despues.xp).toBe(0)
+    expect(accountLevel(despues)).toBe(NIVEL_INICIAL)
+
+    // Se mantiene.
+    expect(despues.prestigio).toBe(1)
+    expect(despues.rank).toEqual(antes.rank)
+    expect(despues.placement).toEqual(antes.placement)
+    expect(despues.skins).toEqual(antes.skins)
+    expect(despues.partidasJugadas).toBe(60)
+    expect(despues.victorias).toBe(33)
+    expect(despues.derrotas).toBe(27)
+    expect(despues.desbloqueosPermanentes).toEqual([TODAS[35]])
+  })
+
+  it('los campos que todavía no existen también sobreviven', () => {
+    // El XP de arma y las medallas los están construyendo en paralelo y van
+    // a entrar como campos nuevos de ProgressData. Este test es el contrato
+    // con esos dos módulos: prestigiar no los puede borrar, ni siquiera por
+    // olvido de quien escriba el campo.
+    const conFuturo = {
+      ...enElTecho(),
+      xpPorArma: { 'assaultrifle-1': 4200 },
+      medallas: ['primera-sangre'],
+    } as unknown as ProgressData
+    const despues = progressWithPrestige(
+      conFuturo,
+      prestigiar(prestigeFromProgress(conFuturo)).data,
+    ) as unknown as Record<string, unknown>
+
+    expect(despues.xpPorArma).toEqual({ 'assaultrifle-1': 4200 })
+    expect(despues.medallas).toEqual(['primera-sangre'])
+    expect(despues.xp).toBe(0)
+  })
+
+  it('el arma de la ficha sigue equipada después del reinicio', () => {
+    // El caso concreto que rompería la promesa de la ficha: al volver a
+    // nivel 1, la renormalización del loadout descartaría un arma tardía si
+    // no se le pasaran los desbloqueos permanentes.
+    const tardia = TODAS.reduce((a, b) => (unlockLevelFor(a) >= unlockLevelFor(b) ? a : b))
+    expect(unlockLevelFor(tardia)).toBeGreaterThan(NIVEL_INICIAL)
+
+    const antes: ProgressData = {
+      ...enElTecho(),
+      loadout: equipWeapon(createDefaultProgress().loadout, 'primary', tardia),
+    }
+    const despues = progressWithPrestige(antes, prestigiar(prestigeFromProgress(antes), tardia).data)
+
+    expect(accountLevel(despues)).toBe(NIVEL_INICIAL)
+    expect(despues.loadout.primary.slug).toBe(tardia)
+
+    // Y sobrevive al round-trip por localStorage, que es donde de verdad
+    // vuelve el jugador.
+    const recargado = parseProgress(JSON.parse(JSON.stringify(despues)))
+    expect(recargado.loadout.primary.slug).toBe(tardia)
+    expect(recargado.desbloqueosPermanentes).toEqual([tardia])
+  })
+
+  it('sin la ficha, un arma tardía sí se descarta al reiniciar', () => {
+    // El control del test anterior: si esto también pasara, aquel no estaría
+    // probando que la ficha hace algo.
+    const tardia = TODAS.reduce((a, b) => (unlockLevelFor(a) >= unlockLevelFor(b) ? a : b))
+    const antes: ProgressData = {
+      ...enElTecho(),
+      loadout: equipWeapon(createDefaultProgress().loadout, 'primary', tardia),
+    }
+    const despues = progressWithPrestige(antes, prestigiar(prestigeFromProgress(antes)).data)
+    expect(despues.loadout.primary.slug).not.toBe(tardia)
+    expect(despues.loadout.primary.slug).not.toBeNull()
   })
 })

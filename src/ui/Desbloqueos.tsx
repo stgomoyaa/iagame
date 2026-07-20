@@ -21,7 +21,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   nivelMaximoDeDesbloqueo,
-  XP_POR_NIVEL,
   xpParaNivel,
   levelForXp,
 } from '@/game/progression/unlocks'
@@ -185,8 +184,12 @@ export function Desbloqueos() {
               <dd>{nivelMax}</dd>
             </div>
             <div className="flex gap-1.5">
-              <dt style={{ color: 'var(--pg-mudo)' }}>XP / NIVEL</dt>
-              <dd>{XP_POR_NIVEL}</dd>
+              {/* La curva es cuadratica: el costo por nivel SUBE con el
+                  nivel, asi que mostrar una constante seria mentira. Se
+                  muestra lo que cuesta el proximo, que es el numero que al
+                  jugador le sirve. */}
+              <dt style={{ color: 'var(--pg-mudo)' }}>XP AL PRÓXIMO</dt>
+              <dd>{xpParaNivel(nivel + 1) - xpParaNivel(nivel)}</dd>
             </div>
             <div className="flex gap-1.5">
               <dt style={{ color: 'var(--pg-mudo)' }}>TU NIVEL</dt>
