@@ -84,6 +84,13 @@ import {
 } from '@/game/feedback/vfx'
 import { createFeedbackOverlay } from '@/game/feedback/overlay'
 import {
+  scopeAlpha,
+  scopeReticleForWeapon,
+  sightForSlug,
+  weaponHiddenByScope,
+  type ScopeReticle,
+} from '@/game/feedback/scope'
+import {
   createFeedbackState,
   onDamageTaken,
   onHitConfirmed,
@@ -949,6 +956,13 @@ export function createGame(
     // en que salió la bala.
     let finalPitch = input.pitch
     let finalYaw = input.player.yaw
+    // Estampa de visor (feedback/scope.ts): qué retícula lleva esta arma y
+    // cuán entrada está. Se suben a este alcance (en vez de quedarse en el
+    // bloque de ADS) porque hacen falta en dos lugares más abajo — esconder
+    // el arma antes del render, y pintar la capa de DOM al final del frame.
+    // Son un número y una referencia a string en el stack: no asignan nada.
+    let easedAdsTForScope = 0
+    let scopeReticleNow: ScopeReticle | null = null
     // Cuántos disparos resolvió stepCombat() este frame: se usa después de
     // este bloque (feedback de disparo/impacto), así que vive afuera del
     // `if` en vez de quedar atrapado en un `const` de bloque.
@@ -1084,6 +1098,12 @@ export function createGame(
       const easedAdsT = easeInOutCubic(vmState.adsT)
       gfx.setFov(adsFov(WORLD_FOV, archetype.ads, easedAdsT))
       sensMultiplier = adsSensitivityMultiplier(archetype.ads, easedAdsT)
+      easedAdsTForScope = easedAdsT
+      // El criterio completo (y por qué es la conjunción de arquetipo y
+      // propiedad del arma) vive en scopeReticleForWeapon(). Para todo lo
+      // que no sea precisión CON óptica esto es null y nada más abajo se
+      // activa: el ADS de hierros no cambia ni un píxel.
+      scopeReticleNow = scopeReticleForWeapon(archetype.id, sightForSlug(shownSlug))
     }
 
     // Resincroniza las hitboxes de torso y cabeza del jugador (ver
@@ -1341,6 +1361,14 @@ export function createGame(
       // se tocan.
       viewmodel.weapon.position.set(vmOut.px, vmOut.py, -vmOut.pz)
       viewmodel.weapon.rotation.set(vmOut.rx, vmOut.ry, vmOut.rz)
+      // Mirando por el visor no se ve el arma, se ve lo que hay del otro
+      // lado del vidrio (ver weaponHiddenByScope). Es una bandera de
+      // Object3D, no una llamada a three: apagarla saca el arma del
+      // recorrido de render sin tocar el rig ni sus materiales. Con
+      // cualquier arma sin estampa `scopeReticleNow` es null, esto da
+      // siempre `true` y la línea es un no-op idempotente.
+      viewmodel.weapon.visible =
+        scopeReticleNow === null || !weaponHiddenByScope(scopeAlpha(easedAdsTForScope))
       // now/1000: el reloj de las animaciones de skin (pulso, flujo, ciclo
       // de tono). Se pasa el timestamp del rAF en vez de acumular un
       // contador propio para no sumar estado que se pueda desincronizar.
@@ -1378,6 +1406,11 @@ export function createGame(
     // todos los frames -- no es React, así que no compite con el
     // presupuesto de frame del motor (ver el comentario de cabecera de
     // feedback/overlay.ts).
+    // Estampa de mira telescópica (feedback/scope.ts). Con `reticle` en null
+    // —todo lo que no sea precisión con óptica— setScope() no toca el DOM,
+    // así que el ADS de hierros queda intacto.
+    feedbackOverlay.setScope(scopeReticleNow, easedAdsTForScope)
+
     feedbackOverlay.render(feedbackState)
   }
 
@@ -1436,6 +1469,23 @@ export function createGame(
           archetypeId: combatArchetypeId,
           reloading: vmState.reloading,
           reloadHeld: input.reloadHeld,
+          // Estampa de visor (feedback/scope.ts): con qué retícula y a qué
+          // opacidad quedó este frame. Una captura sola no distingue "el
+          // arma no lleva estampa" de "la lleva pero no se activó", y sin
+          // pointer lock no hay forma de mirar el estado de otra manera.
+          scope: (() => {
+            const reticle = scopeReticleForWeapon(
+              combatArchetypeId,
+              sightForSlug(viewmodel.attachedSlug),
+            )
+            // `alpha` es la opacidad EFECTIVA, no la de la curva: con un
+            // arma sin estampa tiene que dar 0 aunque el ADS esté completo.
+            // Reportar la curva pelada haría que un fusil de hierros a ADS
+            // full dijera "alpha 1" y una verificación automatizada leyera
+            // eso como que la estampa se activó.
+            const alpha = reticle === null ? 0 : scopeAlpha(easeInOutCubic(vmState.adsT))
+            return { reticle, adsT: vmState.adsT, alpha, weaponVisible: viewmodel.weapon.visible }
+          })(),
           // Posición y apoyo del jugador: sin esto no hay forma de
           // verificar en un navegador automatizado (sin pointer lock) que
           // en un mapa importado el piso frena de verdad. "Se ve el suelo"

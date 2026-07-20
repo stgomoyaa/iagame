@@ -27,6 +27,15 @@ import { vignetteOpacity } from '@/game/feedback/vignette'
 import { desaturationAmount, heartbeatPulse } from '@/game/feedback/health-vfx'
 import { FEEDBACK } from '@/game/feedback/tuning'
 import type { FeedbackState } from '@/game/feedback/feedback'
+import {
+  crosshairOpacityUnderScope,
+  mildotOffsetPx,
+  SCOPE,
+  scopeAlpha,
+  scopeLensRadiusPx,
+  scopeLensScale,
+  type ScopeReticle,
+} from '@/game/feedback/scope'
 
 const HITMARKER_COLOR: Record<HitmarkerTier, string> = {
   normal: '#e6e8ec',
@@ -84,6 +93,28 @@ function createDamageNumberElement(): HTMLDivElement {
   return el
 }
 
+/**
+ * Color del tubo del visor y de la retícula. Casi negro y no negro puro: el
+ * resto del HUD ya vive en esta familia (#05070b es el fondo del aviso de
+ * contexto perdido en game.ts) y un negro absoluto contra un cielo oscuro se
+ * lee como si el canvas se hubiera apagado, no como un tubo.
+ */
+const SCOPE_TUBE = '#04050a'
+
+/**
+ * Las líneas de la retícula van negras con un halo blanco de 1 px
+ * (`box-shadow` de spread, sin desenfoque: no es un blur, no cuesta lo que
+ * cuesta un blur). Sin el halo, una retícula negra sobre una silueta en
+ * sombra a 60 m —el caso de uso ENTERO de un francotirador— desaparece.
+ */
+const RETICLE_INK = 'background:#000;box-shadow:0 0 0 1px rgba(255,255,255,.22)'
+
+function createScopeLayer(): HTMLDivElement {
+  const el = document.createElement('div')
+  styleBase(el, 'position:absolute;left:0;top:0;pointer-events:none;' + RETICLE_INK)
+  return el
+}
+
 function createVignetteElement(): HTMLDivElement {
   const el = document.createElement('div')
   styleBase(
@@ -102,6 +133,16 @@ export interface FeedbackOverlay {
    *  viewmodel.resize) -- nunca desde adentro de render(), para no leer
    *  clientWidth/clientHeight (layout forzado) en el camino de frame. */
   resize(width: number, height: number): void
+  /**
+   * Estampa de mira telescópica (feedback/scope.ts). Llamar una vez por
+   * frame, ANTES de render(): `reticle` es null para todo lo que no sea un
+   * arma de precisión con óptica —y ahí esta llamada no toca un solo nodo
+   * del DOM, por lo que el ADS de hierros queda literalmente idéntico— y
+   * `easedAdsT` es el MISMO adsT ya pasado por easeInOutCubic que alimentan
+   * FOV y sensibilidad en combat/ads.ts, para que el tubo termine de
+   * cerrarse exactamente cuando el zoom termina de llegar.
+   */
+  setScope(reticle: ScopeReticle | null, easedAdsT: number): void
   /** Llamar una vez por frame, después de stepFeedback(). */
   render(state: FeedbackState): void
 }
@@ -116,8 +157,150 @@ export function createFeedbackOverlay(): FeedbackOverlay {
   const damageNumberEls: HTMLDivElement[] = []
   const vignetteEls: HTMLDivElement[] = []
 
+  // --- estampa de visor (feedback/scope.ts) --------------------------------
+  // Todo esto se crea UNA vez en mount() y se coloca en píxeles UNA vez por
+  // resize(). El camino de frame sólo escribe dos propiedades (la opacidad
+  // de la raíz y la escala del contenedor interno), y ni eso cuando el valor
+  // no cambió: con un arma de hierros equipada, setScope() sale por el
+  // primer `if` sin tocar nada.
+  //
+  // Los cuatro brazos, en el orden [derecha, izquierda, abajo, arriba]. Se
+  // guarda como pares (dx, dy) para que colocar mildots, postes y tramos
+  // finos sea el mismo bucle en vez de cuatro casos copiados.
+  const ARM_DX = [1, -1, 0, 0]
+  const ARM_DY = [0, 0, 1, -1]
+
+  let scopeRoot: HTMLDivElement | null = null
+  /** Contenedor interno: acá vive el `transform: scale()` del acercamiento
+   *  de la lente, separado de la opacidad de la raíz para que animar las dos
+   *  cosas no obligue a recomponer la misma propiedad. */
+  let scopeInner: HTMLDivElement | null = null
+  let scopeMask: HTMLDivElement | null = null
+  /** Grupo de la retícula del cerrojo: cruz a pantalla completa + mildots. */
+  let mildotGroup: HTMLDivElement | null = null
+  /** Grupo de la retícula del marksman: postes duplex + punto central. */
+  let duplexGroup: HTMLDivElement | null = null
+  let scopeHLine: HTMLDivElement | null = null
+  let scopeVLine: HTMLDivElement | null = null
+  const mildotEls: HTMLDivElement[] = []
+  const duplexThickEls: HTMLDivElement[] = []
+  const duplexThinEls: HTMLDivElement[] = []
+  let duplexDot: HTMLDivElement | null = null
+
+  /** Última opacidad y última retícula ya escritas en el DOM: el guard que
+   *  hace que un frame sin cambios no genere ni una escritura de estilo (ni,
+   *  por lo tanto, ninguna de las cadenas que armarlas implicaría). */
+  let lastScopeAlpha = -1
+  let lastReticle: ScopeReticle | null = null
+
   let width = 1
   let height = 1
+
+  /**
+   * Recoloca toda la estampa en píxeles para el tamaño actual del canvas.
+   * Corre en mount() y en resize(), NUNCA en el camino de frame: acá sí se
+   * arman decenas de cadenas de estilo, y eso es exactamente lo que no puede
+   * pasar 240 veces por segundo.
+   */
+  function layoutScope(): void {
+    if (!scopeRoot || !scopeMask) return
+    const cx = width * 0.5
+    const cy = height * 0.5
+    const r = scopeLensRadiusPx(width, height)
+
+    // Dos gradientes en un solo elemento (una sola capa que componer):
+    //  1. el tubo — transparente adentro del radio, opaco afuera. El medio
+    //     píxel de rampa entre las dos paradas es lo que le da el borde
+    //     antialias; con una parada dura el círculo queda dentado.
+    //  2. el viñeteo de la lente — oscurecimiento progresivo hacia el borde
+    //     del vidrio, que es lo que hace que se lea como una óptica y no
+    //     como un agujero recortado en una cartulina.
+    // El orden importa: el primero se pinta encima, así que afuera del radio
+    // tapa por completo al segundo.
+    scopeMask.style.background =
+      `radial-gradient(circle at 50% 50%, rgba(0,0,0,0) ${r - 1}px, ${SCOPE_TUBE} ${r}px),` +
+      `radial-gradient(circle at 50% 50%, rgba(0,0,0,0) ${r * 0.55}px, rgba(0,0,0,.62) ${r}px)`
+
+    // Cruz a pantalla completa del cerrojo: las líneas NO se cortan en el
+    // centro (el AWP de CS tampoco las corta) — la intersección ES el punto
+    // de puntería, y un hueco ahí obligaría a adivinar dónde se cruzan.
+    if (scopeHLine) {
+      scopeHLine.style.left = '0px'
+      scopeHLine.style.top = `${cy - 0.5}px`
+      scopeHLine.style.width = `${width}px`
+      scopeHLine.style.height = '1px'
+    }
+    if (scopeVLine) {
+      scopeVLine.style.left = `${cx - 0.5}px`
+      scopeVLine.style.top = '0px'
+      scopeVLine.style.width = '1px'
+      scopeVLine.style.height = `${height}px`
+    }
+
+    const dotSize = SCOPE.mildotSizePx
+    for (let arm = 0; arm < ARM_DX.length; arm++) {
+      for (let i = 0; i < SCOPE.mildotsPerArm; i++) {
+        const el = mildotEls[arm * SCOPE.mildotsPerArm + i]
+        const offset = mildotOffsetPx(i, r)
+        el.style.width = `${dotSize}px`
+        el.style.height = `${dotSize}px`
+        el.style.borderRadius = '50%'
+        el.style.left = `${cx + ARM_DX[arm] * offset - dotSize * 0.5}px`
+        el.style.top = `${cy + ARM_DY[arm] * offset - dotSize * 0.5}px`
+      }
+    }
+
+    // Duplex: poste grueso desde casi el borde de la lente hacia adentro,
+    // tramo fino de ahí al hueco central. Los dos son el mismo rectángulo
+    // rotado 90°, así que se calculan con el mismo par (dx, dy).
+    const thickOuter = r * 0.97
+    const thickInner = r * SCOPE.duplexThickInnerFraction
+    const gap = r * SCOPE.duplexCenterGapFraction
+    for (let arm = 0; arm < ARM_DX.length; arm++) {
+      const dx = ARM_DX[arm]
+      const dy = ARM_DY[arm]
+      const horizontal = dx !== 0
+      const thick = duplexThickEls[arm]
+      const thin = duplexThinEls[arm]
+      // `near`/`far` en distancia al centro; el signo lo pone dx/dy después.
+      layoutArmSegment(thick, cx, cy, dx, dy, horizontal, thickInner, thickOuter, 3)
+      layoutArmSegment(thin, cx, cy, dx, dy, horizontal, gap, thickInner, 1)
+    }
+    if (duplexDot) {
+      duplexDot.style.width = '2px'
+      duplexDot.style.height = '2px'
+      duplexDot.style.borderRadius = '50%'
+      duplexDot.style.left = `${cx - 1}px`
+      duplexDot.style.top = `${cy - 1}px`
+    }
+  }
+
+  /** Coloca un tramo de brazo (poste o filamento) entre `near` y `far`
+   *  píxeles del centro, sobre el eje que indique (dx, dy). */
+  function layoutArmSegment(
+    el: HTMLDivElement,
+    cx: number,
+    cy: number,
+    dx: number,
+    dy: number,
+    horizontal: boolean,
+    near: number,
+    far: number,
+    thickness: number,
+  ): void {
+    const length = Math.max(0, far - near)
+    if (horizontal) {
+      el.style.width = `${length}px`
+      el.style.height = `${thickness}px`
+      el.style.left = `${cx + (dx > 0 ? near : -far)}px`
+      el.style.top = `${cy - thickness * 0.5}px`
+    } else {
+      el.style.width = `${thickness}px`
+      el.style.height = `${length}px`
+      el.style.left = `${cx - thickness * 0.5}px`
+      el.style.top = `${cy + (dy > 0 ? near : -far)}px`
+    }
+  }
 
   return {
     mount(parent: HTMLElement, canvas: HTMLCanvasElement): void {
@@ -130,6 +313,56 @@ export function createFeedbackOverlay(): FeedbackOverlay {
 
       crosshair = createCrosshair()
       root.appendChild(crosshair)
+
+      // La estampa se inserta DESPUÉS de la mira y ANTES de hitmarkers,
+      // números de daño y viñetas: el tubo tapa la mira normal (que además
+      // se apaga por opacidad, ver setScope) pero nunca puede tapar el
+      // feedback de combate — apuntar por un visor no puede costarte ver que
+      // acertaste.
+      scopeRoot = document.createElement('div')
+      styleBase(
+        scopeRoot,
+        'position:absolute;inset:0;pointer-events:none;display:none;opacity:0;will-change:opacity',
+      )
+      scopeInner = document.createElement('div')
+      styleBase(
+        scopeInner,
+        'position:absolute;inset:0;pointer-events:none;transform-origin:50% 50%;will-change:transform',
+      )
+      scopeMask = document.createElement('div')
+      styleBase(scopeMask, 'position:absolute;inset:0;pointer-events:none')
+      scopeInner.appendChild(scopeMask)
+
+      mildotGroup = document.createElement('div')
+      styleBase(mildotGroup, 'position:absolute;inset:0;pointer-events:none;display:none')
+      scopeHLine = createScopeLayer()
+      scopeVLine = createScopeLayer()
+      mildotGroup.appendChild(scopeHLine)
+      mildotGroup.appendChild(scopeVLine)
+      for (let i = 0; i < ARM_DX.length * SCOPE.mildotsPerArm; i++) {
+        const dot = createScopeLayer()
+        mildotEls.push(dot)
+        mildotGroup.appendChild(dot)
+      }
+      scopeInner.appendChild(mildotGroup)
+
+      duplexGroup = document.createElement('div')
+      styleBase(duplexGroup, 'position:absolute;inset:0;pointer-events:none;display:none')
+      for (let i = 0; i < ARM_DX.length; i++) {
+        const thick = createScopeLayer()
+        const thin = createScopeLayer()
+        duplexThickEls.push(thick)
+        duplexThinEls.push(thin)
+        duplexGroup.appendChild(thick)
+        duplexGroup.appendChild(thin)
+      }
+      duplexDot = createScopeLayer()
+      duplexGroup.appendChild(duplexDot)
+      scopeInner.appendChild(duplexGroup)
+
+      scopeRoot.appendChild(scopeInner)
+      root.appendChild(scopeRoot)
+      layoutScope()
 
       for (let i = 0; i < FEEDBACK.hitmarkerPoolSize; i++) {
         const { root: el } = createHitmarkerElement()
@@ -163,6 +396,38 @@ export function createFeedbackOverlay(): FeedbackOverlay {
     resize(w: number, h: number): void {
       width = Math.max(1, w)
       height = Math.max(1, h)
+      layoutScope()
+    },
+
+    setScope(reticle: ScopeReticle | null, easedAdsT: number): void {
+      // Camino de las armas de hierros: `reticle` es null, el alfa es 0, y
+      // en cuanto el estado ya está escrito esta función sale sin tocar el
+      // DOM. Es la garantía de que el ADS medido al píxel del resto del
+      // arsenal no cambió — no hay nada que pueda cambiarlo.
+      const alpha = reticle === null ? 0 : scopeAlpha(easedAdsT)
+      if (alpha === lastScopeAlpha && reticle === lastReticle) return
+
+      if (reticle !== lastReticle) {
+        if (mildotGroup) mildotGroup.style.display = reticle === 'mildot' ? 'block' : 'none'
+        if (duplexGroup) duplexGroup.style.display = reticle === 'duplex' ? 'block' : 'none'
+        lastReticle = reticle
+      }
+
+      if (scopeRoot) {
+        // `display:none` con la estampa apagada y no sólo `opacity:0`: una
+        // capa transparente a pantalla completa se sigue componiendo en cada
+        // frame. Apagada de verdad, el 90% del arsenal no paga absolutamente
+        // nada por que esta característica exista.
+        scopeRoot.style.display = alpha > 0 ? 'block' : 'none'
+        scopeRoot.style.opacity = String(alpha)
+      }
+      if (scopeInner && alpha > 0) {
+        scopeInner.style.transform = `scale(${scopeLensScale(alpha)})`
+      }
+      if (crosshair) {
+        crosshair.style.opacity = String(crosshairOpacityUnderScope(alpha))
+      }
+      lastScopeAlpha = alpha
     },
 
     render(state: FeedbackState): void {
@@ -263,6 +528,23 @@ export function createFeedbackOverlay(): FeedbackOverlay {
       hitmarkerEls.length = 0
       damageNumberEls.length = 0
       vignetteEls.length = 0
+      scopeRoot = null
+      scopeInner = null
+      scopeMask = null
+      mildotGroup = null
+      duplexGroup = null
+      scopeHLine = null
+      scopeVLine = null
+      duplexDot = null
+      mildotEls.length = 0
+      duplexThickEls.length = 0
+      duplexThinEls.length = 0
+      // El guard de "no escribas si no cambió" es estado del DOM que se
+      // acaba de tirar: sin resetearlo, un mount() posterior (cambio de
+      // mapa, HMR) arrancaría creyendo que ya escribió una opacidad que en
+      // realidad nadie escribió en los nodos nuevos.
+      lastScopeAlpha = -1
+      lastReticle = null
     },
   }
 }
