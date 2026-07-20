@@ -215,6 +215,64 @@ describe('máscara del componente conexo principal', () => {
     expect(grid.heights[conMascara]).toBe(0)
   })
 
+  /**
+   * Este caso es el que rompió nuketown al darles colisión a los props.
+   *
+   * Mientras "el pedazo más grande" y "el pedazo donde se juega" fueron el
+   * mismo, elegir por tamaño funcionó de casualidad -- en nuketown ganaba
+   * por 2% (4945 celdas contra 4830). Al volverse sólidas las cercas, el
+   * área jugable se partió y una zona de servicio fuera del mapa pasó a ser
+   * la más grande: la máscara devolvía un pedazo sin un solo spawn y los
+   * bots patrullaban ahí.
+   *
+   * Un test que sólo mirara "la máscara marca un componente conexo" pasa
+   * con las dos versiones. Éste mira que sea EL DE LOS SPAWNS.
+   */
+  it('elige el componente de los spawns aunque NO sea el más grande', () => {
+    // Dos plataformas separadas por un pozo: una grande sin spawns, una
+    // chica con todos los spawns.
+    const grande = box(-10, -1, -10, 10, 0, 10)
+    const chica = box(14, -1, -3, 20, 0, 3)
+    const mapa: MapDef = {
+      name: 'test',
+      boxes: [grande, chica],
+      spawns: [vec3(17, 0, 0), vec3(18, 0, 1)],
+      bounds: box(-10, 0, -10, 21, 6, 10),
+    }
+    const g = buildNavGrid(mapa, 1, CAPSULE_H)
+    const mask = buildMainComponentMask(g)
+
+    const enChica = worldToCellIndex(g, 17, 0)
+    const enGrande = worldToCellIndex(g, -8, -8)
+    expect(g.walkable[enChica], 'la plataforma chica es caminable').toBe(1)
+    expect(g.walkable[enGrande], 'la grande también').toBe(1)
+
+    // Contar para dejar dicho que la "equivocada" es de verdad la más grande.
+    let celdasChica = 0
+    let celdasGrande = 0
+    for (let i = 0; i < mask.length; i++) {
+      if (g.walkable[i] === 0) continue
+      if (cellCol(g, i) >= 24) celdasChica++
+      else celdasGrande++
+    }
+    expect(celdasGrande).toBeGreaterThan(celdasChica)
+
+    expect(mask[enChica], 'la máscara tiene que ser la de los spawns').toBe(1)
+    expect(mask[enGrande], 'y no la del pedazo más grande sin spawns').toBe(0)
+  })
+
+  it('sin spawns caminables cae al criterio de tamaño de siempre', () => {
+    // Los mapas escritos en código y los de test arman MapDef con
+    // `spawns: []`; ahí el ancla no existe y tiene que seguir ganando el
+    // más grande, o se rompen los tres mapas de código.
+    const grande = box(-10, -1, -10, 10, 0, 10)
+    const chica = box(14, -1, -3, 20, 0, 3)
+    const g = buildNavGrid(mapOf([grande, chica], box(-10, 0, -10, 21, 6, 10)), 1, CAPSULE_H)
+    const mask = buildMainComponentMask(g)
+    expect(mask[worldToCellIndex(g, -8, -8)]).toBe(1)
+    expect(mask[worldToCellIndex(g, 17, 0)]).toBe(0)
+  })
+
   it('un mapa de un solo nivel queda entero dentro de la máscara', () => {
     const plano = mapOf([floor], box(-10, 0, -10, 10, 6, 10))
     const gridPlano = buildNavGrid(plano, 1, CAPSULE_H)

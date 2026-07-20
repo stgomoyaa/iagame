@@ -1,4 +1,5 @@
 import {
+  Float32BufferAttribute,
   BufferGeometry,
   Color,
   InstancedMesh,
@@ -13,7 +14,18 @@ import {
 } from 'three'
 import { describe, expect, it } from 'vitest'
 
-import { aplicarLightmap, construirProps, esPropsMapaJson } from '@/game/map/external-map'
+import {
+  aplicarColisionDeProps,
+  aplicarLightmap,
+  construirProps,
+  esPropsMapaJson,
+  filtrarSpawnsPorProps,
+  hornearColisionDeProps,
+} from '@/game/map/external-map'
+import { convexDeCaja } from '@/game/map/colision-props'
+import type { MapDef } from '@/game/map/types'
+import { vec3 } from '@/game/math/vec3'
+import { PLAYER_CAPSULE, capsuleOverlapsConvex } from '@/game/physics/capsule'
 
 /**
  * El atlas de lightmap tiene cuatro formas de quedar enganchado "casi bien",
@@ -349,5 +361,247 @@ describe('construirProps', () => {
     const malla = instanciados(construirProps([modeloConMallas(1)], props, true))
     expect(malla).toHaveLength(1)
     expect(malla[0].count).toBe(1)
+  })
+})
+
+/**
+ * Malla de prueba con volumen real: un cubo de `lado` metros con una
+ * esquina en el origen del modelo. `construirProps` sólo mira geometría, y
+ * un BufferGeometry vacío (el que usan los tests de arriba) no sirve para
+ * verificar nada de colisión.
+ */
+function cubo(lado: number): Object3D {
+  const raiz = new Object3D()
+  const geo = new BufferGeometry()
+  const [x1, y1, z1] = [lado, lado, lado]
+  geo.setAttribute(
+    'position',
+    new Float32BufferAttribute(
+      [
+        0, 0, 0, 0, y1, 0, 0, y1, z1, 0, 0, 0, 0, y1, z1, 0, 0, z1,
+        x1, 0, 0, x1, y1, z1, x1, y1, 0, x1, 0, 0, x1, 0, z1, x1, y1, z1,
+        0, 0, 0, x1, 0, z1, x1, 0, 0, 0, 0, 0, 0, 0, z1, x1, 0, z1,
+        0, y1, 0, x1, y1, 0, x1, y1, z1, 0, y1, 0, x1, y1, z1, 0, y1, z1,
+        0, 0, 0, x1, y1, 0, x1, 0, 0, 0, 0, 0, 0, y1, 0, x1, y1, 0,
+        0, 0, z1, x1, 0, z1, x1, y1, z1, 0, 0, z1, x1, y1, z1, 0, y1, z1,
+      ],
+      3,
+    ),
+  )
+  raiz.add(new Mesh(geo, new MeshBasicMaterial()))
+  return raiz
+}
+
+/**
+ * Panel plano tipo cerca: `ancho` x `alto` x `espesor` con una esquina en
+ * el origen del modelo. Es la forma que de verdad importa -- las cercas son
+ * el prop que cambia dónde es seguro pararse.
+ */
+function panel(ancho: number, alto: number, espesor: number): Object3D {
+  const raiz = new Object3D()
+  const geo = new BufferGeometry()
+  const [x1, y1, z1] = [ancho, alto, espesor]
+  geo.setAttribute(
+    'position',
+    new Float32BufferAttribute(
+      [
+        0, 0, 0, 0, y1, 0, 0, y1, z1, 0, 0, 0, 0, y1, z1, 0, 0, z1,
+        x1, 0, 0, x1, y1, z1, x1, y1, 0, x1, 0, 0, x1, 0, z1, x1, y1, z1,
+        0, 0, 0, x1, y1, 0, x1, 0, 0, 0, 0, 0, 0, y1, 0, x1, y1, 0,
+        0, 0, z1, x1, 0, z1, x1, y1, z1, 0, 0, z1, x1, y1, z1, 0, y1, z1,
+      ],
+      3,
+    ),
+  )
+  raiz.add(new Mesh(geo, new MeshBasicMaterial()))
+  return raiz
+}
+
+function propsDe(
+  posiciones: Array<[number, number, number]>,
+): { modelos: string[]; instancias: Array<{ modelo: number; pos: [number, number, number]; quat: [number, number, number, number] }> } {
+  return {
+    modelos: ['a.glb'],
+    instancias: posiciones.map((pos) => ({ modelo: 0, pos, quat: [0, 0, 0, 1] as [number, number, number, number] })),
+  }
+}
+
+describe('hornearColisionDeProps', () => {
+  /**
+   * ÉSTE es el bug que la tarea vino a arreglar, y el único test que no se
+   * puede saltear: el agente anterior dejó los props fuera del BVH porque
+   * "un InstancedMesh no expone sus instancias como triángulos de mundo" y
+   * meterlo crudo apilaría las 50 instancias en el origen del modelo.
+   *
+   * Un test que sólo contara triángulos pasaría con las 50 apiladas. Éste
+   * mira DÓNDE quedaron.
+   */
+  it('expande cada instancia a SU posición de mundo, no al origen del modelo', () => {
+    const raiz = construirProps([cubo(1)], propsDe([[10, 0, 0], [-20, 0, 5]]), false)
+    const { triangulos } = hornearColisionDeProps(raiz)
+
+    expect(triangulos.length).toBe(36 * 3 * 2) // 12 triángulos x 2 instancias
+
+    let minX = Infinity
+    let maxX = -Infinity
+    for (let i = 0; i < triangulos.length; i += 3) {
+      minX = Math.min(minX, triangulos[i])
+      maxX = Math.max(maxX, triangulos[i])
+    }
+    // Apiladas en el origen, el rango sería [0, 1]. Bien colocadas va de
+    // -20 a 11.
+    expect(minX).toBeCloseTo(-20, 5)
+    expect(maxX).toBeCloseTo(11, 5)
+  })
+
+  it('los cuerpos de cada instancia se quedan alrededor de SU prop', () => {
+    const raiz = construirProps([cubo(1)], propsDe([[10, 0, 0], [-20, 0, 5]]), false)
+    const { convexes } = hornearColisionDeProps(raiz)
+
+    // Ninguna caja puede cruzar de un prop al otro: si la expansión de
+    // instancias estuviera mal, saldría un cuerpo estirado de -20 a 11.
+    for (const c of convexes) expect(c.max.x - c.min.x).toBeLessThan(2)
+    // Y tiene que haber cuerpo en los DOS lugares donde se ve un prop.
+    expect(convexes.some((c) => c.min.x >= 9.9 && c.max.x <= 11.1)).toBe(true)
+    expect(convexes.some((c) => c.min.x >= -20.1 && c.max.x <= -18.9)).toBe(true)
+  })
+
+  it('el cuerpo sólido frena a la cápsula donde se ve el prop, y no antes', () => {
+    // Un panel de cerca: 4 m de largo, 1,4 de alto, 6 cm de espesor.
+    const raiz = construirProps([panel(4, 1.4, 0.06)], propsDe([[10, 0, 0]]), false)
+    const { convexes } = hornearColisionDeProps(raiz)
+
+    // Pegado a la cerca: la cápsula (radio 0,4) la toca.
+    expect(convexes.some((c) => capsuleOverlapsConvex(vec3(12, 0, 0.2), PLAYER_CAPSULE, c))).toBe(true)
+    // A cinco metros, libre: si esto fallara, el prop tendría un colchón
+    // invisible alrededor y "dónde es seguro pararse" sería mentira.
+    expect(convexes.some((c) => capsuleOverlapsConvex(vec3(12, 0, 5), PLAYER_CAPSULE, c))).toBe(false)
+  })
+
+  it('sin props, ni triángulos ni cuerpos', () => {
+    const { triangulos, convexes } = hornearColisionDeProps(new Object3D())
+    expect(triangulos.length).toBe(0)
+    expect(convexes).toEqual([])
+  })
+})
+
+/**
+ * LA COSTURA. Los tests de arriba prueban que los props se hornean bien;
+ * éstos, que lo horneado LLEGA al mapa.
+ *
+ * No es una distinción académica: con el pegado escrito inline dentro de
+ * `cargarMapaExterno` se lo borró a propósito y los 1526 tests del repo
+ * siguieron pasando con la colisión de props apagada. Los props se
+ * calculaban enteros y se tiraban a la basura, y nada lo veía. Si alguien
+ * vuelve a mover esta lógica adentro del cargador, este archivo pierde el
+ * único test que distingue "funciona" de "se calcula y se descarta".
+ */
+describe('aplicarColisionDeProps', () => {
+  function defVacio(): MapDef {
+    return {
+      name: 'test',
+      boxes: [],
+      convexes: [],
+      spawns: [vec3(20, 0, 20)],
+      spawnYaws: [0],
+      bounds: { min: vec3(-50, -50, -50), max: vec3(50, 50, 50) },
+    }
+  }
+
+  it('los triángulos de los props QUEDAN en def.triangles, detrás de los del mapa', () => {
+    const raiz = construirProps([panel(4, 1.4, 0.06)], propsDe([[10, 0, 0]]), false)
+    const colision = hornearColisionDeProps(raiz)
+    const def = defVacio()
+    // Un triángulo de mapa cualquiera, para verificar que no se pisa.
+    const triangulosMapa = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0])
+
+    const r = aplicarColisionDeProps(def, triangulosMapa, colision)
+
+    expect(r.triangulosProps).toBeGreaterThan(0)
+    expect(def.triangles).toBeDefined()
+    // El total es mapa + props: si los props no se sumaran, sería 9.
+    expect(def.triangles?.length).toBe(triangulosMapa.length + colision.triangulos.length)
+    // Los del mapa siguen adelante, intactos.
+    expect(Array.from((def.triangles as Float32Array).slice(0, 9))).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0])
+    // Y hay geometría de props allá donde está el prop (x ~ 10..14).
+    let maxX = -Infinity
+    for (let i = 0; i < (def.triangles as Float32Array).length; i += 3) {
+      maxX = Math.max(maxX, (def.triangles as Float32Array)[i])
+    }
+    expect(maxX).toBeGreaterThan(9)
+  })
+
+  it('los cuerpos QUEDAN en def.convexes sin borrar los brushes del mapa', () => {
+    const raiz = construirProps([panel(4, 1.4, 0.06)], propsDe([[10, 0, 0]]), false)
+    const colision = hornearColisionDeProps(raiz)
+    const def = defVacio()
+    const brushDelMapa = convexDeCaja({ min: vec3(-30, 0, -30), max: vec3(-29, 3, -29) })
+    def.convexes = [brushDelMapa]
+
+    const r = aplicarColisionDeProps(def, new Float32Array(0), colision)
+
+    expect(r.cuerpos).toBeGreaterThan(0)
+    expect(def.convexes).toHaveLength(1 + colision.convexes.length)
+    expect(def.convexes?.[0]).toBe(brushDelMapa)
+    // El jugador parado contra la cerca choca contra ALGO de la lista final
+    // del mapa -- que es la lista que ve la cápsula y el navgrid.
+    expect(
+      (def.convexes ?? []).some((c) => capsuleOverlapsConvex(vec3(12, 0, 0.2), PLAYER_CAPSULE, c)),
+    ).toBe(true)
+  })
+
+  it('llamarla dos veces no apila los props sobre sí mismos', () => {
+    const raiz = construirProps([panel(4, 1.4, 0.06)], propsDe([[10, 0, 0]]), false)
+    const colision = hornearColisionDeProps(raiz)
+    const def = defVacio()
+    const triangulosMapa = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0])
+
+    aplicarColisionDeProps(def, triangulosMapa, colision)
+    const largoUnaVez = def.triangles?.length
+    aplicarColisionDeProps(def, triangulosMapa, colision)
+
+    // Los triángulos se recomponen desde `triangulosMapa`, no se acumulan.
+    expect(def.triangles?.length).toBe(largoUnaVez)
+  })
+})
+
+describe('filtrarSpawnsPorProps', () => {
+  function defCon(spawns: Array<[number, number, number]>): MapDef {
+    return {
+      name: 'test',
+      boxes: [],
+      convexes: [],
+      spawns: spawns.map((s) => vec3(s[0], s[1], s[2])),
+      spawnYaws: spawns.map((_, i) => i),
+      bounds: { min: vec3(-50, -50, -50), max: vec3(50, 50, 50) },
+    }
+  }
+
+  it('descarta el spawn que quedó adentro de un prop y CONSERVA su yaw pareado', () => {
+    // El spawn 1 cae contra la cerca; los otros dos, lejos.
+    const raiz = construirProps([panel(4, 1.4, 0.06)], propsDe([[0, 0, 0]]), false)
+    const { convexes } = hornearColisionDeProps(raiz)
+    const def = defCon([[20, 0, 20], [2, 0, 0], [-20, 0, -20]])
+
+    expect(filtrarSpawnsPorProps(def, convexes)).toBe(1)
+    expect(def.spawns).toHaveLength(2)
+    // Los yaws se reindexan por el spawn del que salieron: si se
+    // recortaran por posición en la lista ya filtrada, acá saldría [0, 1].
+    expect(def.spawnYaws).toEqual([0, 2])
+  })
+
+  it('si TODOS caen adentro, no borra ninguno (una lista vacía es pantalla negra)', () => {
+    const raiz = construirProps([panel(4, 1.4, 0.06)], propsDe([[0, 0, 0]]), false)
+    const { convexes } = hornearColisionDeProps(raiz)
+    const def = defCon([[2, 0, 0]])
+
+    filtrarSpawnsPorProps(def, convexes)
+    expect(def.spawns).toHaveLength(1)
+  })
+
+  it('sin props no toca nada', () => {
+    const def = defCon([[1, 0, 1]])
+    expect(filtrarSpawnsPorProps(def, [])).toBe(0)
+    expect(def.spawns).toHaveLength(1)
   })
 })

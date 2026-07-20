@@ -67,6 +67,13 @@ export interface NavGrid {
    * `alturaFranqueable`.
    */
   readonly maxStepHeight: number
+  /**
+   * Índices de celda de los spawns del mapa, los que caen adentro de la
+   * grilla. Se guardan en el bake porque son la ÚNICA señal que dice qué
+   * pedazo del navgrid es "donde se juega" -- ver
+   * `buildMainComponentMask`.
+   */
+  readonly spawnCells: Int32Array
 }
 
 /**
@@ -730,6 +737,25 @@ function submuestreo(cellSize: number): number {
  * (no constantes leídas directo adentro) para que los tests puedan hornear
  * grids sintéticos chicos sin depender de BOTS ni de PLAYER_CAPSULE.
  */
+/** Índices de celda de los spawns que caen adentro de la grilla. */
+function celdasDeSpawns(
+  map: MapDef,
+  minX: number,
+  minZ: number,
+  cols: number,
+  rows: number,
+  cellSize: number,
+): Int32Array {
+  const out: number[] = []
+  for (const s of map.spawns) {
+    const col = Math.floor((s.x - minX) / cellSize)
+    const row = Math.floor((s.z - minZ) / cellSize)
+    if (col < 0 || col >= cols || row < 0 || row >= rows) continue
+    out.push(row * cols + col)
+  }
+  return Int32Array.from(out)
+}
+
 export function buildNavGrid(
   map: MapDef,
   cellSize: number = BOTS.navCellSize,
@@ -744,6 +770,11 @@ export function buildNavGrid(
   const heights = new Float32Array(cols * rows)
   const walkable = new Uint8Array(cols * rows)
   const maxStepHeight = alturaFranqueable(map)
+
+  // Celdas de los spawns: se calculan acá, con la grilla ya dimensionada,
+  // para que `buildMainComponentMask` no necesite el MapDef ni haya que
+  // tocar a sus llamadores (bots/bot.ts, bots/patrol.ts).
+  const spawnCells = celdasDeSpawns(map, minX, minZ, cols, rows, cellSize)
 
   if (convexes.length === 0) {
     for (let row = 0; row < rows; row++) {
@@ -762,7 +793,7 @@ export function buildNavGrid(
       }
     }
     const links = bakeLinksCajas(heights, walkable, cols, rows, maxStepHeight)
-    return { cellSize, minX, minZ, cols, rows, heights, walkable, links, maxStepHeight }
+    return { cellSize, minX, minZ, cols, rows, heights, walkable, links, maxStepHeight, spawnCells }
   }
 
   const sub = submuestreo(cellSize)
@@ -824,7 +855,7 @@ export function buildNavGrid(
   }
 
   const links = bakeLinksConvexos(ctx, campo, walkable, cols, rows, sub)
-  return { cellSize, minX, minZ, cols, rows, heights, walkable, links, maxStepHeight }
+  return { cellSize, minX, minZ, cols, rows, heights, walkable, links, maxStepHeight, spawnCells }
 }
 
 export function cellIndex(grid: NavGrid, col: number, row: number): number {
@@ -991,10 +1022,47 @@ export function buildMainComponentMask(grid: NavGrid): Uint8Array {
     idComponente++
   }
 
+  // El componente con MÁS SPAWNS le gana al más grande.
+  //
+  // POR QUÉ: "el más grande" es una heurística para adivinar dónde se
+  // juega, y en nuketown adivinaba por 2%: el área jugable tenía 4945
+  // celdas y una zona de servicio fuera del mapa -- 130 m al oeste y 12 m
+  // más abajo -- tenía 4830. Al darles colisión a los props (las cercas
+  // dejaron de ser atravesables) el área jugable se partió, la zona de
+  // servicio pasó a ser la más grande, y esta máscara empezó a devolver un
+  // pedazo de mapa donde no hay un solo spawn. Los bots patrullaban ahí:
+  // destinos inalcanzables, un camino quemado por ciclo, ni un disparo.
+  //
+  // Los spawns son la única señal en el MapDef que dice, sin adivinar,
+  // dónde ocurre la partida: el mapper los puso donde se juega. Con ellos
+  // de ancla, el resultado deja de depender de que el pedazo correcto sea
+  // por casualidad el más numeroso.
+  //
+  // Si no hay spawns adentro de ningún componente caminable (mapas de test
+  // con `spawns: []`, o spawns flotando sobre celdas no caminables) se cae
+  // al criterio de tamaño de siempre, que es lo que esperan los mapas
+  // escritos en código.
+  const votos = new Map<number, number>()
+  for (let i = 0; i < grid.spawnCells.length; i++) {
+    const celda = grid.spawnCells[i]
+    if (celda < 0 || celda >= total) continue
+    const id = componente[celda]
+    if (id < 0) continue
+    votos.set(id, (votos.get(id) ?? 0) + 1)
+  }
+  let elegido = mejor.id
+  let masVotos = 0
+  for (const [id, n] of votos) {
+    if (n > masVotos) {
+      masVotos = n
+      elegido = id
+    }
+  }
+
   const mask = new Uint8Array(total)
-  if (mejor.id < 0) return mask
+  if (elegido < 0) return mask
   for (let i = 0; i < total; i++) {
-    if (componente[i] === mejor.id) mask[i] = 1
+    if (componente[i] === elegido) mask[i] = 1
   }
   return mask
 }
