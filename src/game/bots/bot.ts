@@ -162,15 +162,19 @@ export interface BotState {
   input: PlayerInput
 
   health: BotHealthState
-  /** [torso, cabeza]. `center` de cada uno es un Vec3 propio desplazado en Y
-   *  (BOTS.torsoOffsetY/headOffsetY) desde bot.player.position (que es la
-   *  BASE de la cápsula, no su centro -- physics/capsule.ts) -- mismo
-   *  patrón que targets/targets.ts. Ninguno de los dos alias directamente
-   *  player.position: torsoCenter/headCenter (más abajo) son los Vec3 que
-   *  syncBotHitboxes() resincroniza cada tick. */
-  hitboxes: [Hitbox, Hitbox]
+  /** [torso, cabeza, piernas]. `center` de cada uno es un Vec3 propio
+   *  desplazado en Y (BOTS.torsoOffsetY/headOffsetY/legsOffsetY) desde
+   *  bot.player.position (que es la BASE de la cápsula, no su centro --
+   *  physics/capsule.ts) -- mismo patrón que targets/targets.ts. Ninguno
+   *  aliasea directamente player.position: torsoCenter/headCenter/legsCenter
+   *  (más abajo) son los Vec3 que syncBotHitboxes() resincroniza cada tick.
+   *
+   *  El orden importa y es parte del contrato con game.ts, que asigna
+   *  `owner` por índice. */
+  hitboxes: [Hitbox, Hitbox, Hitbox]
   torsoCenter: Vec3
   headCenter: Vec3
+  legsCenter: Vec3
 
   archetype: WeaponArchetype
   combat: CombatState
@@ -267,6 +271,7 @@ export function createBotState(
   const player = createPlayerState(spawn)
   const torso = vec3(spawn.x, spawn.y + BOTS.torsoOffsetY, spawn.z)
   const head = vec3(spawn.x, spawn.y + BOTS.headOffsetY, spawn.z)
+  const legs = vec3(spawn.x, spawn.y + BOTS.legsOffsetY, spawn.z)
 
   const combat = createCombatState(archetype)
   const aimBrain = createAimBrainState(seed)
@@ -285,9 +290,11 @@ export function createBotState(
     hitboxes: [
       { center: torso, radius: BOTS.torsoRadius, part: 'torso', owner: -1 },
       { center: head, radius: BOTS.headRadius, part: 'head', owner: -1 },
+      { center: legs, radius: BOTS.legsRadius, part: 'limb', owner: -1 },
     ],
     torsoCenter: torso,
     headCenter: head,
+    legsCenter: legs,
 
     archetype,
     combat,
@@ -883,16 +890,20 @@ function worldToLocalAxes(worldX: number, worldZ: number, yaw: number): { forwar
  * array de hitboxes combinado que arma game.ts tiene longitud fija).
  */
 function syncBotHitboxes(bot: BotState): void {
-  const [torso, head] = bot.hitboxes
+  const [torso, head, legs] = bot.hitboxes
   bot.torsoCenter.x = bot.player.position.x
   bot.torsoCenter.y = bot.player.position.y + BOTS.torsoOffsetY
   bot.torsoCenter.z = bot.player.position.z
   bot.headCenter.x = bot.player.position.x
   bot.headCenter.y = bot.player.position.y + BOTS.headOffsetY
   bot.headCenter.z = bot.player.position.z
+  bot.legsCenter.x = bot.player.position.x
+  bot.legsCenter.y = bot.player.position.y + BOTS.legsOffsetY
+  bot.legsCenter.z = bot.player.position.z
 
   torso.radius = bot.health.alive ? BOTS.torsoRadius : 0
   head.radius = bot.health.alive ? BOTS.headRadius : 0
+  legs.radius = bot.health.alive ? BOTS.legsRadius : 0
 }
 
 export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
