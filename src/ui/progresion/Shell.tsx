@@ -64,7 +64,10 @@ const LEYENDAS: Record<Procedencia, { texto: string; color: string; marca: React
     ),
   },
   propuesto: {
-    texto: 'PRESTIGIO: DISEÑO PROPUESTO, SIN SISTEMA AÚN',
+    // Genérica a propósito: la usan medallas y prestigio, y nombrar sólo a
+    // una de las dos dejaba a la otra con una leyenda que hablaba de otra
+    // pantalla.
+    texto: 'DISEÑO PROPUESTO, SIN SISTEMA AÚN',
     color: 'var(--pg-pendiente-suave)',
     marca: (
       <span
