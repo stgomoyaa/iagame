@@ -21,11 +21,47 @@ import { raycastMap, type MapHit } from '@/game/combat/hitscan'
  *  ver map/arena.ts) con margen de sobra. */
 export const MAX_SHOT_DISTANCE = 500
 
+/**
+ * Material contra el que pegó el disparo. Decide el sonido de impacto y el
+ * aspecto de la partícula/calcomanía (feedback/vfx.ts).
+ *
+ * Son sólo dos porque el mapa hoy no tiene concepto de material: MapDef son
+ * cajas desnudas (map/types.ts) y la malla es un único MeshBasicMaterial con
+ * vertexColors, así que no hay de dónde sacar "esto es metal y esto madera"
+ * sin inventarlo. La distinción que SÍ existe en los datos es carne (pegó en
+ * una hitbox) contra mundo (pegó en la geometría), y esa es la que se
+ * modela. El tipo queda abierto para sumar materiales el día que las cajas
+ * declaren uno.
+ */
+export type ImpactSurface = 'carne' | 'hormigon' | 'ninguna'
+
 export interface ShotResult {
   hit: boolean
   distance: number
   damage: number
   part: BodyPart | 'none'
+  /**
+   * Punto de impacto exacto en coordenadas de mundo. Lo escribe fireShot con
+   * la dirección REAL del disparo (la que ya incluye la muestra de
+   * dispersión de este tiro), así que es exacto.
+   *
+   * Antes game.ts lo reconstruía por su cuenta como `origen + forward *
+   * distancia` usando pitch/yaw SIN dispersión, y por eso el número de daño
+   * aparecía unos píxeles corrido del impacto real. Ahora que los impactos y
+   * las calcomanías también se plantan en este punto, ese error dejaría las
+   * marcas visiblemente fuera del agujero, así que se calcula donde se tiene
+   * el dato bueno.
+   */
+  pointX: number
+  pointY: number
+  pointZ: number
+  /** Normal de la superficie golpeada, orientada contra el disparo. Para
+   *  impactos en carne es simplemente la dirección de vuelta al tirador. */
+  normalX: number
+  normalY: number
+  normalZ: number
+  /** Contra qué pegó, para elegir sonido y partícula de impacto. */
+  surface: ImpactSurface
   /**
    * Índice de la diana golpeada (Hitbox.owner, ver combat/hitboxes.ts),
    * o -1 si el impacto fue contra el mapa o no hubo impacto. Hasta la
@@ -38,7 +74,20 @@ export interface ShotResult {
 }
 
 export function createShotResult(): ShotResult {
-  return { hit: false, distance: 0, damage: 0, part: 'none', owner: -1 }
+  return {
+    hit: false,
+    distance: 0,
+    damage: 0,
+    part: 'none',
+    pointX: 0,
+    pointY: 0,
+    pointZ: 0,
+    normalX: 0,
+    normalY: 0,
+    normalZ: 0,
+    surface: 'ninguna',
+    owner: -1,
+  }
 }
 
 // Scratch preasignados a nivel de módulo: fireShot() se llama por disparo
@@ -46,7 +95,7 @@ export function createShotResult(): ShotResult {
 // distingue "por disparo" de "por frame" — ver el spec, sección "cero
 // asignaciones por disparo".
 const scratchDir: Vec3 = vec3()
-const scratchMapHit: MapHit = { hit: false, distance: 0 }
+const scratchMapHit: MapHit = { hit: false, distance: 0, normalX: 0, normalY: 1, normalZ: 0 }
 const scratchHitboxHit: HitboxHit = { hit: false, distance: Infinity, part: null, owner: -1 }
 
 /**
@@ -94,17 +143,40 @@ export function fireShot(
     out.part = part
     out.damage = damageAtRange(archetype, out.distance) * HITBOX_MULTIPLIER[part]
     out.owner = scratchHitboxHit.owner
+    out.surface = 'carne'
+    // Las hitboxes son esferas analíticas (combat/hitboxes.ts) y HitboxHit no
+    // devuelve el centro, así que no hay normal geométrica que sacar. Mirar
+    // de vuelta al tirador es lo correcto igual: la partícula de impacto en
+    // carne se dibuja como billboard contra la cámara, no pegada a una cara.
+    out.normalX = -scratchDir.x
+    out.normalY = -scratchDir.y
+    out.normalZ = -scratchDir.z
   } else if (scratchMapHit.hit) {
     out.hit = true
     out.distance = scratchMapHit.distance
     out.part = 'none'
     out.damage = 0
     out.owner = -1
+    out.surface = 'hormigon'
+    out.normalX = scratchMapHit.normalX
+    out.normalY = scratchMapHit.normalY
+    out.normalZ = scratchMapHit.normalZ
   } else {
     out.hit = false
     out.distance = MAX_SHOT_DISTANCE
     out.part = 'none'
     out.damage = 0
     out.owner = -1
+    out.surface = 'ninguna'
+    out.normalX = -scratchDir.x
+    out.normalY = -scratchDir.y
+    out.normalZ = -scratchDir.z
   }
+
+  // Punto de impacto con la dirección real del tiro (dispersión incluida).
+  // Cuando no hubo impacto igual se escribe, a MAX_SHOT_DISTANCE: es el
+  // destino del trazador, que tiene que salir igual aunque el tiro se pierda.
+  out.pointX = origin.x + scratchDir.x * out.distance
+  out.pointY = origin.y + scratchDir.y * out.distance
+  out.pointZ = origin.z + scratchDir.z * out.distance
 }

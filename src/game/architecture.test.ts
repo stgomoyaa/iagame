@@ -15,6 +15,12 @@ const PUEDEN_USAR_THREE = [
   // este es el único punto de contacto (ver el comentario de cabecera de
   // combat/hitscan.ts).
   'combat/hitscan.ts',
+  // Efectos de disparo (fase 5): el estado de las partículas es puro y vive
+  // en feedback/vfx.ts (anillos de instancias, sin three); este archivo es
+  // el único punto de contacto con la GPU -- mallas instanciadas, shaders y
+  // las texturas que se generan por canvas. Es la ÚNICA entrada nueva que
+  // suma esa fase a esta lista.
+  'feedback/vfx-renderer.ts',
   // Dianas (fase 1, sección 6): la lógica (targets/targets.ts) es
   // matemática pura, igual que combat/hitboxes.ts; este archivo es el
   // único punto de contacto con la escena real para dibujarlas (mismo

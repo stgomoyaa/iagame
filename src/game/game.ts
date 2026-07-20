@@ -62,12 +62,23 @@ import {
   stepCombat,
   type CombatInput,
 } from '@/game/combat/combat'
-import { computeForward, createShotResult } from '@/game/combat/shot'
+import { createShotResult, type ShotResult } from '@/game/combat/shot'
 import { vec3, type Vec3 } from '@/game/math/vec3'
 import type { ScreenPoint } from '@/game/engine/renderer'
 import { applyHit, createDefaultTargetDefs, createTargets, stepTargets } from '@/game/targets/targets'
 import { createTargetsRenderer } from '@/game/targets/renderer'
 import { createFeedbackAudio } from '@/game/feedback/audio'
+import { createWeaponAudio, gananciaPorDistancia } from '@/game/feedback/gun-audio'
+import { createVfxRenderer } from '@/game/feedback/vfx-renderer'
+import {
+  createVfxState,
+  spawnCalcomania,
+  spawnFulgor,
+  spawnImpacto,
+  spawnTrazador,
+  SUPERFICIE_CARNE,
+  SUPERFICIE_HORMIGON,
+} from '@/game/feedback/vfx'
 import { createFeedbackOverlay } from '@/game/feedback/overlay'
 import {
   createFeedbackState,
@@ -78,7 +89,7 @@ import {
 } from '@/game/feedback/feedback'
 import { directionYaw, vignetteBearing } from '@/game/feedback/vignette'
 import { resetPlayerHealth } from '@/game/feedback/health-vfx'
-import { FEEDBACK } from '@/game/feedback/tuning'
+import { FEEDBACK, VFX } from '@/game/feedback/tuning'
 import { assignBotArchetypes, weaponLabel } from '@/game/match/loadouts'
 import {
   buildSummary,
@@ -125,6 +136,52 @@ const SENSITIVITY = 0.0022
  *  partida (match/tuning-panel.ts) pueda ajustarlo sin recompilar.
  *  Clampeado a [0,20] contra un valor absurdo en la URL. */
 const MAX_BOT_COUNT = 20
+
+/** Cuánto se corre la boca aproximada respecto del ojo, en metros. */
+const BOCA_ADELANTE = 0.45
+const BOCA_DERECHA = 0.13
+const BOCA_ABAJO = 0.1
+
+/**
+ * Boca aproximada del arma en coordenadas de mundo, para que el trazador no
+ * nazca en el centro de la pantalla. Se deriva de la recta ojo -> impacto
+ * que ya resolvió el disparo, así que no necesita ni pitch ni yaw ni la
+ * escena del viewmodel. Escribe en `out` (preasignado).
+ */
+function posicionBoca(origen: Vec3, disparo: ShotResult, out: Vec3): void {
+  let fx = disparo.pointX - origen.x
+  let fy = disparo.pointY - origen.y
+  let fz = disparo.pointZ - origen.z
+  const largo = Math.sqrt(fx * fx + fy * fy + fz * fz)
+  if (largo > 1e-5) {
+    fx /= largo
+    fy /= largo
+    fz /= largo
+  } else {
+    fx = 0
+    fy = 0
+    fz = -1
+  }
+
+  // Derecha = forward x (0,1,0) = (-fz, 0, fx). Si el jugador mira casi
+  // recto arriba o abajo el producto cruz degenera (forward casi paralelo a
+  // arriba), así que se cae a un lateral fijo en vez de normalizar un
+  // vector de largo cero.
+  let rx = -fz
+  let rz = fx
+  const rlargo = Math.sqrt(rx * rx + rz * rz)
+  if (rlargo > 1e-4) {
+    rx /= rlargo
+    rz /= rlargo
+  } else {
+    rx = 1
+    rz = 0
+  }
+
+  out.x = origen.x + fx * BOCA_ADELANTE + rx * BOCA_DERECHA
+  out.y = origen.y + fy * BOCA_ADELANTE - BOCA_ABAJO
+  out.z = origen.z + fz * BOCA_ADELANTE + rz * BOCA_DERECHA
+}
 
 function getBotCount(): number {
   const raw = new URLSearchParams(window.location.search).get('bots')
@@ -382,11 +439,25 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   const feedbackOverlay = createFeedbackOverlay()
   const feedbackAudio = createFeedbackAudio()
 
+  // Audio de arma (samples reales) y efectos de disparo (fase 5). El audio
+  // de hitmarker de arriba sigue siendo procedural y no se toca: son dos
+  // controladores separados a propósito, cada uno con su AudioContext y su
+  // grafo (ver la cabecera de feedback/gun-audio.ts).
+  const weaponAudio = createWeaponAudio()
+  const vfxState = createVfxState()
+  const vfxRenderer = createVfxRenderer(gfx.scene)
+  // Momento en que empezó la recarga en curso, para detectar el flanco de
+  // subida: startReload() es idempotente y no avisa si arrancó una nueva,
+  // así que el sonido se dispara mirando la transición de vmState.reloading.
+  let recargando = false
+  let tiempoVfxS = 0
+
   // Scratch preasignado para proyectar el punto de impacto a pantalla
   // (sección 5: número de daño flotante en el punto de impacto). Nunca se
   // reasigna, sólo se muta dentro de frame().
-  const scratchForward = vec3()
   const scratchHitPoint = vec3()
+  /** Boca aproximada del arma, origen de los trazadores. Ver posicionBoca(). */
+  const scratchMuzzle = vec3()
   const scratchScreenPoint: ScreenPoint = { x: 0, y: 0, visible: false }
 
   // Multiplicador de sensibilidad por ADS (sección 4 del spec de fase 1):
@@ -605,6 +676,10 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   // -- ambos escuchan 'click' sobre el mismo elemento sin pisarse.
   function onCanvasClickForAudio(): void {
     feedbackAudio.unlock()
+    // Mismo contrato para el audio de arma: unlock() en CADA gesto, no sólo
+    // el primero, porque el navegador puede suspender un contexto ya
+    // desbloqueado en cualquier momento (ver la cabecera de gun-audio.ts).
+    weaponAudio.unlock()
   }
 
   // Hook de debug para ejercitar "al recibir daño" (viñeta direccional,
@@ -643,6 +718,12 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     const frameDt = lastTime === 0 ? 0 : (now - lastTime) / 1000
     lastTime = now
     const dt = sanitizeDt(frameDt)
+
+    // Reloj de efectos: se acumula del dt ya saneado en vez de usar `now`
+    // directo, para que un salto del reloj del navegador (pestaña en
+    // segundo plano) no haga aparecer y desaparecer partículas de golpe.
+    // Es el mismo valor que se le pasa a los shaders como uTime.
+    tiempoVfxS += dt
 
     // Dianas (sección 6 del spec de fase 1): mueven, cuentan su flash de
     // impacto y reaparecen. Corre siempre, haya o no un arma equipada
@@ -837,6 +918,66 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       for (let i = 0; i < shotsFired; i++) {
         fire(vmState, rigWeapon)
         onShotFired(feedbackState)
+
+        // Audio y VFX del disparo, en el MISMO frame en que el disparo se
+        // resolvió: nada de esto se encola ni se difiere. El sample arranca
+        // con start() sin offset, así que el sonido sale con el fotograma.
+        weaponAudio.playShot(archetype.class)
+        spawnFulgor(vfxState, tiempoVfxS)
+
+        // El trazador NO sale de la cámara aunque el hitscan sí (ver
+        // combat/shot.ts): uno que nace en el ojo del jugador se ve brotar
+        // del centro de la pantalla y delata el truco. Se lo corre a una
+        // boca aproximada -- adelante, a la derecha y algo abajo del ojo --
+        // que es donde el viewmodel dibuja el arma. Converge igual al mismo
+        // punto de impacto, así que no miente sobre dónde pegó.
+        //
+        // Se calcula acá y no pidiéndole la boca real al viewmodel porque
+        // ese modelo vive en la escena del viewmodel (cámara propia en el
+        // origen, segunda pasada) y su posición sólo se convierte a mundo
+        // con la rotación de cámara de ESTE frame, que todavía no se fijó
+        // en este punto del loop. La aproximación evita ese desfasaje.
+        posicionBoca(combatInput.origin, shotResult, scratchMuzzle)
+        spawnTrazador(
+          vfxState,
+          scratchMuzzle.x,
+          scratchMuzzle.y,
+          scratchMuzzle.z,
+          shotResult.pointX,
+          shotResult.pointY,
+          shotResult.pointZ,
+          tiempoVfxS,
+        )
+
+        if (shotResult.hit) {
+          const carne = shotResult.surface === 'carne'
+          spawnImpacto(
+            vfxState,
+            shotResult.pointX,
+            shotResult.pointY,
+            shotResult.pointZ,
+            shotResult.normalX,
+            shotResult.normalY,
+            shotResult.normalZ,
+            carne ? SUPERFICIE_CARNE : SUPERFICIE_HORMIGON,
+            tiempoVfxS,
+          )
+          weaponAudio.playImpact(carne ? SUPERFICIE_CARNE : SUPERFICIE_HORMIGON)
+          // Sólo las superficies duras dejan marca: una calcomanía sobre un
+          // bot quedaría flotando en el aire en cuanto el bot se mueva.
+          if (!carne) {
+            spawnCalcomania(
+              vfxState,
+              shotResult.pointX,
+              shotResult.pointY,
+              shotResult.pointZ,
+              shotResult.normalX,
+              shotResult.normalY,
+              shotResult.normalZ,
+              tiempoVfxS,
+            )
+          }
+        }
       }
 
       // R sostenida: startReload() es un no-op mientras ya hay una recarga
@@ -845,6 +986,13 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       // deadlock. Corre DESPUÉS de que combat ya leyó reloading arriba,
       // por la razón de encima.
       if (input.reloadHeld) startReload(vmState, rigWeapon)
+
+      // Flanco de subida de la recarga: startReload() es idempotente y no
+      // avisa si arrancó una nueva, así que el sonido se cuelga de la
+      // transición false -> true. Sin esto, con R sostenida el sample se
+      // relanzaría en cada frame.
+      if (vmState.reloading && !recargando) weaponAudio.playReload(archetype.class)
+      recargando = vmState.reloading
 
       finalPitch = cameraPitch(combatState, input.pitch)
       finalYaw = cameraYaw(combatState, input.player.yaw)
@@ -885,6 +1033,52 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       const botShots = stepBotCombat(bot, enemyHitboxesFor[i + 1], dt)
       if (botShots > 0) {
         registerGunshot(botWorld.shots, bot.combatInput.origin, botWorld.simTimeS)
+
+        // Disparo de bot: se oye atenuado por distancia al jugador y deja
+        // trazador e impacto igual que el del jugador -- ver de dónde te
+        // están tirando es información de combate, no adorno. El fulgor no
+        // se replica: cuelga del viewmodel, que es sólo del jugador.
+        const bdx = bot.player.position.x - player.position.x
+        const bdy = bot.player.position.y - player.position.y
+        const bdz = bot.player.position.z - player.position.z
+        const bdist = Math.sqrt(bdx * bdx + bdy * bdy + bdz * bdz)
+        const ganancia = gananciaPorDistancia(bdist)
+        if (ganancia > 0) weaponAudio.playShot(bot.archetype.class, ganancia)
+
+        const br = bot.shotResult
+        spawnTrazador(
+          vfxState,
+          bot.combatInput.origin.x,
+          bot.combatInput.origin.y,
+          bot.combatInput.origin.z,
+          br.pointX,
+          br.pointY,
+          br.pointZ,
+          tiempoVfxS,
+        )
+        if (br.hit) {
+          const carneBot = br.surface === 'carne'
+          spawnImpacto(
+            vfxState,
+            br.pointX,
+            br.pointY,
+            br.pointZ,
+            br.normalX,
+            br.normalY,
+            br.normalZ,
+            carneBot ? SUPERFICIE_CARNE : SUPERFICIE_HORMIGON,
+            tiempoVfxS,
+          )
+          // Los disparos de bot NO dejan calcomanía a propósito. Diez bots
+          // disparando generan ~100 impactos por segundo entre todos, así
+          // que si cada uno marcara la pared, el anillo de 64 se daría
+          // vuelta dos veces por segundo y las marcas del JUGADOR --  las
+          // únicas que está mirando, en la pared que tiene enfrente --
+          // durarían medio segundo antes de que las pisara el tiroteo del
+          // otro extremo del mapa. Medido: era exactamente lo que pasaba.
+          // Las chispas de bot sí se generan (son la pista de desde dónde
+          // te tiran) y ésas viven 0.22 s, así que el anillo les alcanza.
+        }
       }
       if (botShots > 0 && bot.shotResult.hit && bot.shotResult.part !== 'none' && bot.shotResult.owner >= targetCount) {
         const shooterId = i + 1
@@ -952,18 +1146,17 @@ export function createGame(canvas: HTMLCanvasElement): Game {
         }
       }
 
-      // Punto de impacto reconstruido: cámara + forward(pitch,yaw) * distancia.
-      // No es EXACTO -- ignora la dispersión de este disparo en particular
-      // (combat/spread.ts la aplica adentro de stepCombat/fireShot y no la
-      // devuelve hacia afuera), así que puede quedar corrido unos pocos
-      // píxeles del punto real. El cono de dispersión de este arsenal es
-      // chico (<3°, ver archetypes.ts) y el número de daño sólo necesita
-      // aparecer "cerca" del impacto, no exacto -- evita reimplementar la
-      // proyección con el offset de dispersión sumado sólo para esto.
-      computeForward(finalPitch, finalYaw, scratchForward)
-      scratchHitPoint.x = combatInput.origin.x + scratchForward.x * shotResult.distance
-      scratchHitPoint.y = combatInput.origin.y + scratchForward.y * shotResult.distance
-      scratchHitPoint.z = combatInput.origin.z + scratchForward.z * shotResult.distance
+      // Punto de impacto EXACTO, tal como lo resolvió fireShot con la
+      // dirección real del tiro. Antes se reconstruía acá como cámara +
+      // forward(pitch,yaw) * distancia, lo que ignoraba la dispersión de
+      // este disparo en particular y dejaba el número de daño corrido unos
+      // píxeles. Eso se toleraba mientras el punto sólo alimentaba un número
+      // flotante; desde que también planta impactos y calcomanías, un error
+      // de unos píxeles deja la marca visiblemente fuera del agujero, así
+      // que ahora el dato viaja en ShotResult (ver combat/shot.ts).
+      scratchHitPoint.x = shotResult.pointX
+      scratchHitPoint.y = shotResult.pointY
+      scratchHitPoint.z = shotResult.pointZ
       gfx.worldToScreen(scratchHitPoint, scratchScreenPoint)
 
       const tier = onHitConfirmed(
@@ -996,6 +1189,14 @@ export function createGame(canvas: HTMLCanvasElement): Game {
 
     targetsRenderer.sync(targetsState)
     botsRenderer.sync(bots)
+
+    // VFX: sube a la GPU sólo los anillos que cambiaron de versión y
+    // adelanta el reloj de los shaders. Con nadie disparando esto son cinco
+    // escrituras de uniform y ni una subida de buffer -- las partículas ya
+    // en vuelo se animan solas en el vertex shader. El fulgor se re-ata sólo
+    // cuando cambia el arma en pantalla (attachWeapon es idempotente).
+    vfxRenderer.attachWeapon(viewmodel.weapon, shownSlug)
+    vfxRenderer.sync(vfxState, tiempoVfxS)
 
     // El timer de GPU bracketea desde acá (antes del clear + render del
     // mundo) hasta después de la pasada del viewmodel, más abajo: esas dos
@@ -1070,6 +1271,10 @@ export function createGame(canvas: HTMLCanvasElement): Game {
         feedbackOverlay.mount(canvas.parentElement, canvas)
       }
       loadWeaponTuningOverrides().catch(() => {})
+      // Los bytes de los samples se bajan ya, sin esperar gesto: decodificar
+      // sí necesita AudioContext, pero bajar no. Así al primer click ya está
+      // todo en memoria y no se pierden los primeros disparos de la partida.
+      weaponAudio.precargar()
       window.addEventListener('resize', onResize)
       canvas.addEventListener('click', onCanvasClickForAudio)
       window.addEventListener('keydown', onDebugKeyDown)
@@ -1213,6 +1418,32 @@ export function createGame(canvas: HTMLCanvasElement): Game {
         // motivo que __feedbackTuning arriba -- ajustar en vivo desde la
         // consola al verificar, además del panel visual (tecla M).
         ;(window as unknown as { __matchTuning?: typeof MATCH }).__matchTuning = MATCH
+
+        // Tuning de efectos de disparo (fase 5): mismo motivo que los dos de
+        // arriba. Acá sirve especialmente para verificar en el navegador --
+        // el fulgor de boca dura 45 ms y es casi imposible de cazar en una
+        // captura sin poder estirarlo desde la consola.
+        ;(window as unknown as { __vfxTuning?: typeof VFX }).__vfxTuning = VFX
+
+        // Estado vivo de los efectos, sólo lectura. Los shaders deciden qué
+        // se dibuja a partir de spawnTimeS contra el reloj, así que cuando
+        // algo "no se ve" no hay forma de saber desde afuera si es que no se
+        // generó, si nació en el lugar equivocado o si simplemente ya venció:
+        // esto responde esa pregunta sin tener que instrumentar el shader.
+        ;(
+          window as unknown as { __vfxDebug?: () => { tiempoS: number; lotes: unknown; impactos: unknown[] } }
+        ).__vfxDebug = () => ({
+          tiempoS: tiempoVfxS,
+          lotes: vfxRenderer.info(),
+          impactos: vfxState.impactos.items
+            .filter((i) => i.usada)
+            .map((i) => ({
+              edad: +(tiempoVfxS - i.spawnTimeS).toFixed(3),
+              pos: [+i.x.toFixed(2), +i.y.toFixed(2), +i.z.toFixed(2)],
+              escala: i.escala,
+              superficie: i.superficie,
+            })),
+        })
       }
     },
     stop(): void {
@@ -1237,6 +1468,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       shownLoadError = null
       hideContextLostOverlay()
       viewmodel.dispose()
+      vfxRenderer.dispose()
       gfx.dispose()
     },
     benchmark(passes = 500): number {
