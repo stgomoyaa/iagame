@@ -23,14 +23,13 @@ import type { MatchSummary as MatchSummaryData } from '@/game/match/match'
 import { sortedByKills, teamScore } from '@/game/match/scoring'
 import { PLAYER_ID } from '@/game/match/types'
 import type { MatchProgress } from '@/game/progression/career'
-import { MEDALLAS_BY_KEY } from '@/game/progression/medals'
 import { rankColor, rankLabel, RR_MAXIMO } from '@/game/progression/ranks'
 import { PLACEMENT } from '@/game/progression/placement'
 import { XP_POR_NIVEL, xpParaNivel } from '@/game/progression/unlocks'
 import { RARITY_BY_ID } from '@/game/skins/rarity'
 import type { Skin } from '@/game/skins/generator'
 import { participantLabel } from '@/ui/participant-label'
-import { MedalBadge, RankEmblem } from '@/ui/progresion/emblemas'
+import { RankEmblem } from '@/ui/progresion/emblemas'
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -308,53 +307,6 @@ function BloqueDrop({ progress }: { progress: MatchProgress }) {
   )
 }
 
-/**
- * Medallas de ESTA partida. Salen de `progress.medallas`, que las evaluó
- * `progression/medals.ts` sobre la actuación real. Si no sacaste ninguna no
- * se inventa nada: el bloque desaparece, que es lo que hace que aparecer
- * signifique algo.
- */
-function BloqueMedallas({ progress }: { progress: MatchProgress }) {
-  if (progress.medallas.length === 0) return null
-
-  return (
-    <div className="mt-5">
-      <Rotulo>MEDALLAS DE ESTA PARTIDA</Rotulo>
-      <ul className="mt-2.5 flex flex-col gap-1.5">
-        {progress.medallas.map((key) => {
-          const m = MEDALLAS_BY_KEY.get(key)
-          if (m === undefined) return null
-          return (
-            <li
-              key={key}
-              className="pg-anim-snap flex items-center gap-3 px-2.5 py-2"
-              style={{ background: 'var(--pg-panel)', border: '1px solid var(--pg-linea)' }}
-            >
-              <span className="flex-none">
-                <MedalBadge medalla={m} obtenida size={44} />
-              </span>
-              <span className="min-w-0">
-                <span
-                  className="pg-display block text-xs font-bold tracking-[.04em]"
-                  style={{ color: m.color }}
-                >
-                  {m.nombre}
-                </span>
-                <span
-                  className="pg-mono block truncate text-[9px]"
-                  style={{ color: 'var(--pg-apagado)' }}
-                >
-                  {m.desc}
-                </span>
-              </span>
-            </li>
-          )
-        })}
-      </ul>
-    </div>
-  )
-}
-
 export function MatchSummary({
   summary,
   progress,
@@ -384,8 +336,13 @@ export function MatchSummary({
       style={{ background: 'rgba(4,6,10,.94)' }}
     >
       {/* --- Splash de resultado -------------------------------------- */}
+      {/* `pt-10` y no `py-4`: el HUD de rendimiento vive pegado arriba a la
+          izquierda (ui/Hud.ts, que no se toca) y el banner de VICTORIA le caía
+          justo encima. Es el mismo choque que resolvía el `pt-12` del resumen
+          anterior; el rediseño lo volvió a traer al ocupar la pantalla entera
+          en vez de ser una tarjeta centrada. */}
       <header
-        className="relative flex-none overflow-hidden px-6 py-4"
+        className="relative flex-none overflow-hidden px-6 pb-4 pt-10"
         style={{ borderBottom: '1px solid var(--pg-linea)' }}
       >
         <div
@@ -598,12 +555,12 @@ export function MatchSummary({
             background: 'radial-gradient(circle at 50% 20%,rgba(70,240,138,.05),transparent 60%)',
           }}
         >
-          {progress !== null && (
-            <>
-              <BloqueDrop progress={progress} />
-              <BloqueMedallas progress={progress} />
-            </>
-          )}
+          {/* Las medallas de la partida irían debajo del drop. El sistema
+              que las otorga todavía no existe (ver ui/Medallas.tsx), y por
+              eso acá no se dibuja un bloque vacío ni medallas de ejemplo:
+              cuando exista, se monta un listado con las ganadas en ESTA
+              partida y nada más. */}
+          {progress !== null && <BloqueDrop progress={progress} />}
         </section>
       </div>
     </div>

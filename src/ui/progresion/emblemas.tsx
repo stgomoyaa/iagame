@@ -11,24 +11,27 @@
  * POR QUÉ LOS ICONOS SE MONTAN ENCIMA Y NO EN LUGAR DEL SVG
  *
  * Los 34 iconos (9 rangos, 10 prestigios, 15 medallas) se generan aparte y
- * todavía no existen. El enganche está listo, pero el orden importa:
+ * entran por tandas: los 9 rangos ya están, prestigios y medallas todavía
+ * no. O sea que el estado "falta el archivo" no es transitorio ni raro, es
+ * el estado normal de dos tercios de las insignias. El orden importa:
  *
  * - Lo obvio sería `<img>` con `onError` que cambia a SVG. Eso muestra el
  *   ícono roto del navegador durante el instante entre que la request falla
  *   y React re-renderiza, y en algunos navegadores deja el alt-text feo.
  * - Acá el SVG se renderiza SIEMPRE como capa de abajo y el `<img>` va
- *   encima con `opacity:0`, subiendo a 1 sólo en `onLoad`. Si el archivo no
- *   está, el `<img>` nunca se muestra y nadie se entera: no hay estado
- *   intermedio roto, ni parpadeo, ni layout shift.
+ *   encima con `opacity:0`, subiendo a 1 sólo cuando se confirma que cargó
+ *   (ver `CapaIcono`: no alcanza con `onLoad`). Si el archivo no está, el
+ *   `<img>` nunca se muestra y nadie se entera: no hay estado intermedio
+ *   roto, ni parpadeo, ni layout shift.
  *
  * El color del tier (`rankColor`) es lo que pinta el SVG, así que el
  * respaldo no es genérico: un Deidad sin PNG sigue siendo dorado y un
  * Hierro sigue siendo gris.
  */
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { rankColor, rankName, TIERS } from '@/game/progression/ranks'
-import type { MedalDef } from '@/game/progression/medals'
+import type { MedallaVisual } from '@/ui/progresion/catalogo-visual'
 
 /**
  * CONTRATO DE NOMBRES DE ICONO. Lo consume el generador de assets.
@@ -47,6 +50,22 @@ export type IconSize = 64 | 256
 
 function iconUrl(nombre: string, size: IconSize): string {
   return `/assets/ui/${size}/${nombre}.png`
+}
+
+/**
+ * Qué archivo pedir para un tamaño de render dado.
+ *
+ * **No se remuestrea el de 256 hacia abajo.** Las piezas están normalizadas
+ * de encuadre (recortadas al contenido y centradas con 4% de aire) justamente
+ * para que a 64 px todas se vean del mismo tamaño; bajar el de 256 por CSS
+ * tira ese trabajo y las deja desparejas entre sí.
+ *
+ * El corte está en 90 px y no en 64 porque lo que importa es el tamaño REAL
+ * de render: las insignias de lista y de fin de partida (46-62 px) piden 64,
+ * y sólo los héroes de carrera y prestigio (118-150 px) piden 256.
+ */
+function archivoParaRender(sizeCss: number): IconSize {
+  return sizeCss > 90 ? 256 : 64
 }
 
 /** Slug de tier para el nombre de archivo: "Grand Master" -> "grand-master". */
@@ -76,20 +95,45 @@ export function medalIconName(key: string): string {
  */
 function CapaIcono({ nombre, size, alt }: { nombre: string; size: IconSize; alt: string }) {
   const [cargo, setCargo] = useState(false)
+  const ref = useRef<HTMLImageElement | null>(null)
+  const src = iconUrl(nombre, size)
+
+  /**
+   * `onLoad` NO alcanza por sí solo, y esto era un bug real: si la imagen ya
+   * está en la caché del navegador, el `<img>` termina de cargar ANTES de que
+   * React alcance a montar el handler, el evento se pierde y el icono se
+   * queda invisible para siempre. En un icono que "todavía no existe" el
+   * síntoma es indistinguible del caso normal, así que habría pasado
+   * desapercibido hasta que alguien se preguntara por qué los PNG nuevos no
+   * se ven nunca.
+   *
+   * Se consulta `complete` al montar (y ante cada cambio de `src`), que es la
+   * única forma de enterarse de una carga que ya ocurrió. `naturalWidth > 0`
+   * distingue "cargó" de "falló": un 404 también deja `complete` en true.
+   */
+  useEffect(() => {
+    const img = ref.current
+    if (img !== null && img.complete && img.naturalWidth > 0) setCargo(true)
+  }, [src])
 
   // Se usa `<img>` y no `next/image` a propósito: el optimizador registra un
   // error en consola por cada archivo que no existe, y acá que no exista es
-  // el caso NORMAL hasta que se generen los 34 iconos. Son PNG de 64/256px
+  // el caso NORMAL mientras entran las tandas de iconos. Son PNG de 64/256px
   // ya dimensionados, así que no hay nada que optimizar, y el LCP de estas
   // pantallas no depende de ellos.
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={iconUrl(nombre, size)}
+      ref={ref}
+      src={src}
       alt={alt}
       width={size}
       height={size}
-      onLoad={() => setCargo(true)}
+      onLoad={(e) => {
+        // Un 404 no dispara onLoad, pero se verifica igual: es la misma
+        // condición que el efecto y así no hay dos definiciones de "cargó".
+        if (e.currentTarget.naturalWidth > 0) setCargo(true)
+      }}
       className="absolute inset-0 h-full w-full object-contain transition-opacity duration-150"
       style={{ opacity: cargo ? 1 : 0 }}
       aria-hidden={!cargo}
@@ -159,7 +203,7 @@ export function RankEmblem({
           )
         })}
       </svg>
-      <CapaIcono nombre={rankIconName(rankIndex)} size={size > 90 ? 256 : 64} alt={`Insignia de ${nombre.label}`} />
+      <CapaIcono nombre={rankIconName(rankIndex)} size={archivoParaRender(size)} alt={`Insignia de ${nombre.label}`} />
     </span>
   )
 }
@@ -190,7 +234,23 @@ export function RankEmblemVacio({ size = 118 }: { size?: number }) {
   )
 }
 
-/** Insignia de prestigio. Alas desde el V, estrella desde el VIII. */
+/**
+ * Insignia de prestigio. Alas desde el V, estrella desde el VIII.
+ *
+ * **QUIEN LA USE TIENE QUE MOSTRAR EL NÚMERO APARTE.** No es una
+ * recomendación de estilo: los 10 PNG generados son círculos del mismo
+ * diámetro, así que el contorno externo es idéntico entre varios pares (IoU
+ * 1.00) y todo lo que los distingue es el relleno interior. Medido, los
+ * pares que se confunden a 64 px son 06/07 (los dos anillos con alas) y
+ * 09/10 (los dos alas con figura central). En una escalera con los 10 en
+ * fila comparándose entre sí, el dibujo NO alcanza para identificarlos.
+ *
+ * El numeral que este SVG dibuja adentro no sirve para eso: en cuanto el PNG
+ * carga, lo tapa. Por eso `ui/Prestigio.tsx` rotula cada escalón por fuera
+ * (`PI`..`PX`) y el detalle escribe "PRESTIGIO {roman}" debajo. Los rangos no
+ * tienen este problema (ninguna pareja se confunde), así que ahí el icono
+ * solo alcanza.
+ */
 export function PrestigeBadge({
   level,
   color,
@@ -239,25 +299,23 @@ export function PrestigeBadge({
           {roman}
         </text>
       </svg>
-      <CapaIcono nombre={prestigeIconName(level)} size={size > 90 ? 256 : 64} alt={`Insignia de Prestigio ${roman}`} />
+      <CapaIcono nombre={prestigeIconName(level)} size={archivoParaRender(size)} alt={`Insignia de Prestigio ${roman}`} />
     </span>
   )
 }
 
 /**
  * Medalla. `obtenida` la pinta con su color y un halo; sin obtener queda en
- * gris. `bloqueada` es un tercer estado que el diseño no tenía y que hizo
- * falta: una medalla que todavía no se puede conseguir porque su disparador
- * no existe (ver progression/medals.ts) no es lo mismo que una que no
- * sacaste, y mostrarlas iguales le prometería al jugador algo que hoy no
- * puede cumplir.
+ * gris apagado, que es como se ven las 15 hoy: el sistema que las otorga no
+ * existe todavía (ver ui/Medallas.tsx). El componente ya acepta el estado
+ * obtenido para que conectarlo sea pasar un booleano, no rehacerlo.
  */
 export function MedalBadge({
   medalla,
   obtenida,
   size = 62,
 }: {
-  medalla: MedalDef
+  medalla: MedallaVisual
   obtenida: boolean
   size?: number
 }) {
@@ -285,7 +343,7 @@ export function MedalBadge({
       >
         {medalla.glyph}
       </span>
-      <CapaIcono nombre={medalIconName(medalla.key)} size={size > 90 ? 256 : 64} alt="" />
+      <CapaIcono nombre={medalIconName(medalla.key)} size={archivoParaRender(size)} alt="" />
     </span>
   )
 }

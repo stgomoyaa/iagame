@@ -1,46 +1,60 @@
 'use client'
 
 /**
- * Galería de medallas (ruta /medals).
+ * Galería de medallas (ruta /medals). **Estado vacío honesto.**
  *
- * Las 15 medallas del diseño, con **conteos reales** del guardado
- * (progression/medals.ts). No hay una sola medalla de ejemplo ni un
- * contador de relleno: si nunca sacaste nada, la pantalla lo dice.
+ * El sistema de medallas no existe todavía: se está construyendo aparte en
+ * `game/progression/`. Esta pantalla NO lo implementa ni lo simula. Muestra
+ * las 15 medallas del diseño en silueta apagada, con su nombre y la
+ * condición que las otorgaría, y dice explícitamente que todavía no se
+ * puede conseguir ninguna.
+ *
+ * Lo que deliberadamente NO hace, porque sería inventar datos:
+ *
+ * - No muestra contadores. Ni "0 veces", ni "0/15 conseguidas". Un contador
+ *   implica que alguien lleva la cuenta, y hoy nadie la lleva.
+ * - No marca ninguna como obtenida.
+ * - No lee ni escribe el guardado.
  *
  *
- * TRES ESTADOS, NO DOS
+ * PUNTO DE ENGANCHE (esto es lo que hay que tocar cuando el sistema exista)
  *
- * El diseño alterna entre "vista obtenidas" y "vista pendientes", que era la
- * forma de previsualizar los dos aspectos sin datos. Con datos reales esa
- * alternancia no tiene sentido (cada medalla ya sabe en qué estado está),
- * así que el conmutador pasó a ser un **filtro** y apareció un tercer
- * estado que el diseño no podía tener:
+ * Todo lo que falta entra por una sola variable, `conteos`, hoy fija en un
+ * mapa vacío. Forma esperada:
  *
- * - **obtenida**: la sacaste al menos una vez. Color y halo.
- * - **pendiente**: se puede conseguir y todavía no la tienes. Gris.
- * - **bloqueada**: su disparador no existe todavía en el motor (las de
- *   fuente `eventos`). Gris + nota explícita.
+ *     type ConteosMedallas = ReadonlyMap<string, number>
+ *     // clave de MEDALLAS_VISUALES -> veces que se consiguió (>0)
+ *     // clave ausente = nunca conseguida
  *
- * Meter las bloqueadas en "pendiente" sería prometerle al jugador que puede
- * ir a buscar una medalla que hoy es imposible. Es la misma razón por la que
- * `medals.ts` distingue la fuente.
+ * Conectarlo es:
+ *
+ *   1. Reemplazar `const conteos = SIN_SISTEMA` por la lectura real (el
+ *      guardado, un hook, lo que exponga el sistema).
+ *   2. Nada más. El resto del componente ya distingue obtenida de pendiente
+ *      con `conteos.get(m.key) ?? 0`, ya pinta la medalla con su color y su
+ *      halo cuando el conteo es mayor que cero, ya muestra "VECES n", y el
+ *      filtro OBTENIDAS/PENDIENTES ya funciona sobre ese mismo dato.
+ *
+ * El aviso de "todavía no hay sistema" se apaga solo: está condicionado a
+ * `haySistema`, que es `conteos !== SIN_SISTEMA`.
  */
 
-import { useEffect, useMemo, useState } from 'react'
-import {
-  MEDALLAS,
-  medallasDistintas,
-  medallasImplementadas,
-  type MedalDef,
-} from '@/game/progression/medals'
-import {
-  createDefaultProgress,
-  createProgressStore,
-  type ProgressData,
-} from '@/game/progression/store'
+import { useMemo, useState } from 'react'
+import { MEDALLAS_VISUALES } from '@/ui/progresion/catalogo-visual'
 import { ProgresionShell } from '@/ui/progresion/Shell'
 import { AvisoPropuesto } from '@/ui/progresion/Pendiente'
 import { MedalBadge } from '@/ui/progresion/emblemas'
+
+/** Conteos por clave de medalla. Ver "punto de enganche" arriba. */
+type ConteosMedallas = ReadonlyMap<string, number>
+
+/**
+ * El mapa vacío mientras el sistema no exista. Es una constante con nombre y
+ * no un `new Map()` suelto para que `haySistema` pueda distinguir "no hay
+ * sistema" de "hay sistema y este jugador no consiguió nada": son estados
+ * distintos y la pantalla dice cosas distintas en cada uno.
+ */
+const SIN_SISTEMA: ConteosMedallas = new Map()
 
 type Filtro = 'todas' | 'obtenidas' | 'pendientes'
 
@@ -49,13 +63,6 @@ const FILTROS: readonly { id: Filtro; label: string }[] = [
   { id: 'obtenidas', label: 'OBTENIDAS' },
   { id: 'pendientes', label: 'PENDIENTES' },
 ]
-
-type Estado = 'obtenida' | 'pendiente' | 'bloqueada'
-
-function estadoDe(m: MedalDef, veces: number): Estado {
-  if (veces > 0) return 'obtenida'
-  return m.fuente === 'eventos' ? 'bloqueada' : 'pendiente'
-}
 
 function Segmento({
   activo,
@@ -84,30 +91,25 @@ function Segmento({
 }
 
 export function Medallas() {
-  const [store] = useState(() => createProgressStore())
-  const [progress, setProgress] = useState<ProgressData>(() => createDefaultProgress())
+  // PUNTO DE ENGANCHE: cambiar esta línea por la lectura real. Ver cabecera.
+  const conteos = SIN_SISTEMA
+  const haySistema = conteos !== SIN_SISTEMA
+
   const [filtro, setFiltro] = useState<Filtro>('todas')
-
-  useEffect(() => {
-    queueMicrotask(() => setProgress(store.load()))
-  }, [store])
-
-  const counts = progress.medallas
-  const conseguidas = medallasDistintas(counts)
 
   const visibles = useMemo(
     () =>
-      MEDALLAS.filter((m) => {
-        const veces = counts[m.key] ?? 0
+      MEDALLAS_VISUALES.filter((m) => {
+        const veces = conteos.get(m.key) ?? 0
         if (filtro === 'obtenidas') return veces > 0
         if (filtro === 'pendientes') return veces === 0
         return true
       }),
-    [counts, filtro],
+    [conteos, filtro],
   )
 
   return (
-    <ProgresionShell procedencias={['real', 'pendiente']}>
+    <ProgresionShell procedencias={['propuesto']}>
       <div className="flex h-full min-h-0 flex-col">
         <div
           className="flex flex-none flex-wrap items-center justify-between gap-4 px-6 py-4"
@@ -117,112 +119,92 @@ export function Medallas() {
             <h1 className="pg-mono text-[11px] tracking-[.2em]" style={{ color: 'var(--pg-tenue)' }}>
               GALERÍA DE MEDALLAS
             </h1>
-            <div className="flex gap-1.5">
-              {FILTROS.map((f) => (
-                <Segmento key={f.id} activo={filtro === f.id} onClick={() => setFiltro(f.id)}>
-                  {f.label}
-                </Segmento>
-              ))}
-            </div>
+            {/* El filtro sólo tiene sentido cuando hay estados que filtrar. */}
+            {haySistema && (
+              <div className="flex gap-1.5">
+                {FILTROS.map((f) => (
+                  <Segmento key={f.id} activo={filtro === f.id} onClick={() => setFiltro(f.id)}>
+                    {f.label}
+                  </Segmento>
+                ))}
+              </div>
+            )}
           </div>
-          <span className="pg-mono text-[10px] tracking-[.12em]" style={{ color: 'var(--pg-acento)' }}>
-            <span style={{ color: 'var(--pg-mudo)' }}>CONSEGUIDAS </span>
-            {conseguidas} / {MEDALLAS.length}
+          <span
+            className="pg-mono text-[10px] tracking-[.12em]"
+            style={{ color: 'var(--pg-mudo)' }}
+          >
+            {MEDALLAS_VISUALES.length} MEDALLAS DE DISEÑO
           </span>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-          <div className="mb-4">
-            <AvisoPropuesto>
-              Los conteos salen de tu guardado. De las {MEDALLAS.length} medallas,{' '}
-              {medallasImplementadas()} ya se otorgan al terminar una partida; las otras{' '}
-              {MEDALLAS.length - medallasImplementadas()} necesitan que el motor mida eventos de
-              combate (primera baja, 1vX, dos bajas con una bala) y aparecen bloqueadas hasta
-              entonces. Ninguna muestra datos de ejemplo.
-            </AvisoPropuesto>
-          </div>
-
-          {conseguidas === 0 && filtro !== 'pendientes' && (
-            <p
-              className="pg-mono mb-4 text-[11px] tracking-[.08em]"
-              style={{ color: 'var(--pg-tenue)' }}
-            >
-              Todavía no consigues ninguna medalla. Termina una partida sin morir o con una racha
-              de 5 y sacas la primera.
-            </p>
+          {!haySistema && (
+            <div className="mb-4">
+              <AvisoPropuesto>
+                Todavía no conseguiste ninguna medalla, porque el sistema que las otorga no está
+                construido. Estas son las {MEDALLAS_VISUALES.length} del diseño con la condición que
+                las daría. No hay contadores acá: cuando el sistema exista, cada una va a mostrar
+                cuántas veces la sacaste.
+              </AvisoPropuesto>
+            </div>
           )}
 
-          {visibles.length === 0 ? (
-            <p className="pg-mono text-[11px]" style={{ color: 'var(--pg-mudo)' }}>
-              Ninguna medalla en este filtro.
-            </p>
-          ) : (
-            <ul className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-              {visibles.map((m) => {
-                const veces = counts[m.key] ?? 0
-                const estado = estadoDe(m, veces)
-                const obtenida = estado === 'obtenida'
-                return (
-                  <li
-                    key={m.key}
-                    className="px-3.5 py-4 text-center"
-                    style={{
-                      background: obtenida
-                        ? `radial-gradient(circle at 50% 20%, ${m.color}12, var(--pg-panel) 70%)`
-                        : '#060a08',
-                      border: `1px solid ${obtenida ? `${m.color}44` : 'var(--pg-linea)'}`,
-                      opacity: estado === 'bloqueada' ? 0.65 : 1,
-                    }}
+          <ul className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+            {visibles.map((m) => {
+              const veces = conteos.get(m.key) ?? 0
+              const obtenida = veces > 0
+              return (
+                <li
+                  key={m.key}
+                  className="px-3.5 py-4 text-center"
+                  style={{
+                    background: obtenida
+                      ? `radial-gradient(circle at 50% 20%, ${m.color}12, var(--pg-panel) 70%)`
+                      : '#060a08',
+                    border: `1px solid ${obtenida ? `${m.color}44` : 'var(--pg-linea)'}`,
+                  }}
+                >
+                  <div className="mb-3 flex justify-center">
+                    <MedalBadge medalla={m} obtenida={obtenida} size={62} />
+                  </div>
+                  <div
+                    className="pg-display text-[13px] font-bold tracking-[.05em]"
+                    style={{ color: obtenida ? m.color : 'var(--pg-mudo-alto)' }}
                   >
-                    <div className="mb-3 flex justify-center">
-                      <MedalBadge medalla={m} obtenida={obtenida} size={62} />
-                    </div>
-                    <div
-                      className="pg-display text-[13px] font-bold tracking-[.05em]"
-                      style={{ color: obtenida ? m.color : 'var(--pg-mudo-alto)' }}
-                    >
-                      {m.nombre}
-                    </div>
-                    <p
-                      className="pg-mono mt-1.5 min-h-[26px] text-[9px] leading-relaxed"
-                      style={{ color: 'var(--pg-apagado)' }}
-                    >
-                      {m.desc}
-                    </p>
+                    {m.nombre}
+                  </div>
+                  <p
+                    className="pg-mono mt-1.5 min-h-[26px] text-[9px] leading-relaxed"
+                    style={{ color: 'var(--pg-apagado)' }}
+                  >
+                    {m.desc}
+                  </p>
+                  {/* La fila de conteo aparece SÓLO cuando hay sistema. Sin
+                      él no se dibuja un cero: no habría quién lo cuente. */}
+                  {haySistema && (
                     <div
                       className="mt-2.5 flex items-center justify-center gap-1.5 pt-2"
                       style={{ borderTop: '1px solid var(--pg-linea)' }}
                     >
-                      {estado === 'bloqueada' ? (
-                        <span
-                          className="pg-mono text-[9px] tracking-[.1em]"
-                          style={{ color: 'var(--pg-pendiente)' }}
-                          title="El motor todavía no mide el evento que la dispara"
-                        >
-                          SIN SISTEMA AÚN
-                        </span>
-                      ) : (
-                        <>
-                          <span
-                            className="pg-mono text-[9px] tracking-[.1em]"
-                            style={{ color: 'var(--pg-mudo)' }}
-                          >
-                            VECES
-                          </span>
-                          <span
-                            className="pg-mono text-[11px] font-semibold tabular-nums"
-                            style={{ color: obtenida ? m.color : 'var(--pg-mudo-alto)' }}
-                          >
-                            {veces}
-                          </span>
-                        </>
-                      )}
+                      <span
+                        className="pg-mono text-[9px] tracking-[.1em]"
+                        style={{ color: 'var(--pg-mudo)' }}
+                      >
+                        VECES
+                      </span>
+                      <span
+                        className="pg-mono text-[11px] font-semibold tabular-nums"
+                        style={{ color: obtenida ? m.color : 'var(--pg-mudo-alto)' }}
+                      >
+                        {veces}
+                      </span>
                     </div>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
+                  )}
+                </li>
+              )
+            })}
+          </ul>
         </div>
       </div>
     </ProgresionShell>

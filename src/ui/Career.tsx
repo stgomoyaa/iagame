@@ -105,7 +105,7 @@ export function Career() {
 
   return (
     <ProgresionShell procedencias={rank === null ? ['real', 'pendiente'] : ['real']}>
-      <div className="flex min-h-0 flex-col xl:h-full xl:flex-row">
+      <div className="flex h-full min-h-0 flex-col overflow-y-auto xl:flex-row xl:overflow-hidden">
         {/* --- Columna izquierda: rango, RR, colocaciones, bots --------- */}
         <section
           className="flex w-full flex-none flex-col overflow-y-auto p-6 xl:w-[34%] xl:min-w-[340px] xl:max-w-[460px]"
@@ -311,7 +311,7 @@ export function Career() {
           {carrera.historial.length === 0 ? (
             <div className="px-4 py-6 text-center" style={{ border: '1px dashed var(--pg-linea-marcada)' }}>
               <p className="pg-mono text-[11px] tracking-[.08em]" style={{ color: 'var(--pg-tenue)' }}>
-                Todavía no juegas ninguna partida.
+                Todavía no jugaste ninguna partida.
               </p>
               <p className="pg-mono mt-1.5 text-[10px] tracking-[.08em]" style={{ color: 'var(--pg-mudo)' }}>
                 Acá aparecen las últimas 10, con el mapa, tu línea y el RR que ganaste o perdiste.

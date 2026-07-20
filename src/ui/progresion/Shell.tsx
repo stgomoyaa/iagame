@@ -112,7 +112,13 @@ export function ProgresionShell({
   procedencias?: readonly Procedencia[]
 }) {
   return (
-    <div className="pg relative flex min-h-screen flex-col overflow-hidden">
+    // `h-screen` + `overflow-hidden` y no `min-h-screen`: el diseño original
+    // es un marco de aplicación de alto fijo (paneles `position:absolute;
+    // inset:0`), no un documento que fluye. Con `min-h-screen` las columnas
+    // se estiran más allá del viewport y las que alinean al fondo (la
+    // escalera de prestigio) quedan con un hueco enorme arriba. Cada columna
+    // scrollea por su cuenta, que es lo que hace que esto no recorte nada.
+    <div className="pg relative flex h-screen flex-col overflow-hidden">
       <div className="pg-nebulosa pointer-events-none absolute inset-0" aria-hidden />
       <div className="pg-estrellas pointer-events-none absolute inset-0" aria-hidden />
 
@@ -173,7 +179,7 @@ export function ProgresionShell({
         })}
       </div>
 
-      <main className="relative z-10 min-h-0 flex-1">{children}</main>
+      <main className="relative z-10 min-h-0 flex-1 overflow-hidden">{children}</main>
     </div>
   )
 }

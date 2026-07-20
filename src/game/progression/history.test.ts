@@ -114,14 +114,4 @@ describe('integración con la carrera', () => {
     expect(r.data.historial[0].rrChange).not.toBeNull()
   })
 
-  it('las medallas de la partida quedan en el acumulado y en el resumen', () => {
-    const r = applyMatchResult(createDefaultCareer(), perf({ deaths: 0, kills: 5, bestStreak: 5 }))
-    expect(r.progress.medallas).toContain('flawless')
-    expect(r.progress.medallas).toContain('racha')
-    expect(r.data.medallas.flawless).toBe(1)
-
-    // Repetirla suma, no duplica la clave.
-    const otra = applyMatchResult(r.data, perf({ deaths: 0, kills: 5, bestStreak: 5 }))
-    expect(otra.data.medallas.flawless).toBe(2)
-  })
 })

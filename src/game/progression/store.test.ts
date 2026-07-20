@@ -200,12 +200,12 @@ describe('lectura de datos guardados', () => {
 })
 
 /**
- * Medallas e historial se sumaron a `ProgressData` SIN subir
- * `PROGRESS_VERSION`, justamente para no descartarle el guardado a un
- * jugador que ya venía jugando (ver el comentario del campo en store.ts).
- * Estos tests son los que hacen que eso sea cierto y no una intención.
+ * El historial se sumó a `ProgressData` SIN subir `PROGRESS_VERSION`,
+ * justamente para no descartarle el guardado a un jugador que ya venía
+ * jugando (ver el comentario del campo en store.ts). Estos tests son los que
+ * hacen que eso sea cierto y no una intención.
  */
-describe('compatibilidad con guardados anteriores a medallas e historial', () => {
+describe('compatibilidad con guardados anteriores al historial', () => {
   const guardadoViejo = {
     version: PROGRESS_VERSION,
     xp: xpParaNivel(9),
@@ -226,18 +226,8 @@ describe('compatibilidad con guardados anteriores a medallas e historial', () =>
     expect(data.victorias).toBe(22)
   })
 
-  it('los campos que faltan se leen como vacíos, no como default de cuenta nueva', () => {
-    const data = parseProgress(guardadoViejo)
-    expect(data.medallas).toEqual({})
-    expect(data.historial).toEqual([])
-  })
-
-  it('conteos de medallas inválidos o no positivos se descartan', () => {
-    const data = parseProgress({
-      ...guardadoViejo,
-      medallas: { racha: 3, flawless: 0, rota: 'muchas', negativa: -2, nan: Number.NaN },
-    })
-    expect(data.medallas).toEqual({ racha: 3 })
+  it('el campo que falta se lee como vacío, no como default de cuenta nueva', () => {
+    expect(parseProgress(guardadoViejo).historial).toEqual([])
   })
 
   it('el historial descarta filas ilegibles y respeta el tope', () => {
@@ -260,6 +250,5 @@ describe('compatibilidad con guardados anteriores a medallas e historial', () =>
 
   it('un historial que no es lista no rompe la carga', () => {
     expect(parseProgress({ ...guardadoViejo, historial: { no: 'es lista' } }).historial).toEqual([])
-    expect(parseProgress({ ...guardadoViejo, medallas: ['no', 'es', 'mapa'] }).medallas).toEqual({})
   })
 })

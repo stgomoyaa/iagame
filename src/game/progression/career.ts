@@ -29,7 +29,6 @@ import {
   type MatchContext,
   type MatchHistoryEntry,
 } from '@/game/progression/history'
-import { acumularMedallas, evaluarMedallas, type MedalCounts } from '@/game/progression/medals'
 import {
   applyPlacement,
   createPlacementState,
@@ -57,8 +56,6 @@ export interface CareerData {
   derrotas: number
   xp: number
   skins: string[]
-  /** Cuántas veces sacó cada medalla (progression/medals.ts). */
-  medallas: MedalCounts
   /** Las últimas 10 partidas, la más reciente primero (history.ts). */
   historial: readonly MatchHistoryEntry[]
 }
@@ -72,7 +69,6 @@ export function createDefaultCareer(): CareerData {
     derrotas: 0,
     xp: 0,
     skins: [],
-    medallas: {},
     historial: [],
   }
 }
@@ -112,10 +108,6 @@ export interface MatchProgress {
 
   xp: XpOutcome
   drop: SkinDrop
-  /** Medallas ganadas EN ESTA partida, por clave. Vacío es lo normal: la
-   *  mayoría de las partidas no saca ninguna, y eso es lo que las hace
-   *  valer algo. */
-  medallas: readonly string[]
 }
 
 export interface CareerResult {
@@ -169,10 +161,8 @@ export function applyMatchResult(
   const drop = rollDrop(partidaNumero, perf, data.skins)
   const skins = drop.nueva ? [...data.skins, drop.skin.seed] : [...data.skins]
 
-  // Medallas e historial corren por las dos ramas, igual que XP y drop: una
-  // colocación es una partida como cualquier otra en todo lo que no sea el
-  // rango, y quedarse INTACTO en la tercera colocación fue igual de real.
-  const medallas = evaluarMedallas(perf)
+  // El historial corre por las dos ramas, igual que XP y drop: una colocación
+  // es una partida como cualquier otra en todo lo que no sea el rango.
   const entrada = crearEntradaHistorial({
     partida: partidaNumero,
     perf,
@@ -190,7 +180,6 @@ export function applyMatchResult(
       derrotas: data.derrotas + (perf.win ? 0 : 1),
       xp: xp.xp,
       skins,
-      medallas: acumularMedallas(data.medallas, medallas),
       historial: pushHistorial(data.historial, entrada),
     },
     progress: {
@@ -204,7 +193,6 @@ export function applyMatchResult(
       seededRank,
       xp,
       drop,
-      medallas,
     },
   }
 }
