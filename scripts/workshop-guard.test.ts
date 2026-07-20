@@ -24,6 +24,10 @@ const WORKSHOP_ASSETS_DIR = 'workshop-assets'
 /** Copia servible de los mapas convertidos. Local-only por el mismo motivo. */
 const PUBLIC_MAPS_DIR = 'public/assets/maps'
 
+/** Armas derivadas del Workshop, servibles por HTTP. Tercera puerta al mismo
+ *  problema que public/assets/maps/: ver el test más abajo. */
+const PUBLIC_LOCAL_WEAPONS_DIR = 'public/assets/weapons-local'
+
 const WORKSHOP_CATALOG_FILES = ['workshop-catalog.csv', 'workshop-catalog.json']
 
 function gitTrackedFiles(pathspec: string): string[] {
@@ -55,6 +59,29 @@ describe('guardia de publicación: assets del Workshop', () => {
       tracked,
       `estos archivos de ${PUBLIC_MAPS_DIR}/ están en el índice de git y no deberían: ${tracked.join(', ')}.`,
     ).toEqual([])
+  })
+
+  // Tercera puerta, abierta por la ingesta de armas de Source: mismo
+  // razonamiento que los mapas, con un agravante propio. Las armas no son un
+  // mapa que se elige a mano desde un menú de debug -- entran al CATÁLOGO,
+  // que es lo que el juego recorre para armar la armería y para elegir con
+  // qué se spawnea. Si un .glb de acá se cuela al índice de git, el build
+  // publicado no sólo lo CONTIENE: lo sirve por HTTP y lo pone en pantalla
+  // como una de sus armas. Es el caso con más consecuencias de los tres, y
+  // por eso el guard lo cubre igual que a los otros dos: leyendo el índice
+  // real de git, que es lo único que `git add -f` no puede esquivar.
+  it('git ls-files no encuentra ningún arma local dentro de public/assets/weapons-local/', () => {
+    const tracked = gitTrackedFiles(PUBLIC_LOCAL_WEAPONS_DIR)
+    expect(
+      tracked,
+      `estos archivos de ${PUBLIC_LOCAL_WEAPONS_DIR}/ están en el índice de git y no deberían: ${tracked.join(', ')}. ` +
+        `Sacarlos con "git rm --cached <archivo>".`,
+    ).toEqual([])
+  })
+
+  it('.gitignore declara public/assets/weapons-local/ como ignorado', () => {
+    const gitignore = readFileSync(join(REPO_ROOT, '.gitignore'), 'utf8')
+    expect(gitignore).toMatch(/^\/public\/assets\/weapons-local\/$/m)
   })
 
   it('.gitignore declara public/assets/maps/ como ignorado', () => {

@@ -27,6 +27,7 @@ import {
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { Skin } from '@/game/skins/generator'
 import { createSkinHandle, type SkinHandle } from '@/game/skins/material'
+import { weaponAssetUrl } from '@/game/weapons/registry'
 
 export interface PreviewItem {
   slug: string
@@ -145,7 +146,7 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
       return
     }
     loader
-      .loadAsync(`/assets/weapons/${item.slug}.glb`)
+      .loadAsync(weaponAssetUrl(item.slug))
       .then((gltf) => {
         if (token !== generation) return
         const mesh = firstMesh(gltf.scene)

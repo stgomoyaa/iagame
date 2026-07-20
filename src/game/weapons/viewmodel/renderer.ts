@@ -29,7 +29,7 @@ import {
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { createSkinHandle, type SkinHandle } from '@/game/skins/material'
 import type { Skin } from '@/game/skins/generator'
-import { getWeaponVisual } from '@/game/weapons/registry'
+import { getWeaponVisual, weaponAssetUrl } from '@/game/weapons/registry'
 
 /** FOV propio del viewmodel, independiente del de mundo (90° en
  *  engine/renderer.ts): así el ADS puede animar uno sin tocar el otro,
@@ -216,7 +216,7 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
   function load(slug: string): void {
     const token = ++loadToken
     loader
-      .loadAsync(`/assets/weapons/${slug}.glb`)
+      .loadAsync(weaponAssetUrl(slug))
       .then((gltf) => {
         if (token !== loadToken) return
         const mesh = isolateSingleMesh(gltf.scene)

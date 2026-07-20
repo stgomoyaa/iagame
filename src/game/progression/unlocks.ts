@@ -21,7 +21,7 @@
  */
 
 import type { WeaponClass } from '@/game/weapons/archetypes'
-import { resolveArchetype, weaponIndex } from '@/game/weapons/registry'
+import { catalogVersion, resolveArchetype, weaponIndex } from '@/game/weapons/registry'
 
 /** Nivel mínimo de cuenta. Una cuenta nueva arranca acá. */
 export const NIVEL_INICIAL = 1
@@ -73,12 +73,43 @@ function buildUnlockLevels(): Record<string, number> {
   return levels
 }
 
-export const UNLOCK_LEVELS: Record<string, number> = buildUnlockLevels()
+/**
+ * Tabla de niveles, calculada bajo demanda y cacheada CONTRA LA VERSIÓN DEL
+ * CATÁLOGO, no una sola vez al importar el módulo.
+ *
+ * Esto era un `const` que corría `buildUnlockLevels()` en el import, y era un
+ * bug real, no una precaución: el catálogo de armas ya no está completo
+ * cuando este módulo se importa. Las armas locales (registry.ts) entran
+ * después, cuando resuelve un fetch, así que la tabla quedaba con la foto de
+ * las 40 CC0 y `unlockLevelFor('ak47')` LANZABA. Y no fallaba en un rincón:
+ * la primera cosa que hace `createGame` es armar el loadout por defecto, que
+ * recorre las armas desbloqueadas — o sea, el juego entero no arrancaba.
+ *
+ * Cachear contra `catalogVersion()` en vez de recalcular siempre mantiene la
+ * propiedad que hacía atractivo al `const`: esto se llama una vez por arma
+ * por render de la armería, y recorrer 79 armas en cada llamada sería
+ * trabajo cuadrático en una pantalla de menú.
+ */
+let cache: Record<string, number> | null = null
+let cacheVersion = -1
+
+function unlockLevels(): Record<string, number> {
+  if (cache === null || cacheVersion !== catalogVersion()) {
+    cache = buildUnlockLevels()
+    cacheVersion = catalogVersion()
+  }
+  return cache
+}
+
+/** Todos los niveles de desbloqueo del catálogo actual, por slug. */
+export function unlockLevelsSnapshot(): Readonly<Record<string, number>> {
+  return unlockLevels()
+}
 
 /** Nivel de cuenta al que se desbloquea un arma. */
 export function unlockLevelFor(slug: string): number {
-  const level = UNLOCK_LEVELS[slug]
-  if (level === undefined) throw new Error(`arma desconocida: "${slug}" no está en index.json`)
+  const level = unlockLevels()[slug]
+  if (level === undefined) throw new Error(`arma desconocida: "${slug}" no está en el catálogo`)
   return level
 }
 
@@ -95,7 +126,7 @@ export function unlockedWeapons(accountLevel: number): string[] {
 
 /** Nivel al que se desbloquea la última arma del pack. */
 export function nivelMaximoDeDesbloqueo(): number {
-  return Math.max(...Object.values(UNLOCK_LEVELS))
+  return Math.max(...Object.values(unlockLevels()))
 }
 
 /**

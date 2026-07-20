@@ -65,6 +65,19 @@ workshop-assets/
 # paso de copia es manual a propósito.
 /public/assets/maps/
 
+# Armas derivadas del Workshop que el juego sirve por HTTP. Misma excepción
+# incómoda que public/assets/maps/ de acá arriba: el navegador sólo baja
+# archivos de /public, y estar en esa carpeta NO las hace publicables.
+#
+# Esta carpeta es además la garantía FÍSICA de la política, no sólo su
+# consecuencia (ver src/game/weapons/registry.ts): el catálogo del juego
+# carga siempre el índice CC0 y sólo INTENTA el local. Un build publicado no
+# tiene estos archivos, el intento da 404, y el juego arranca con sus 40
+# armas CC0 sin un mensaje de error. No hay ninguna bandera "publicar sí/no"
+# que se pueda dejar mal puesta, porque no hay bandera: lo que no está no se
+# puede filtrar. Guardia real en scripts/workshop-guard.test.ts.
+/public/assets/weapons-local/
+
 # Salida del catalogador del Workshop (scripts/workshop-catalog.ts): son
 # datos de trabajo que se regeneran corriendo el script, no código ni
 # assets. No tienen contenido con copyright (sólo metadata pública del

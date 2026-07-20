@@ -33,7 +33,7 @@ por acordarse de no hacer algo.
 ## 2. Correr el catalogador
 
 `scripts/workshop-catalog.ts` **sólo cataloga**. No descarga nada del
-Workshop: eso es un paso futuro separado (sección 4).
+Workshop: eso es un paso futuro separado (sección 6).
 
 ```bash
 node --env-file=.env.local scripts/workshop-catalog.ts "mw2019" "css weapons" "arccw" \
@@ -77,20 +77,26 @@ probarlo en vivo era más riesgo que valor).
 
 ## 3. Política de dos niveles
 
-| | `public/assets/weapons/` | `workshop-assets/` | `public/assets/maps/` |
-|---|---|---|---|
-| Origen | Packs CC0 (Quaternius y similares) | Steam Workshop de GMod | Derivado de `workshop-assets/` |
-| Licencia | CC0, uso libre | En su mayoría no autorizada (ports de CS/CoD) | La del Workshop |
-| ¿Se commitea? | Sí | **Nunca** | **Nunca** |
-| ¿Se puede publicar? | Sí | **Nunca** | **Nunca** |
-| Formato | `.glb` normalizado por `scripts/convert-weapons.ts` | Lo que sea (mallas extraídas, GLBs intermedios) | `.json` de colisión + `.glb` texturizado |
+| | `public/assets/weapons/` | `workshop-assets/` | `public/assets/maps/` | `public/assets/weapons-local/` |
+|---|---|---|---|---|
+| Origen | Packs CC0 (Quaternius y similares) | Steam Workshop de GMod | Derivado de `workshop-assets/` | Derivado de `workshop-assets/` |
+| Licencia | CC0, uso libre | En su mayoría no autorizada (ports de CS/CoD) | La del Workshop | La del Workshop |
+| ¿Se commitea? | Sí | **Nunca** | **Nunca** | **Nunca** |
+| ¿Se puede publicar? | Sí | **Nunca** | **Nunca** | **Nunca** |
+| Formato | `.glb` normalizado por `scripts/convert-weapons.ts` | Lo que sea (mallas extraídas, GLBs intermedios) | `.json` de colisión + `.glb` texturizado | `.glb` normalizado por `scripts/convert-source-weapons.ts` |
 
-`public/assets/maps/` es la excepción incómoda: el navegador sólo puede bajar
-archivos servidos desde `/public`, así que los mapas convertidos tienen que
-estar ahí. Estar en una carpeta que el resto del repo sí publica **no** los
-convierte en publicables. Por eso está gitignoreado y por eso
-`scripts/workshop-guard.test.ts` chequea las DOS carpetas contra el índice
-de git, no sólo `workshop-assets/`.
+`public/assets/maps/` y `public/assets/weapons-local/` son la excepción
+incómoda: el navegador sólo puede bajar archivos servidos desde `/public`,
+así que lo convertido tiene que estar ahí. Estar en una carpeta que el resto
+del repo sí publica **no** los convierte en publicables. Por eso están
+gitignoreadas y por eso `scripts/workshop-guard.test.ts` chequea las TRES
+carpetas contra el índice de git, no sólo `workshop-assets/`.
+
+En las armas esa separación además hace de interruptor: el catálogo del juego
+carga siempre el índice CC0 y sólo *intenta* el local, así que un build
+publicado —que no tiene esos archivos— se queda con sus 40 armas CC0 sin
+error visible. No hay una bandera de "publicar sí/no" que se pueda dejar mal
+puesta, porque lo que no está no se puede filtrar (ver `registry.ts`).
 
 `workshop-assets/` está en `.gitignore`, pero **eso solo no alcanza**:
 `git add -f` ignora `.gitignore` a propósito, y ese es exactamente el
@@ -159,7 +165,64 @@ Limitaciones conocidas del pipeline:
 - Los brushes `CONTENTS_PLAYERCLIP` (los muros invisibles que Source usa
   para acotar al jugador) **no** se importan: sólo entra `CONTENTS_SOLID`.
 
-## 5. Lo que NO está construido (ingesta más allá del catálogo)
+## 5. Armas de Source: del `.glb` convertido al catálogo
+
+Mismo patrón que los mapas, y por el mismo motivo: los `.glb` de armas
+derivadas del Workshop viven fuera del repo, y el navegador sólo puede bajar
+lo que está en `/public`, así que hay un **paso manual de copia** que nadie
+puede hacer por accidente.
+
+```bash
+# 1. Normalizar: orienta, escala por clase, hornea la textura en COLOR_0 y
+#    mide la línea de puntería de cada arma. Lee el catálogo de
+#    src/game/weapons/source-catalog.ts, no el directorio: un .glb sin fila
+#    en esa tabla se ignora (no tiene nombre genérico ni arquetipo).
+node scripts/convert-source-weapons.ts \
+  workshop-assets/glb \
+  public/assets/weapons-local
+
+# 2. Listo: el script YA escribe en public/assets/weapons-local/, que está
+#    gitignoreado. No hay un segundo paso de copia como con los mapas.
+```
+
+Con eso, `pnpm dev` levanta con **79 armas** (40 CC0 + 39 locales). Sin eso
+—o en cualquier checkout limpio— levanta con **40**, sin ningún error: el
+registry (`src/game/weapons/registry.ts`) carga siempre el índice CC0 y sólo
+*intenta* el local; un 404 ahí es el caso normal, no una falla.
+
+**Por qué son 39 y no los 42 `.glb` que hay.** Tres modelos (`elite`,
+`deagle_dual`, `mac10_dual`) son de puño doble: medidos, no son un arma ancha
+sino DOS armas acostadas en el mismo plano y espejadas entre sí, así que no
+existe una rotación que las deje a las dos derechas y el rig de viewmodel
+—que anima un arma— no las puede posar. Entrarían visiblemente rotas. El
+razonamiento completo está en el encabezado de `source-catalog.ts`.
+
+**Nombres.** El slug interno es el nombre del archivo de origen (`ak47`,
+`awp`) y nunca se muestra; lo que ve el jugador es el nombre genérico de la
+tabla ("Cárpato", "Lanza"). `source-catalog.test.ts` verifica contra una
+lista negra explícita que ninguna marca se filtre a un nombre mostrado, y
+chequea también el catálogo CC0 para que la regla valga para todo el arsenal.
+
+**Estadísticas.** Ningún arquetipo nuevo: las 39 mapean a los 10 arquetipos
+ya calibrados (`archetypes.ts`), por clase. El modelo cambia cómo se ve el
+arma, no cómo se juega.
+
+**Por qué estas armas se trajeron: el ADS.** Los 40 modelos CC0 no tienen
+mira modelada —son siluetas con un riel vacío arriba— y por eso todos los
+intentos de arreglar el ADS moviendo offsets fallaron: no se puede alinear
+una geometría que no existe. Los modelos de Source sí traen alza y punto de
+mira, así que `scripts/lib/sight.ts` los MIDE y `seed.ts` usa esa medición
+para poner la línea de puntería sobre el eje de la cámara. Las 40 CC0 no
+cambian de comportamiento: la rama nueva sólo corre si la entrada del índice
+trae `sightHeight`, que es lo que el pipeline viejo no produce.
+
+Verificado en el navegador (que es el único criterio que vale acá) sobre un
+fusil, un subfusil, una pistola y el francotirador: mira centrada en la
+cruceta con una desviación de ±1 px sobre 1280, y ningún cuerpo de arma
+tapando el punto al que se apunta. En el francotirador la cruceta cae dentro
+del tubo del visor, no sobre su techo.
+
+## 6. Lo que NO está construido (ingesta más allá del catálogo)
 
 Esto es deliberadamente honesto sobre lo que falta. Nada de esto se probó:
 

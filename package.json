@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test": "vitest run --pool=forks --execArgv=--expose-gc",
     "test:watch": "vitest --execArgv=--expose-gc",
-    "convert:weapons": "node scripts/convert-weapons.ts"
+    "convert:weapons": "node scripts/convert-weapons.ts",
+    "convert:source-weapons": "node scripts/convert-source-weapons.ts"
   },
   "dependencies": {
     "next": "16.2.10",

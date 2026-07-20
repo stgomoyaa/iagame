@@ -14,6 +14,18 @@ export interface WeaponBounds {
   max: number[]
 }
 
+/**
+ * De dónde salió el modelo de un arma. No es cosmético: decide de qué
+ * carpeta se baja el .glb y qué armas existen en un build publicado (ver
+ * `registry.ts` y docs/WORKSHOP.md).
+ *
+ * - `cc0`: pack CC0, vive en `public/assets/weapons/`, se commitea, se
+ *   publica.
+ * - `local`: derivado del Workshop, vive en `public/assets/weapons-local/`,
+ *   gitignoreado, nunca se publica.
+ */
+export type WeaponOrigin = 'cc0' | 'local'
+
 /** Forma de una entrada de index.json. Ver scripts/convert-weapons.ts. */
 export interface WeaponIndexEntry {
   slug: string
@@ -23,6 +35,20 @@ export interface WeaponIndexEntry {
   muzzleConfidence: number
   upAxisConfidence: number
   needsManualReview: boolean
+  /** Procedencia. Los índices CC0 en disco no la traen (son anteriores a que
+   *  existiera la distinción); el registry se la pone al cargarlos. */
+  origin: WeaponOrigin
+  /**
+   * Altura (Y, espacio del modelo) de la línea de puntería real del arma:
+   * alza y punto de mira, o el eje del tubo si tiene óptica. La produce
+   * `scripts/lib/sight.ts` y SÓLO existe en los modelos que tienen mira
+   * modelada. Su ausencia no es un dato faltante que haya que rellenar: es
+   * la afirmación "este modelo no tiene mira", que es literalmente el caso
+   * de las 40 armas CC0. Ver `seedAdsOffset`.
+   */
+  sightHeight?: number
+  /** Desplazamiento lateral de esa línea. Mismo origen y misma condición. */
+  sightLateral?: number
 }
 
 /** Posición (metros) + rotación (radianes) de una pose del viewmodel. */
@@ -179,6 +205,34 @@ export function seedAdsOffset(entry: WeaponIndexEntry): Transform {
   const { bounds } = entry
   const sizeY = bounds.max[1] - bounds.min[1]
   const hipZ = seedHipOffset(entry).z
+
+  // Rama para modelos CON mira modelada (las armas derivadas de Source, ver
+  // WeaponIndexEntry.sightHeight). Acá no hace falta aproximar nada: el
+  // pipeline MIDIÓ dónde está la línea de puntería, así que el offset es esa
+  // medición con el signo dado vuelta, y punto.
+  //
+  // La diferencia con la rama de abajo no es de precisión, es de qué se
+  // alinea. Abajo se alinea el BORDE SUPERIOR del modelo; acá, la MIRA. En
+  // un arma con hierros esos dos no son lo mismo y la distancia entre ellos
+  // es justamente lo que hace que el ADS se vea bien: el punto de mira
+  // sobresale del cuerpo, así que poner el punto de mira en el eje de la
+  // cámara deja el cajón de mecanismos uno o dos centímetros POR DEBAJO del
+  // eje, y ese par de centímetros -vistos desde 10 cm, que es donde queda la
+  // parte trasera del arma- son media pantalla de separación entre el cuerpo
+  // del arma y el punto al que estás apuntando. Alinear el borde superior
+  // deja en cambio el techo del arma pegado a la cruceta a lo largo de todo
+  // el cañón, que es exactamente el síntoma que se veía: "el arma tapa el
+  // centro".
+  if (entry.sightHeight !== undefined) {
+    return {
+      x: -(entry.sightLateral ?? 0),
+      y: -entry.sightHeight,
+      z: hipZ - ADS_PULL_BACK,
+      rx: 0,
+      ry: 0,
+      rz: 0,
+    }
+  }
 
   return {
     x: 0,

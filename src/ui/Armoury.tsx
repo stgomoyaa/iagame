@@ -38,11 +38,28 @@ import { unlockLevelFor } from '@/game/progression/unlocks'
 import { generateSkin, type Skin } from '@/game/skins/generator'
 import { RARITY_BY_ID, rarityRank } from '@/game/skins/rarity'
 import type { PreviewItem } from '@/game/skins/preview'
-import { resolveArchetype, weaponIndex } from '@/game/weapons/registry'
+import { loadLocalWeapons, resolveArchetype, weaponIndex } from '@/game/weapons/registry'
 import { CLASS_LABEL, statBars } from '@/game/weapons/stats'
 import { WeaponPreview } from '@/ui/WeaponPreview'
 
 const MUESCAS = 12
+
+/** Una fila del arsenal: lo que la lista necesita de cada arma del catálogo. */
+interface ArmaDeLista {
+  slug: string
+  nombre: string
+  archetype: ReturnType<typeof resolveArchetype>
+  nivel: number
+}
+
+function construirArsenal(): ArmaDeLista[] {
+  return weaponIndex().map((entry) => ({
+    slug: entry.slug,
+    nombre: entry.name,
+    archetype: resolveArchetype(entry.slug),
+    nivel: unlockLevelFor(entry.slug),
+  }))
+}
 
 function Barra({ value }: { value: number }) {
   const llenas = Math.max(1, Math.round(value * MUESCAS))
@@ -74,6 +91,16 @@ export function Armoury() {
   const [progress, setProgress] = useState<ProgressData>(() => createDefaultProgress())
   const [slot, setSlot] = useState<LoadoutSlot>('primary')
   const [debug, setDebug] = useState(false)
+  // El arsenal es ESTADO, no un useMemo con dependencias vacías, y la
+  // diferencia importa: el catálogo de armas no está completo cuando este
+  // componente se monta. Las armas locales (registry.ts) entran cuando
+  // resuelve un fetch, después del primer render. Con un memo de
+  // dependencias vacías la lista se queda con la foto de las 40 CC0 para
+  // siempre -- el registry SÍ tiene las otras 39 y la partida SÍ las usa,
+  // pero la armería no las muestra nunca. Es la misma forma del bug que ya
+  // pasó con el panel de tuning, que fotografiaba WEAPON_REGISTRY en el
+  // mount, antes de que resolviera weapons_tuning.json.
+  const [armas, setArmas] = useState(construirArsenal)
 
   useEffect(() => {
     // queueMicrotask: setState sincrónico en el cuerpo del efecto dispara
@@ -85,6 +112,13 @@ export function Armoury() {
       setDebug(new URLSearchParams(window.location.search).get('debug') === '1')
     })
   }, [store])
+
+  useEffect(() => {
+    // Un 404 acá es el caso normal (build publicado sin armas locales) y
+    // loadLocalWeapons ya lo trata como "entraron 0": no hay rama de error
+    // que manejar, sólo hay que releer el catálogo cuando termine.
+    void loadLocalWeapons().then(() => setArmas(construirArsenal()))
+  }, [])
 
   const guardar = useCallback(
     (loadout: Loadout) => {
@@ -100,17 +134,6 @@ export function Armoury() {
   const nivel = accountLevel(progress)
   const loadout = progress.loadout
   const slugActual = loadout[slot].slug
-
-  const armas = useMemo(
-    () =>
-      weaponIndex().map((entry) => ({
-        slug: entry.slug,
-        nombre: entry.name,
-        archetype: resolveArchetype(entry.slug),
-        nivel: unlockLevelFor(entry.slug),
-      })),
-    [],
-  )
 
   const inventario = useMemo(
     () =>
