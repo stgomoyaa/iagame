@@ -3,6 +3,7 @@ import { TICK_DT } from '@/game/engine/constants'
 import { createFixedLoop } from '@/game/engine/fixed-loop'
 import { createGpuTimer } from '@/game/engine/gpu-timer'
 import { createInputSystem } from '@/game/engine/input'
+import { createProfiler } from '@/game/engine/profiler'
 import { createRenderer, WORLD_FOV } from '@/game/engine/renderer'
 import { createStatsTracker, runBenchmark } from '@/game/engine/stats'
 import type { FrameStats } from '@/game/engine/stats'
@@ -301,6 +302,12 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   const viewmodel = createViewmodelRenderer(gfx.renderer)
   const stats = createStatsTracker()
   const gpuTimer = createGpuTimer(gfx.gl)
+  // Desglose de costo por sistema (engine/profiler.ts): "cuánto" ya lo
+  // muestra `stats` de arriba, esto agrega el "qué". Instrumentación pura
+  // -- ver los begin()/end() repartidos en frame() más abajo, uno por cada
+  // llamada real que hace ese trabajo, y profiler.endFrame() al final del
+  // archivo.
+  const profiler = createProfiler()
   const tuning = createTuningPanel()
   const matchTuningPanel = createMatchTuningPanel(mapNames(), mapaActual.name)
   const loop = createFixedLoop()
@@ -718,6 +725,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     if (!running) return
     rafId = requestAnimationFrame(frame)
     stats.beginFrame()
+    profiler.beginFrame()
 
     const frameDt = lastTime === 0 ? 0 : (now - lastTime) / 1000
     lastTime = now
@@ -763,7 +771,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     const ticks = loop.advance(frameDt)
     for (let i = 0; i < ticks; i++) {
       if (playerHealth.alive) {
+        profiler.begin('fisica')
         stepPlayer(player, input.player, mapaActual.boxes)
+        profiler.end('fisica')
       } else {
         // Congelado mientras está muerto -- sin input, sin física nueva
         // (mismo patrón que stepBotMotor con bot.health.alive=false,
@@ -823,8 +833,12 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       // fijo -- lo que hace que TDM y FFA sean partidas de verdad en vez de
       // "todos los bots contra el jugador nada más".
       botWorld.simTimeS += TICK_DT
+      profiler.begin('ia')
       stepMatchBotsThink(bots, botWorld, matchTargets, TICK_DT)
+      profiler.end('ia')
+      profiler.begin('fisica')
       stepAllBotsMotor(bots, botWorld, TICK_DT)
+      profiler.end('fisica')
 
       for (let b = 0; b < bots.length; b++) {
         const bot = bots[b]
@@ -888,7 +902,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     let shotsFired = 0
 
     if (shownSlug && archetype) {
+      profiler.begin('viewmodel')
       syncRigWeapon(rigWeapon, getWeaponVisual(shownSlug))
+      profiler.end('viewmodel')
 
       // Combate: cadencia + retroceso + dispersión + hitscan (secciones
       // 1-4 del spec de fase 1). Botón izquierdo (real o del panel de
@@ -913,13 +929,16 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       combatInput.reloading = vmState.reloading
       combatInput.pitch = input.pitch
       combatInput.yaw = input.player.yaw
+      profiler.begin('combate')
       shotsFired = stepCombat(combatState, archetype, combatInput, playerShotHitboxes, dt, shotResult)
+      profiler.end('combate')
 
       // Culatazo del arma (weapons/viewmodel/rig.ts: fire(), sección "qué
       // existe" del spec) + punch de cámara (feedback/camera-punch.ts,
       // sección 5) por cada disparo real que salió este frame -- no por
       // frame: un frame largo que se puso al día con más de un disparo
       // (fire-control.ts) tiene que sentir cada uno, no sólo el último.
+      profiler.begin('feedback')
       for (let i = 0; i < shotsFired; i++) {
         fire(vmState, rigWeapon)
         onShotFired(feedbackState)
@@ -984,6 +1003,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
           }
         }
       }
+      profiler.end('feedback')
 
       // R sostenida: startReload() es un no-op mientras ya hay una recarga
       // en curso (ver el comentario de esa función en rig.ts), así que
@@ -1035,8 +1055,11 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     // lista.
     for (let i = 0; i < bots.length; i++) {
       const bot = bots[i]
+      profiler.begin('combate')
       const botShots = stepBotCombat(bot, enemyHitboxesFor[i + 1], dt)
+      profiler.end('combate')
       if (botShots > 0) {
+        profiler.begin('feedback')
         registerGunshot(botWorld.shots, bot.combatInput.origin, botWorld.simTimeS)
 
         // Disparo de bot: se oye atenuado por distancia al jugador y deja
@@ -1084,7 +1107,15 @@ export function createGame(canvas: HTMLCanvasElement): Game {
           // Las chispas de bot sí se generan (son la pista de desde dónde
           // te tiran) y ésas viven 0.22 s, así que el anillo les alcanza.
         }
+        profiler.end('feedback')
       }
+      // Daño/puntaje (applyDamageToBot/damageBot + recordDamage/recordKill)
+      // queda deliberadamente SIN instrumentar acá abajo: no es ninguna de
+      // las seis secciones del desglose (combate ya se cerró arriba con el
+      // hitscan en sí). Cae en "otro" -- ver engine/profiler.ts sobre por
+      // qué eso es información, no un hueco. onDamageTaken (unas líneas más
+      // abajo) SÍ es feedback -- viñeta direccional + shake -- y se marca
+      // aparte, más angosto, en vez de envolver todo este bloque.
       if (botShots > 0 && bot.shotResult.hit && bot.shotResult.part !== 'none' && bot.shotResult.owner >= targetCount) {
         const shooterId = i + 1
         const victimId = bot.shotResult.owner - targetCount
@@ -1105,7 +1136,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
             bot.player.position.z - player.position.z,
           )
           const bearing = vignetteBearing(input.player.yaw, sourceYaw)
+          profiler.begin('feedback')
           onDamageTaken(feedbackState, bearing, damage)
+          profiler.end('feedback')
         } else {
           killed = damageBot(bots[victimId - 1], damage)
         }
@@ -1122,7 +1155,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     // punch de ESTE disparo ya se sienta en la rotación de ESTE frame, no
     // en el siguiente. Corre siempre, con o sin arma equipada -- el shake
     // y la viñeta de daño recibido no dependen de tener un arma en mano.
+    profiler.begin('feedback')
     stepFeedback(feedbackState, dt)
+    profiler.end('feedback')
 
     gfx.camera.rotation.set(finalPitch, finalYaw, feedbackState.cameraPunch.roll, 'YXZ')
 
@@ -1159,6 +1194,13 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       // flotante; desde que también planta impactos y calcomanías, un error
       // de unos píxeles deja la marca visiblemente fuera del agujero, así
       // que ahora el dato viaja en ShotResult (ver combat/shot.ts).
+      //
+      // profiler.begin/end('feedback') arrancan ACÁ y no antes: applyHit/
+      // damageBot/recordDamage/recordKill de arriba son daño y puntaje, no
+      // ninguna de las seis secciones del desglose (mismo criterio que el
+      // bloque análogo de bots más arriba) -- quedan sin instrumentar,
+      // caen en "otro" a propósito.
+      profiler.begin('feedback')
       scratchHitPoint.x = shotResult.pointX
       scratchHitPoint.y = shotResult.pointY
       scratchHitPoint.z = shotResult.pointZ
@@ -1173,6 +1215,7 @@ export function createGame(canvas: HTMLCanvasElement): Game {
         killed,
       )
       feedbackAudio.playHitmarker(tier)
+      profiler.end('feedback')
     }
 
     // Reloj de partida + killfeed + condición de cierre (sección "Build" de
@@ -1214,7 +1257,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     gpuTimer.beginFrame()
 
     gfx.renderer.info.reset()
+    profiler.begin('render')
     gfx.render()
+    profiler.end('render')
     // El WebGLRenderer resetea renderer.info en cada llamada a render()
     // (autoReset): hay que leer las cuentas del mundo acá, antes de que la
     // pasada del viewmodel las pise, para poder sumarlas después.
@@ -1230,7 +1275,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       vmInput.mouseDeltaX = mouseDeltaX
       vmInput.mouseDeltaY = mouseDeltaY
 
+      profiler.begin('viewmodel')
       stepViewmodel(vmState, vmInput, rigWeapon, vmOut, dt)
+      profiler.end('viewmodel')
 
       // El pz del rig usa "+ hacia el jugador" (ver seed.ts); la cámara del
       // viewmodel mira hacia -Z como cualquier cámara de Three, así que el
@@ -1242,7 +1289,9 @@ export function createGame(canvas: HTMLCanvasElement): Game {
       // now/1000: el reloj de las animaciones de skin (pulso, flujo, ciclo
       // de tono). Se pasa el timestamp del rAF en vez de acumular un
       // contador propio para no sumar estado que se pueda desincronizar.
+      profiler.begin('render')
       viewmodel.render(gfx.camera, now / 1000)
+      profiler.end('render')
       gpuTimer.endFrame()
 
       stats.endFrame(
@@ -1250,11 +1299,22 @@ export function createGame(canvas: HTMLCanvasElement): Game {
         worldTriangles + gfx.renderer.info.render.triangles,
         gpuTimer.stats.gpuMs,
         gpuTimer.stats.peakMs,
+        profiler.stats,
       )
     } else {
       gpuTimer.endFrame()
-      stats.endFrame(worldCalls, worldTriangles, gpuTimer.stats.gpuMs, gpuTimer.stats.peakMs)
+      stats.endFrame(worldCalls, worldTriangles, gpuTimer.stats.gpuMs, gpuTimer.stats.peakMs, profiler.stats)
     }
+
+    // Cierra la contabilidad del profiler de ESTE frame: recién acá se
+    // conoce el costo total de CPU (stats.stats.cpuMs, que stats.endFrame()
+    // de arriba acaba de calcular) -- profiler.ts deriva "otro" contra ese
+    // total, así que tiene que correr DESPUÉS, no antes. El `stats` de
+    // arriba usa profiler.stats tal como quedó del frame ANTERIOR (mismo
+    // desfasaje de un frame que ya tiene gpuTimer -- ver su cabecera): no
+    // hace falta que el HUD esté al día al ciclo exacto, y evita tener que
+    // calcular el desglose antes de tener el total real.
+    profiler.endFrame(stats.stats.cpuMs)
 
     updateWeaponErrorBanner()
 
