@@ -23,6 +23,7 @@ import { defaultLoadout, normalizeLoadout, type Loadout } from '@/game/progressi
 import { levelForXp, NIVEL_INICIAL } from '@/game/progression/unlocks'
 import { createDefaultCareer, type CareerData } from '@/game/progression/career'
 import { createPlacementState, PLACEMENT, type PlacementState } from '@/game/progression/placement'
+import { HISTORIAL_MAX, type MatchHistoryEntry } from '@/game/progression/history'
 import { RANK_MAX, RANK_MIN, RR_MAXIMO } from '@/game/progression/ranks'
 import { RR, type RankState } from '@/game/progression/rr'
 
@@ -54,6 +55,20 @@ export interface ProgressData {
   partidasJugadas: number
   victorias: number
   derrotas: number
+  /**
+   * Medallas conseguidas, por clave (progression/medals.ts).
+   *
+   * NO sube `PROGRESS_VERSION` aunque agregue un campo, y es a propósito:
+   * subir la versión hace que `parseProgress` descarte el guardado entero
+   * (ver más abajo), o sea que agregar medallas le borraría a un jugador su
+   * rango, su nivel y sus skins. Un campo que **falta** se lee como `{}`,
+   * que es exactamente lo que corresponde a un guardado anterior a las
+   * medallas: no tenía ninguna. Un guardado v2 viejo sigue cargando entero.
+   */
+  medallas: Record<string, number>
+  /** Últimas partidas, la más reciente primero (progression/history.ts).
+   *  Mismo criterio de compatibilidad que `medallas`. */
+  historial: MatchHistoryEntry[]
 }
 
 /**
@@ -114,6 +129,8 @@ export function createDefaultProgress(): ProgressData {
     partidasJugadas: 0,
     victorias: 0,
     derrotas: 0,
+    medallas: {},
+    historial: [],
   }
 }
 
@@ -157,6 +174,65 @@ function leerRank(raw: unknown): RankState | null {
     rr: clamp(Math.floor(numeroSeguro(obj.rr, 0)), 0, RR_MAXIMO),
     cushion: clamp(numeroSeguro(obj.cushion, RR.colchon), 0, RR.colchon),
   }
+}
+
+/**
+ * Lee el mapa de medallas. Se descartan las entradas que no sean un conteo
+ * positivo en vez de intentar arreglarlas: una clave con `"muchas"` adentro
+ * la escribió alguien a mano en la consola, y el estado seguro es no tener
+ * esa medalla.
+ *
+ * No se valida contra `MEDALLAS`: una clave desconocida es una medalla que
+ * este build ya no define (o que define uno más nuevo), y tirarla acá haría
+ * que bajar y volver a subir de versión le borre el conteo al jugador. La
+ * galería sólo muestra las que conoce, así que una clave de más no molesta.
+ */
+function leerMedallas(raw: unknown): Record<string, number> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {}
+  const out: Record<string, number> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue
+    const n = Math.floor(value)
+    if (n > 0) out[key] = n
+  }
+  return out
+}
+
+/** Lee una fila del historial, o null si no es una fila entendible. */
+function leerEntradaHistorial(raw: unknown): MatchHistoryEntry | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const o = raw as Record<string, unknown>
+  if (typeof o.partida !== 'number' || !Number.isFinite(o.partida)) return null
+  return {
+    partida: Math.max(0, Math.floor(o.partida)),
+    fecha: Math.max(0, Math.floor(numeroSeguro(o.fecha, 0))),
+    mapa: typeof o.mapa === 'string' ? o.mapa : null,
+    modo: typeof o.modo === 'string' ? o.modo : null,
+    win: o.win === true,
+    kills: Math.max(0, Math.floor(numeroSeguro(o.kills, 0))),
+    deaths: Math.max(0, Math.floor(numeroSeguro(o.deaths, 0))),
+    headshots: Math.max(0, Math.floor(numeroSeguro(o.headshots, 0))),
+    damage: Math.max(0, Math.round(numeroSeguro(o.damage, 0))),
+    // null y 0 son distintos acá: null es "fue colocación, no hubo RR", 0 es
+    // "hubo RR y no se movió". Por eso no se cae a 0 con `numeroSeguro`.
+    rrChange: typeof o.rrChange === 'number' && Number.isFinite(o.rrChange)
+      ? Math.round(o.rrChange)
+      : null,
+    rank: typeof o.rank === 'number' && Number.isFinite(o.rank)
+      ? clamp(Math.floor(o.rank), RANK_MIN, RANK_MAX)
+      : null,
+  }
+}
+
+function leerHistorial(raw: unknown): MatchHistoryEntry[] {
+  if (!Array.isArray(raw)) return []
+  const filas: MatchHistoryEntry[] = []
+  for (const item of raw) {
+    const fila = leerEntradaHistorial(item)
+    if (fila !== null) filas.push(fila)
+    if (filas.length >= HISTORIAL_MAX) break
+  }
+  return filas
 }
 
 function leerPlacement(raw: unknown): PlacementState {
@@ -203,6 +279,8 @@ export function parseProgress(raw: unknown): ProgressData {
     partidasJugadas: Math.max(0, Math.floor(numeroSeguro(obj.partidasJugadas, 0))),
     victorias: Math.max(0, Math.floor(numeroSeguro(obj.victorias, 0))),
     derrotas: Math.max(0, Math.floor(numeroSeguro(obj.derrotas, 0))),
+    medallas: leerMedallas(obj.medallas),
+    historial: leerHistorial(obj.historial),
   }
 }
 
@@ -220,6 +298,8 @@ export function careerFromProgress(data: ProgressData): CareerData {
     derrotas: data.derrotas,
     xp: data.xp,
     skins: data.skins,
+    medallas: data.medallas,
+    historial: data.historial,
   }
 }
 
@@ -239,6 +319,8 @@ export function progressWithCareer(data: ProgressData, career: CareerData): Prog
     partidasJugadas: career.partidasJugadas,
     victorias: career.victorias,
     derrotas: career.derrotas,
+    medallas: { ...career.medallas },
+    historial: [...career.historial],
     loadout: normalizeLoadout(data.loadout, levelForXp(career.xp), career.skins),
   }
 }

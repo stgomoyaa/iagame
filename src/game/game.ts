@@ -780,7 +780,13 @@ export function createGame(
       summary.durationS,
       playerWon(matchState),
     )
-    const resultado = applyMatchResult(careerFromProgress(progress), perf)
+    // El mapa y el modo no viajan en `MatchPerformance` (que es sólo la
+    // actuación del jugador) pero sí los necesita el historial de la pantalla
+    // de carrera: "‑12 RR" sin saber dónde ni en qué modo no dice nada.
+    const resultado = applyMatchResult(careerFromProgress(progress), perf, {
+      mapa: mapaActual.name,
+      modo: summary.mode,
+    })
     matchProgress = resultado.progress
     progressStore.save(progressWithCareer(progress, resultado.data))
 

@@ -24,6 +24,13 @@
 import { combatScore, expectedCombatScore, type MatchPerformance } from '@/game/progression/combat-score'
 import { rollDrop, type SkinDrop } from '@/game/progression/drop'
 import {
+  crearEntradaHistorial,
+  pushHistorial,
+  type MatchContext,
+  type MatchHistoryEntry,
+} from '@/game/progression/history'
+import { acumularMedallas, evaluarMedallas, type MedalCounts } from '@/game/progression/medals'
+import {
   applyPlacement,
   createPlacementState,
   enColocacion,
@@ -50,6 +57,10 @@ export interface CareerData {
   derrotas: number
   xp: number
   skins: string[]
+  /** Cuántas veces sacó cada medalla (progression/medals.ts). */
+  medallas: MedalCounts
+  /** Las últimas 10 partidas, la más reciente primero (history.ts). */
+  historial: readonly MatchHistoryEntry[]
 }
 
 export function createDefaultCareer(): CareerData {
@@ -61,6 +72,8 @@ export function createDefaultCareer(): CareerData {
     derrotas: 0,
     xp: 0,
     skins: [],
+    medallas: {},
+    historial: [],
   }
 }
 
@@ -99,6 +112,10 @@ export interface MatchProgress {
 
   xp: XpOutcome
   drop: SkinDrop
+  /** Medallas ganadas EN ESTA partida, por clave. Vacío es lo normal: la
+   *  mayoría de las partidas no saca ninguna, y eso es lo que las hace
+   *  valer algo. */
+  medallas: readonly string[]
 }
 
 export interface CareerResult {
@@ -118,7 +135,11 @@ export interface CareerResult {
  * una partida como cualquier otra en todo lo que no sea el rango, y una
  * derrota de colocación igual tiene que soltar su skin.
  */
-export function applyMatchResult(data: CareerData, perf: MatchPerformance): CareerResult {
+export function applyMatchResult(
+  data: CareerData,
+  perf: MatchPerformance,
+  contexto?: MatchContext,
+): CareerResult {
   const difficulty = careerDifficulty(data)
   const score = combatScore(perf)
   const expected = expectedCombatScore(difficulty)
@@ -148,6 +169,18 @@ export function applyMatchResult(data: CareerData, perf: MatchPerformance): Care
   const drop = rollDrop(partidaNumero, perf, data.skins)
   const skins = drop.nueva ? [...data.skins, drop.skin.seed] : [...data.skins]
 
+  // Medallas e historial corren por las dos ramas, igual que XP y drop: una
+  // colocación es una partida como cualquier otra en todo lo que no sea el
+  // rango, y quedarse INTACTO en la tercera colocación fue igual de real.
+  const medallas = evaluarMedallas(perf)
+  const entrada = crearEntradaHistorial({
+    partida: partidaNumero,
+    perf,
+    rrChange: rrOutcome?.change ?? null,
+    rank: rank?.rank ?? null,
+    contexto,
+  })
+
   return {
     data: {
       rank,
@@ -157,6 +190,8 @@ export function applyMatchResult(data: CareerData, perf: MatchPerformance): Care
       derrotas: data.derrotas + (perf.win ? 0 : 1),
       xp: xp.xp,
       skins,
+      medallas: acumularMedallas(data.medallas, medallas),
+      historial: pushHistorial(data.historial, entrada),
     },
     progress: {
       perf,
@@ -169,6 +204,7 @@ export function applyMatchResult(data: CareerData, perf: MatchPerformance): Care
       seededRank,
       xp,
       drop,
+      medallas,
     },
   }
 }
