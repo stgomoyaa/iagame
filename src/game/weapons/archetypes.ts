@@ -12,6 +12,26 @@ export type WeaponClass = 'smg' | 'ar' | 'sniper' | 'shotgun' | 'lmg' | 'pistol'
 
 export type FireMode = 'auto' | 'semi' | 'burst'
 
+/**
+ * El eje táctico del arsenal (el pedido del dueño): de qué juego "se siente"
+ * un arma al dispararla, independientemente de su modelo o su arquetipo.
+ *
+ * - `cs`: estilo Counter-Strike. Se juega parado y al tap: quieto es
+ *   letalísimo (precisión + más daño por bala), pero MOVERSE dispara la
+ *   dispersión. Las de hierros no tienen ADS (se tira a la cadera); las de
+ *   óptica sí conservan su mira.
+ * - `cod`: estilo Call of Duty. Armas más móviles: ADS normal, mucha menos
+ *   penalización por moverse, a costa de un poco menos de daño por bala.
+ * - `neutral`: sin contraparte real (las 40 CC0). Punto medio deliberado —
+ *   ver EFFECTIVE_ARCHETYPES abajo para el porqué.
+ *
+ * El estilo NO vive en el arquetipo (varias armas de estilos distintos
+ * comparten arquetipo: el AK-47 de CS y el de COD son los dos `ar-1`). Se
+ * resuelve por arma desde su procedencia (weapons/source-catalog.ts:
+ * tacticalStyleForSlug) y se aplica sobre el arquetipo vía EFFECTIVE_ARCHETYPES.
+ */
+export type TacticalStyle = 'cs' | 'cod' | 'neutral'
+
 export type ArchetypeId =
   | 'smg-1'
   | 'smg-2'
@@ -70,6 +90,18 @@ export interface SpreadCurve {
   growthPerShot: number
   /** Radianes por segundo que se recupera la dispersión al soltar el gatillo. */
   recoverySpeed: number
+  /**
+   * Eje táctico CS/COD (el pedido del dueño). Radianes de dispersión que
+   * SUMA moverse, con rampa lineal desde 0 en reposo hasta este tope a la
+   * velocidad de referencia (combat/spread.ts: MOVEMENT_SPREAD_REFERENCE_SPEED
+   * = walkSpeed). Va POR ENCIMA del crecimiento por fuego sostenido y del
+   * patrón: es lo que hace que en estilo CS moverse arruine el tiro y en
+   * estilo COD casi no se note (ver EFFECTIVE_ARCHETYPES: CS lo multiplica,
+   * COD lo reduce). El valor de acá es el NEUTRAL (base, y las CC0); los
+   * estilos lo escalan. No es opcional: cada arquetipo declara el suyo para
+   * que un arma sin estilo (bot / CC0) tenga un valor sano igual.
+   */
+  movementPenalty: number
 }
 
 export interface RecoilSpec {
@@ -424,7 +456,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // Recuperación de índice más rápida que la línea base (ar-1): SMG de
       // control, coherente con recovery=14 (la más alta del roster).
       indexRecoveryTime: 0.34,
-      spread: { base: 0.006, max: 0.03, growthPerShot: 0.004, recoverySpeed: 0.25 },
+      spread: { base: 0.006, max: 0.03, growthPerShot: 0.004, recoverySpeed: 0.25, movementPenalty: 0.033 },
     },
   },
 
@@ -446,7 +478,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       pattern: generateRecoilPattern(202, 25, degToRad(9), degToRad(3), degToRad(0.1)),
       recovery: 11,
       indexRecoveryTime: 0.36,
-      spread: { base: 0.005, max: 0.026, growthPerShot: 0.0035, recoverySpeed: 0.22 },
+      spread: { base: 0.005, max: 0.026, growthPerShot: 0.0035, recoverySpeed: 0.22, movementPenalty: 0.029 },
     },
   },
 
@@ -473,7 +505,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // 600 RPM = 10 disparos/seg — la misma proporción (~7.5x) que CS de
       // verdad, porque ar-1 es literalmente la referencia de ese cálculo.
       indexRecoveryTime: 0.4,
-      spread: { base: 0.004, max: 0.02, growthPerShot: 0.0025, recoverySpeed: 0.18 },
+      spread: { base: 0.004, max: 0.02, growthPerShot: 0.0025, recoverySpeed: 0.18, movementPenalty: 0.022 },
     },
   },
 
@@ -500,7 +532,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       pattern: generateRecoilPattern(404, 3, degToRad(5), degToRad(1.5), degToRad(0.3)),
       recovery: 13,
       indexRecoveryTime: 0.38,
-      spread: { base: 0.003, max: 0.012, growthPerShot: 0.004, recoverySpeed: 0.3 },
+      spread: { base: 0.003, max: 0.012, growthPerShot: 0.004, recoverySpeed: 0.3, movementPenalty: 0.013 },
     },
   },
 
@@ -523,7 +555,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       recovery: 8,
       // Fusil de batalla, más pesado que ar-1: recupera un poco más lento.
       indexRecoveryTime: 0.44,
-      spread: { base: 0.0035, max: 0.017, growthPerShot: 0.002, recoverySpeed: 0.16 },
+      spread: { base: 0.0035, max: 0.017, growthPerShot: 0.002, recoverySpeed: 0.16, movementPenalty: 0.019 },
     },
   },
 
@@ -553,7 +585,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // poco en la práctica — se mantiene snappy (extremo bajo del rango)
       // porque cada tiro ya es un evento discreto, no un spray.
       indexRecoveryTime: 0.32,
-      spread: { base: 0.0005, max: 0.002, growthPerShot: 0.001, recoverySpeed: 0.5 },
+      spread: { base: 0.0005, max: 0.002, growthPerShot: 0.001, recoverySpeed: 0.5, movementPenalty: 0.0022 },
     },
   },
 
@@ -574,7 +606,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       pattern: generateRecoilPattern(606, 10, degToRad(11), degToRad(1), degToRad(0.2)),
       recovery: 6,
       indexRecoveryTime: 0.35,
-      spread: { base: 0.001, max: 0.006, growthPerShot: 0.002, recoverySpeed: 0.4 },
+      spread: { base: 0.001, max: 0.006, growthPerShot: 0.002, recoverySpeed: 0.4, movementPenalty: 0.0066 },
     },
   },
 
@@ -597,7 +629,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       pattern: generateRecoilPattern(808, 6, degToRad(9), degToRad(2.5), degToRad(0.3)),
       recovery: 10,
       indexRecoveryTime: 0.33,
-      spread: { base: 0.02, max: 0.05, growthPerShot: 0.01, recoverySpeed: 0.3 },
+      spread: { base: 0.02, max: 0.05, growthPerShot: 0.01, recoverySpeed: 0.3, movementPenalty: 0.055 },
     },
   },
 
@@ -626,7 +658,7 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // por encima de su cadencia real (700 RPM ≈ 11.7/seg) — más lenta en
       // carácter no significa que sprayar salga gratis.
       indexRecoveryTime: 0.45,
-      spread: { base: 0.005, max: 0.035, growthPerShot: 0.0015, recoverySpeed: 0.1 },
+      spread: { base: 0.005, max: 0.035, growthPerShot: 0.0015, recoverySpeed: 0.1, movementPenalty: 0.0385 },
     },
   },
 
@@ -649,9 +681,139 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // La más rápida del roster: sidearm de toques precisos, un doble tap
       // no puede sentirse penalizado por el disparo anterior.
       indexRecoveryTime: 0.3,
-      spread: { base: 0.006, max: 0.022, growthPerShot: 0.005, recoverySpeed: 0.28 },
+      spread: { base: 0.006, max: 0.022, growthPerShot: 0.005, recoverySpeed: 0.28, movementPenalty: 0.024 },
     },
   },
 }
 
 export const ARCHETYPE_LIST: WeaponArchetype[] = Object.values(ARCHETYPES)
+
+// ===========================================================================
+// EJE TÁCTICO CS / COD (el pedido del dueño)
+// ===========================================================================
+//
+// El estilo (TacticalStyle) modifica un arquetipo en DOS ejes medibles, y se
+// resuelve por arma desde su procedencia (source-catalog.ts), no por
+// arquetipo. Un tercer eje —el ADS— NO vive acá: es puramente de input
+// (game.ts apaga el botón derecho de las CS de hierros vía weaponAllowsAds),
+// no cambia ningún número de este archivo.
+//
+//   1. DAÑO POR BALA. CS pega más fuerte por tiro (compensa la cadencia
+//      efectiva menor del tap); COD pega un poco menos (lo compensa con
+//      movilidad y cadencia). PERO el daño es discreto: el TTK salta por
+//      escalones de ceil(vida/daño), así que un multiplicador plano puede
+//      sacar un arquetipo de la banda calibrada de 300-400 ms (medido: un
+//      -8% saca a la pistola y a la ráfaga de banda; un +8% saca al ar-3).
+//      Por eso el tilt pasa por un GATE: se aplica sólo si el TTK a rango
+//      óptimo QUEDA en la banda; si no, esa arma se queda en daño base. Así
+//      la banda no se rompe nunca (la regla que el dueño pidió no romper en
+//      silencio), a costa de que algunos arquetipos no reciban el tilt —
+//      cuáles, se reporta en el entregable, no se esconde.
+//
+//   2. DISPERSIÓN AL MOVERSE. Es el corazón del eje y lo único que de verdad
+//      "se siente": CS multiplica movementPenalty (moverse arruina el tiro,
+//      quieto y al tap sos letal), COD lo reduce (podés disparar en
+//      movimiento). Parado, los dos estilos son idénticos (misma base, misma
+//      max): el eje vive entero en la columna de movimiento. Ver el campo
+//      SpreadCurve.movementPenalty y combat/spread.ts.
+//
+// Cero asignaciones en caliente: las 3 tablas (una por estilo) se construyen
+// UNA vez al cargar el módulo. game.ts hace un lookup por (arquetipo, estilo),
+// nunca clona un arquetipo por frame.
+
+/** Cuánto más pega por bala el estilo CS (intención; el gate de banda decide
+ *  si se aplica por arquetipo). */
+const CS_DAMAGE_MULT = 1.08
+/** Cuánto menos pega por bala el estilo COD (misma salvedad del gate). */
+const COD_DAMAGE_MULT = 0.92
+
+/** Cuánto ESCALA el estilo CS la penalización de movimiento neutral: moverse
+ *  dispara la dispersión (2.3x sobre el valor base del arquetipo). */
+const CS_MOVEMENT_MULT = 2.3
+/** Cuánto la REDUCE el estilo COD: casi no penaliza moverse (0.32x). */
+const COD_MOVEMENT_MULT = 0.32
+
+/** Vida de referencia para calcular TTK del gate de banda: la misma que usan
+ *  los tests de balance (archetypes.test.ts) y la sección 5 del spec. */
+const BALANCE_HEALTH = 100
+/** Banda calibrada de TTK a rango óptimo, en ms. El dueño la fijó en 300-400
+ *  (los tests base la afirman más laxa, 250-400; se usa la estricta para el
+ *  gate: si el tilt de daño la respeta, respeta las dos). */
+const TTK_BAND_MS: readonly [number, number] = [300, 400]
+
+/**
+ * Daño base con el tilt de estilo YA gateado por la banda de TTK. Devuelve el
+ * candidato (base * mult) sólo si el arma sigue matando dentro de 300-400 ms a
+ * rango óptimo; si no, devuelve el daño base sin tocar. Las armas que ya matan
+ * de un tiro (TTK 0, fuera de banda a propósito: cerrojo y escopeta) tampoco
+ * reciben el tilt — subir/bajar su daño es puro overkill y sólo movería el
+ * piso de caída a distancia, no el TTK, así que se dejan en base para no
+ * arriesgar su calibración.
+ */
+function damageBaseWithinBand(base: WeaponArchetype, candidate: number): number {
+  const baseShots = shotsToKill(base, BALANCE_HEALTH, base.damage.optimalRange)
+  if (baseShots <= 1) return base.damage.base
+  const shots = Math.ceil(BALANCE_HEALTH / candidate)
+  const ttk = (shots - 1) * (60000 / base.fireRate)
+  if (ttk >= TTK_BAND_MS[0] && ttk <= TTK_BAND_MS[1]) return candidate
+  return base.damage.base
+}
+
+/**
+ * Construye la variante de un arquetipo para un estilo. Clona SÓLO lo que
+ * cambia (daño y la curva de dispersión); el patrón de retroceso, el ads, la
+ * recarga, etc. se comparten por referencia — no se tocan (el patrón real de
+ * cada arma se pasa aparte a stepCombat, ver combat/recoil.ts). `neutral`
+ * devuelve el arquetipo base tal cual.
+ */
+function buildStyleVariant(base: WeaponArchetype, style: TacticalStyle): WeaponArchetype {
+  if (style === 'neutral') return base
+  const damageMult = style === 'cs' ? CS_DAMAGE_MULT : COD_DAMAGE_MULT
+  const movementMult = style === 'cs' ? CS_MOVEMENT_MULT : COD_MOVEMENT_MULT
+  return {
+    ...base,
+    damage: {
+      ...base.damage,
+      base: damageBaseWithinBand(base, base.damage.base * damageMult),
+    },
+    recoil: {
+      ...base.recoil,
+      spread: {
+        ...base.recoil.spread,
+        movementPenalty: base.recoil.spread.movementPenalty * movementMult,
+      },
+    },
+  }
+}
+
+function buildStyleTable(style: TacticalStyle): Record<ArchetypeId, WeaponArchetype> {
+  const out = {} as Record<ArchetypeId, WeaponArchetype>
+  for (const id of Object.keys(ARCHETYPES) as ArchetypeId[]) {
+    out[id] = buildStyleVariant(ARCHETYPES[id], style)
+  }
+  return out
+}
+
+/**
+ * Arquetipos ya resueltos por estilo, precomputados al cargar el módulo.
+ *
+ * `neutral` reutiliza las MISMAS referencias que ARCHETYPES: las 40 CC0 caen
+ * acá. Es un punto medio DELIBERADO, no un olvido: una CC0 ("AssaultRifle_2")
+ * no tiene contraparte real de la que heredar un estilo, y meterla a la fuerza
+ * en CS o COD sería inventarle una identidad que el modelo no tiene —
+ * exactamente lo que este proyecto evita. Como el build publicado sólo trae
+ * CC0 (source-catalog.ts: las CS/COD son locales, gitignoreadas), el eje
+ * táctico es una característica de juego LOCAL con el arsenal completo; el
+ * build público queda balanceado contra sí mismo con todo neutral.
+ */
+export const EFFECTIVE_ARCHETYPES: Record<TacticalStyle, Record<ArchetypeId, WeaponArchetype>> = {
+  neutral: ARCHETYPES,
+  cs: buildStyleTable('cs'),
+  cod: buildStyleTable('cod'),
+}
+
+/** Arquetipo efectivo para un (arquetipo, estilo). Lookup puro, cero
+ *  asignaciones: es lo que game.ts llama por frame. */
+export function archetypeForStyle(id: ArchetypeId, style: TacticalStyle): WeaponArchetype {
+  return EFFECTIVE_ARCHETYPES[style][id]
+}

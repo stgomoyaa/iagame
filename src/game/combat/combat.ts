@@ -29,6 +29,7 @@ import {
 import {
   createSpreadState,
   growSpread,
+  movementSpread,
   resetSpread,
   sampleSpread,
   stepSpreadRecovery,
@@ -73,6 +74,15 @@ export interface CombatInput {
   /** Pitch/yaw del JUGADOR (mouse), antes de aplicar retroceso. */
   pitch: number
   yaw: number
+  /**
+   * Velocidad horizontal del jugador este frame (m/s), para la penalización
+   * de dispersión por movimiento del eje CS/COD (combat/spread.ts:
+   * movementSpread). Opcional a propósito: quien no la pasa —los bots, que se
+   * mueven pero eligen por arquetipo neutral, no por estilo— se comporta como
+   * antes (sin penalización, parado a efectos de dispersión). Sólo el jugador,
+   * que sí empuña armas con estilo, la setea (game.ts).
+   */
+  moveSpeed?: number
 }
 
 // Scratch preasignado a nivel de módulo: cero asignaciones por frame/disparo.
@@ -105,10 +115,16 @@ export function stepCombat(
   if (reloadJustCompleted) resetRecoilPattern(state.recoil)
   const shots = stepFireControl(state.fireControl, archetype, input.triggerHeld, input.reloading, dt)
 
+  // Eje táctico CS/COD: dispersión extra por moverse este frame. Constante
+  // dentro del frame (la velocidad no cambia entre disparos del mismo frame),
+  // así que se calcula una sola vez y se suma al muestrear cada tiro. Es un
+  // número en el stack: cero asignaciones.
+  const moveSpread = movementSpread(archetype.recoil.spread, input.moveSpeed ?? 0)
+
   for (let i = 0; i < shots; i++) {
     applyRecoilShot(state.recoil, archetype, recoilPattern)
     growSpread(state.spread, archetype.recoil.spread)
-    sampleSpread(state.spread, scratchSpreadSample)
+    sampleSpread(state.spread, scratchSpreadSample, moveSpread)
     fireShot(
       input.origin,
       applyRecoilToPitch(input.pitch, state.recoil),

@@ -99,6 +99,24 @@ describe('sampleSpread', () => {
     expect(out.dPitch).toBeCloseTo(0, 12)
     expect(out.dYaw).toBeCloseTo(0, 12)
   })
+
+  it('con extraRadius (dispersión por movimiento) el cono crece hasta radius+extra', () => {
+    const state = createSpreadState(CURVE, 99)
+    const out: SpreadSample = { dPitch: 0, dYaw: 0 }
+    const extra = 0.05 // penalización de movimiento estilo CS
+
+    let maxMag = 0
+    for (let i = 0; i < 2000; i++) {
+      sampleSpread(state, out, extra)
+      const mag = Math.hypot(out.dPitch, out.dYaw)
+      // Nunca supera el radio efectivo (base + extra)...
+      expect(mag).toBeLessThanOrEqual(state.radius + extra + 1e-12)
+      maxMag = Math.max(maxMag, mag)
+    }
+    // ...y de verdad usa el radio ampliado: con extra tiene que haber muestras
+    // por encima del radio base solo (si no, extraRadius no estaría entrando).
+    expect(maxMag).toBeGreaterThan(state.radius)
+  })
 })
 
 describe('resetSpread', () => {
