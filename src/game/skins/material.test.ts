@@ -149,4 +149,67 @@ describe('material de skin', () => {
     mesh.material = [new MeshBasicMaterial(), new MeshBasicMaterial()]
     expect(createSkinHandle(mesh)).toBeNull()
   })
+
+  /**
+   * Los tres de acá abajo cubren la dirección INVERSA de la que motivó
+   * `customProgramCacheKey`: que la skin del arma no se derrame sobre un
+   * material del MAPA.
+   *
+   * El reporte original era "equipar una skin verde tiñe las paredes de
+   * nuketown". Medido en el navegador, no pasa: con y sin skin, la zona del
+   * mapa de la captura sale idéntica byte a byte, y three compila un solo
+   * programa con la clave `skin-v1` usado por un solo material. Estos tests
+   * fijan las tres condiciones de las que depende eso, porque ninguna es
+   * evidente leyendo el código:
+   *
+   * 1. Parchar un material no toca ningún otro material equivalente.
+   * 2. La clave de caché de programas de un material sin parchar NO es
+   *    `skin-v1`, así que three no puede darle el programa con el shader de
+   *    skin inyectado (three CONCATENA customProgramCacheKey al resto de los
+   *    parámetros: sólo puede separar programas, nunca fusionarlos).
+   * 3. El material del mapa no queda registrado en el WeakMap de uniforms.
+   */
+  describe('aislamiento contra materiales que no son del arma', () => {
+    /** Un material del mapa importado: unlit, texturizado, SIN vertexColors
+     *  (así salen los 47 materiales de nuketown, ver map-textures.ts). */
+    function materialDeMapa(): MeshBasicMaterial {
+      return new MeshBasicMaterial({ vertexColors: false })
+    }
+
+    it('parchar el arma no toca el material del mapa', () => {
+      const mapa = materialDeMapa()
+      const onBeforeCompileOriginal = mapa.onBeforeCompile
+      const claveOriginal = mapa.customProgramCacheKey()
+
+      const mesh = mallaDeArma()
+      createSkinHandle(mesh)?.setSkin(generateSkin('inicial:4'))
+
+      expect(mapa.onBeforeCompile).toBe(onBeforeCompileOriginal)
+      expect(mapa.customProgramCacheKey()).toBe(claveOriginal)
+    })
+
+    it('un material sin parchar nunca comparte la clave de programa del arma', () => {
+      const mapa = materialDeMapa()
+      const mesh = mallaDeArma()
+      createSkinHandle(mesh)
+
+      const arma = mesh.material as MeshBasicMaterial
+      expect(arma.customProgramCacheKey()).toBe('skin-v1')
+      expect(mapa.customProgramCacheKey()).not.toBe(arma.customProgramCacheKey())
+    })
+
+    it('el shader del mapa no recibe los uniforms de skin', () => {
+      // Si el material del mapa terminara con el código de skin inyectado,
+      // compilar() le dejaría los uSkin* puestos. Que salga vacío es lo que
+      // garantiza que un uniform verde del arma no pueda pintarle la pared.
+      const mapa = materialDeMapa()
+      const mesh = mallaDeArma()
+      createSkinHandle(mesh)?.setSkin(generateSkin('inicial:4'))
+
+      const shaderMapa = compilar(mapa)
+      expect(shaderMapa.uniforms.uSkinEnabled).toBeUndefined()
+      expect(shaderMapa.uniforms.uSkinAccent).toBeUndefined()
+      expect(shaderMapa.fragmentShader).not.toContain('uSkinAccent')
+    })
+  })
 })

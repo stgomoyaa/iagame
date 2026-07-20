@@ -34,6 +34,15 @@ export interface MapaFuenteJson {
   metrosPorUnidad: number
   bounds: { min: Triple; max: Triple }
   spawns: Triple[]
+  /**
+   * Yaw de cada spawn, en radianes y en la convención del motor, paralelo a
+   * `spawns`. Opcional: los JSON que produjo una versión anterior del
+   * conversor no lo traen, y un mapa sin yaws sigue siendo jugable (todos
+   * aparecen mirando a -Z, que es lo que pasaba antes). Se valida el largo
+   * antes de usarlo -- un array desalineado sería peor que ninguno, porque
+   * cada jugador aparecería mirando hacia donde mira otro spawn.
+   */
+  spawnYaws?: number[]
   brushes: BrushJson[]
 }
 
@@ -64,6 +73,15 @@ export function esMapaFuenteJson(v: unknown): v is MapaFuenteJson {
   const o = v as Record<string, unknown>
   if (typeof o.nombre !== 'string') return false
   if (!Array.isArray(o.spawns) || !o.spawns.every(esTriple)) return false
+  // spawnYaws es opcional, pero si viene tiene que estar ALINEADO con
+  // spawns: un largo distinto significa que el conversor y el motor no se
+  // pusieron de acuerdo, y usarlo igual haría aparecer a cada jugador
+  // mirando hacia donde debía mirar otro.
+  if (o.spawnYaws !== undefined) {
+    if (!Array.isArray(o.spawnYaws)) return false
+    if (o.spawnYaws.length !== o.spawns.length) return false
+    if (!o.spawnYaws.every((n: unknown) => typeof n === 'number' && Number.isFinite(n))) return false
+  }
   if (typeof o.bounds !== 'object' || o.bounds === null) return false
   const b = o.bounds as Record<string, unknown>
   if (!esTriple(b.min) || !esTriple(b.max)) return false
@@ -123,15 +141,35 @@ export function spawnsUtilizables(
   convexes: Convex[],
   capsule: Capsule = PLAYER_CAPSULE,
 ): Vec3[] {
-  const out: Vec3[] = []
+  return spawnsUtilizablesConIndice(spawnsCrudos, convexes, capsule).map((u) => u.punto)
+}
+
+/**
+ * Lo mismo que `spawnsUtilizables`, pero conservando de qué spawn CRUDO
+ * salió cada punto que sobrevivió.
+ *
+ * Existe porque los yaws (`spawnYaws`) viajan en un array paralelo a los
+ * spawns crudos, y este filtro descarta algunos: quedarse sólo con los
+ * puntos y después indexar los yaws por la posición en la lista YA filtrada
+ * desalinea las dos listas en silencio, y el síntoma -- gente apareciendo
+ * mirando hacia donde debía mirar otro spawn -- es exactamente el tipo de
+ * bug que nadie atribuye al filtro.
+ */
+export function spawnsUtilizablesConIndice(
+  spawnsCrudos: readonly Triple[],
+  convexes: Convex[],
+  capsule: Capsule = PLAYER_CAPSULE,
+): Array<{ punto: Vec3; indice: number }> {
+  const out: Array<{ punto: Vec3; indice: number }> = []
   const sonda = vec3()
-  for (const s of spawnsCrudos) {
+  for (let i = 0; i < spawnsCrudos.length; i++) {
+    const s = spawnsCrudos[i]
     for (const dy of RESCATES_Y) {
       sonda.x = s[0]
       sonda.y = s[1] + dy
       sonda.z = s[2]
       if (!chocaAlgo(sonda, convexes, capsule)) {
-        out.push(vec3(sonda.x, sonda.y, sonda.z))
+        out.push({ punto: vec3(sonda.x, sonda.y, sonda.z), indice: i })
         break
       }
     }
@@ -152,19 +190,29 @@ export function spawnsUtilizables(
  */
 export function mapDefDesdeJson(json: MapaFuenteJson, nombre: string): MapDef {
   const convexes = convexesDesdeJson(json)
-  const utilizables = spawnsUtilizables(json.spawns, convexes)
+  const utilizables = spawnsUtilizablesConIndice(json.spawns, convexes)
   // Si NINGUNO sobrevive, se usan los crudos igual: un jugador que arranca
   // atascado se destraba respawneando, una lista de spawns vacía es un
   // `spawns[0]` undefined y una pantalla negra. Falla del lado de que el
   // mapa siga siendo jugable.
-  const spawns = utilizables.length > 0
-    ? utilizables
-    : json.spawns.map((s) => vec3(s[0], s[1], s[2]))
+  const usarCrudos = utilizables.length === 0
+  const spawns = usarCrudos
+    ? json.spawns.map((s) => vec3(s[0], s[1], s[2]))
+    : utilizables.map((u) => u.punto)
+  // Los yaws se reindexan por el spawn CRUDO del que salió cada punto, no
+  // por su posición en la lista filtrada (ver spawnsUtilizablesConIndice).
+  const yawsCrudos = json.spawnYaws
+  const spawnYaws = yawsCrudos === undefined
+    ? undefined
+    : usarCrudos
+      ? [...yawsCrudos]
+      : utilizables.map((u) => yawsCrudos[u.indice])
   return {
     name: nombre,
     boxes: [],
     convexes,
     spawns,
+    spawnYaws,
     bounds: {
       min: vec3(json.bounds.min[0], json.bounds.min[1], json.bounds.min[2]),
       max: vec3(json.bounds.max[0], json.bounds.max[1], json.bounds.max[2]),

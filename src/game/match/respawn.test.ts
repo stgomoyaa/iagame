@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { invulnerabilityExpiresAt, isInvulnerable, pickFarthestSpawn } from '@/game/match/respawn'
+import {
+  invulnerabilityExpiresAt,
+  isInvulnerable,
+  pickFarthestSpawn,
+  spreadInitialSpawns,
+} from '@/game/match/respawn'
 import { vec3 } from '@/game/math/vec3'
 
 describe('selección de spawn', () => {
@@ -66,5 +71,94 @@ describe('ventana de invulnerabilidad', () => {
     const expiresAt = invulnerabilityExpiresAt(10, 1.5)
     expect(isInvulnerable(expiresAt, 11.5)).toBe(false)
     expect(isInvulnerable(expiresAt, 20)).toBe(false)
+  })
+})
+
+/**
+ * Los spawns de nuketown, en forma: 32 puntos en DOS racimos de 16, cada
+ * racimo de ~5 x 12 m, separados 61 m. Es la forma que tiene cualquier mapa
+ * de Source portado -- el mapper los agrupa por bando -- y es exactamente
+ * la que rompía el reparto secuencial.
+ *
+ * Sintético a propósito y no el nuketown real: los archivos del mapa
+ * derivan del Steam Workshop y no viven en el repo (docs/WORKSHOP.md), y un
+ * test que se saltea cuando falta un archivo no es un test. Las medidas
+ * salen de haber medido el mapa real.
+ */
+function spawnsEnDosRacimos(): ReturnType<typeof vec3>[] {
+  const out: ReturnType<typeof vec3>[] = []
+  for (const baseX of [40, -21]) {
+    for (let i = 0; i < 16; i++) {
+      out.push(vec3(baseX + (i % 4) * 1.6, -1.18, -0.3 - Math.floor(i / 4) * 4))
+    }
+  }
+  return out
+}
+
+function separacionMinima(spawns: ReturnType<typeof vec3>[], plan: number[]): number {
+  let peor = Infinity
+  for (let i = 0; i < plan.length; i++) {
+    for (let j = i + 1; j < plan.length; j++) {
+      const a = spawns[plan[i]]
+      const b = spawns[plan[j]]
+      const d = Math.hypot(a.x - b.x, a.z - b.z)
+      if (d < peor) peor = d
+    }
+  }
+  return peor
+}
+
+describe('reparto de spawns al arrancar la partida', () => {
+  it('separa a los participantes en vez de amontonarlos en el primer racimo', () => {
+    // El bug medido: repartir en el orden del mapa (0,1,2,...) dejaba a
+    // cuatro de los cinco bots a menos de 5 m del jugador, porque los
+    // primeros 16 spawns de nuketown son todos de la misma casa.
+    const spawns = spawnsEnDosRacimos()
+    const secuencial = [0, 1, 2, 3, 4, 5]
+    const plan = spreadInitialSpawns(spawns, 6)
+
+    // Umbrales medidos sobre el nuketown real, no elegidos a ojo: con 5
+    // bots la separación mínima pasa de 1.72 m a 5.45 m, y la distancia del
+    // jugador al enemigo más cercano de 2.44 m a 5.45 m. El racimo es
+    // genuinamente chico (5 x 12 m), así que el techo no es "medio mapa":
+    // lo que se arregla es que nadie arranque a distancia de escopeta.
+    expect(separacionMinima(spawns, secuencial)).toBeLessThan(5)
+    expect(separacionMinima(spawns, plan)).toBeGreaterThan(6)
+    expect(separacionMinima(spawns, plan)).toBeGreaterThan(
+      separacionMinima(spawns, secuencial) * 3,
+    )
+  })
+
+  it('alterna entre los dos racimos', () => {
+    // Con dos grupos separados 61 m, maximin tiene que ir y volver: si el
+    // plan se quedara en un solo racimo, el segundo quedaría vacío.
+    const spawns = spawnsEnDosRacimos()
+    const plan = spreadInitialSpawns(spawns, 4)
+    const racimos = plan.map((i) => (spawns[i].x > 0 ? 'A' : 'B'))
+    expect(new Set(racimos).size).toBe(2)
+  })
+
+  it('da un índice por participante, sin repetir mientras alcancen los spawns', () => {
+    const spawns = spawnsEnDosRacimos()
+    const plan = spreadInitialSpawns(spawns, 8)
+    expect(plan).toHaveLength(8)
+    expect(new Set(plan).size).toBe(8)
+  })
+
+  it('el primer participante (el jugador) va al spawn 0, determinista', () => {
+    const spawns = spawnsEnDosRacimos()
+    expect(spreadInitialSpawns(spawns, 5)[0]).toBe(0)
+    expect(spreadInitialSpawns(spawns, 5)).toEqual(spreadInitialSpawns(spawns, 5))
+  })
+
+  it('con más participantes que spawns recicla en vez de dejar a alguien sin posición', () => {
+    const spawns = [vec3(0, 0, 0), vec3(10, 0, 0)]
+    const plan = spreadInitialSpawns(spawns, 5)
+    expect(plan).toHaveLength(5)
+    expect(plan.every((i) => i >= 0 && i < spawns.length)).toBe(true)
+  })
+
+  it('un mapa sin spawns devuelve un plan vacío en vez de romper', () => {
+    expect(spreadInitialSpawns([], 4)).toEqual([])
   })
 })
