@@ -173,6 +173,39 @@ export interface BotsTuning {
    *  invierte el sentido. Es lo que evita que buscar ángulo termine en
    *  "salir a campo abierto". */
   engageStrafeCoverSlackM: number
+  /**
+   * Radio de "espacio personal" de un bot, metros: por debajo de esto, otro
+   * participante vivo cuenta como estorbo y el bot se corre.
+   *
+   * Es el número central de la tarea de amontonamiento. Medido en nuketown
+   * con 8 bots, la distancia mínima entre bots vivos daba 2.71 m de mediana
+   * contra los 18.2 m que saldrían de repartirlos parejo, y el 51% de las
+   * muestras tenían dos bots a menos de 3 m. La causa no era la reaparición
+   * (eso ya se arregló) sino que Enfrentar hace `clearPath`: un bot en
+   * combate deja de navegar y su único movimiento es un strafe atado a
+   * `engageStrafeRadiusM` del punto donde entró en el estado. Dos bots que
+   * se cruzan quedan clavados juntos todo el tiroteo.
+   *
+   * Por qué 4 y no 18: separarlos "parejo" mata el combate -- ya pasó en
+   * este proyecto (partida de 6 min con 1 kill). Este término es de CORTO
+   * alcance a propósito: no reparte bots por el mapa, sólo impide que dos
+   * cuerpos ocupen el mismo metro cuadrado. Apenas el bot recupera su
+   * espacio el término se apaga solo, así que no cambia en nada la
+   * probabilidad de que dos bots se encuentren, que es lo que gobierna los
+   * kills y el mayor silencio.
+   */
+  personalSpaceM: number
+  /**
+   * Cuánto pesa el espacio personal al elegir a dónde reposicionarse.
+   * Topeado por construcción (el término vale como mucho
+   * personalSpaceM * este peso), y muy por debajo del 1000 con que
+   * Reposicionar premia romper la línea de vista: separarse es un
+   * desempate entre destinos parecidos, nunca una razón para elegir un
+   * destino tácticamente peor. Mismo criterio que el término de
+   * compañeros de match/respawn.ts, que arrancó demasiado fuerte y hubo
+   * que bajarlo midiendo.
+   */
+  personalSpaceRepositionWeight: number
   /** Altura mínima, metros, para que una caja del mapa cuente como cobertura
    *  al evaluar un strafe (bots/cover.ts). */
   coverMinHeightM: number
@@ -290,6 +323,8 @@ export const BOTS: BotsTuning = {
   engageStrafeCoverSlackM: 1.0,
   // 1.0m = la cobertura BAJA de la arena (map/arena.ts LOW). Por debajo de
   // eso no tapa a nadie ni agachado.
+  personalSpaceM: 4.0,
+  personalSpaceRepositionWeight: 3.0,
   coverMinHeightM: 1.0,
 
   stuckSpeedThreshold: 0.6,

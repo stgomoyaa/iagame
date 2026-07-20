@@ -739,3 +739,103 @@ describe('acorralado: en Retirarse, con el enemigo encima, pelea en vez de morir
     expect(Math.abs(bot.aimTargetYaw - haciaElEnemigo.yaw)).toBeLessThan(0.35)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Espacio personal: un bot en Enfrentar no se queda clavado encima de otro.
+//
+// Es el arreglo del amontonamiento medido en nuketown (mediana de distancia
+// mínima entre bots vivos: 2.71 m, con el 51% de las muestras por debajo de
+// 3 m). La causa era que Enfrentar hace `clearPath` y ata el strafe a
+// `engageStrafeRadiusM` del punto donde el bot entró en el estado: dos bots
+// que se cruzan quedan pegados todo el tiroteo.
+// ---------------------------------------------------------------------------
+
+describe('espacio personal de los bots', () => {
+  function duelistaConVecino(vecinoX: number, vecinoZ: number) {
+    const grid = buildNavGrid(ARENA, 1, 1.8)
+    const world = createBotWorld(ARENA.boxes, raycastMap, grid)
+    const bot = createBotState(vec3(-16, 0.1, 6), 0.5, ARCHETYPE, 51)
+    bot.aimMotor.yaw = 0
+    world.targetEye.x = -16
+    world.targetEye.y = 1.6
+    world.targetEye.z = -6
+    world.neighbourPos.x = vecinoX
+    world.neighbourPos.y = 0.1
+    world.neighbourPos.z = vecinoZ
+    return { world, bot }
+  }
+
+  function distanciaAlVecino(bot: ReturnType<typeof createBotState>, world: BotWorld): number {
+    return Math.hypot(
+      bot.player.position.x - world.neighbourPos.x,
+      bot.player.position.z - world.neighbourPos.z,
+    )
+  }
+
+  it('en Enfrentar se despega de un vecino encima, más allá de la correa del ancla', () => {
+    // Vecino exactamente donde arranca el bot: el caso peor de la captura.
+    const { world, bot } = duelistaConVecino(-16, 6)
+
+    for (let tick = 0; tick < 900; tick++) {
+      world.simTimeS += TICK_DT
+      // Lo que hace match/squad.ts cada tick de IA.
+      world.neighbourDistM = distanciaAlVecino(bot, world)
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+    }
+
+    expect(bot.fsm.current).toBe('engage')
+    const d = distanciaAlVecino(bot, world)
+    // Estrictamente mayor que la correa del ancla: sin el re-centrado del
+    // ancla esta distancia es imposible de alcanzar, porque el bot no puede
+    // alejarse más de engageStrafeRadiusM del punto donde entró en
+    // Enfrentar -- que en esta prueba es justo donde está el vecino.
+    expect(d, `se quedó a ${d.toFixed(2)}m del vecino`).toBeGreaterThan(BOTS.engageStrafeRadiusM)
+  })
+
+  it('recuperado el espacio, el término se apaga y el bot deja de emigrar', () => {
+    const { world, bot } = duelistaConVecino(-16, 6)
+
+    for (let tick = 0; tick < 900; tick++) {
+      world.simTimeS += TICK_DT
+      world.neighbourDistM = distanciaAlVecino(bot, world)
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+    }
+    const trasDespegarse = distanciaAlVecino(bot, world)
+
+    for (let tick = 0; tick < 900; tick++) {
+      world.simTimeS += TICK_DT
+      world.neighbourDistM = distanciaAlVecino(bot, world)
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+    }
+    const alFinal = distanciaAlVecino(bot, world)
+
+    // No es una licencia para cruzar el mapa: una vez fuera del radio, el
+    // ancla vuelve a quedar fija y el bot baila alrededor de ella.
+    expect(alFinal - trasDespegarse, `siguió emigrando ${(alFinal - trasDespegarse).toFixed(2)}m`).toBeLessThan(
+      BOTS.engageStrafeRadiusM + BOTS.engageStrafeProbeM + 1,
+    )
+  })
+
+  it('sin vecino (Infinity, el valor por defecto) el comportamiento es el de antes', () => {
+    const { world, bot } = duelistaConVecino(-16, 6)
+    // createBotWorld deja neighbourDistM en Infinity y ningún llamador de
+    // bots/ lo toca: los mapas de código y las pruebas viejas tienen que
+    // seguir viendo exactamente el strafe atado al ancla.
+    expect(world.neighbourDistM).toBe(Infinity)
+
+    for (let tick = 0; tick < 900; tick++) {
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+      if (bot.fsm.current !== 'engage') continue
+      const d = Math.hypot(
+        bot.player.position.x - bot.strafeAnchor.x,
+        bot.player.position.z - bot.strafeAnchor.z,
+      )
+      expect(d).toBeLessThan(BOTS.engageStrafeRadiusM + BOTS.engageStrafeProbeM + 1)
+    }
+  })
+})

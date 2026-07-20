@@ -135,6 +135,23 @@ export interface BotWorld {
   reachable: Uint8Array
   /** Posición de los ojos del objetivo (jugador), mundo. */
   targetEye: Vec3
+  /**
+   * Participante vivo más cercano a ESTE bot, sin mirar equipos, y su
+   * distancia XZ (Infinity = está solo). Lo reescribe el llamador antes de
+   * cada `stepBotThink`, igual que `targetEye` (ver match/squad.ts).
+   *
+   * Es percepción de bulto, no información privilegiada: saber que hay un
+   * cuerpo a un metro y medio es lo único que un jugador NO puede dejar de
+   * notar. No dice quién es, ni si es enemigo, ni hacia dónde mira -- sólo
+   * dónde está el estorbo. Quien decide a quién dispararle sigue siendo
+   * `targetEye` + `canSee`.
+   *
+   * Por defecto queda en Infinity, así que cualquier llamador que no lo
+   * mantenga (stepAllBotsThink, las pruebas del mundo sintético) obtiene
+   * exactamente el comportamiento previo a esta tarea.
+   */
+  neighbourPos: Vec3
+  neighbourDistM: number
   /** Reloj acumulado de simulación, segundos -- crece monótono, nunca se
    *  reinicia (a diferencia de dt): lo usan el escaneo de Idle y el registro
    *  de disparos para saber "cuánto hace". */
@@ -158,6 +175,8 @@ export function createBotWorld(
     patrol: buildPatrolGraph(grid),
     reachable: buildMainComponentMask(grid),
     targetEye: vec3(),
+    neighbourPos: vec3(),
+    neighbourDistM: Infinity,
     simTimeS: 0,
     shots: createGunshotRegistry(),
   }
@@ -466,6 +485,28 @@ function distanceXZ(ax: number, az: number, bx: number, bz: number): number {
 }
 
 /**
+ * Castigo (<= 0) por elegir un destino que cae adentro del espacio personal
+ * del vecino más cercano. 0 si el candidato ya está lo bastante lejos, o si
+ * el bot está solo.
+ *
+ * Existe porque Enfrentar no es el único estado que amontona: medido en
+ * nuketown, los pares de bots a menos de 3 m eran sobre todo `engage+engage`
+ * y `reposition+reposition`. Reposicionar SÍ navega, pero puntúa candidatos
+ * mirando sólo la línea de vista hacia el objetivo -- y dos bots que huyen
+ * de la misma línea de vista eligen la misma esquina.
+ *
+ * Topeado por construcción y muy por debajo del 1000 de "rompe la línea de
+ * vista": desempata entre esquinas equivalentes, nunca convence a un bot de
+ * quedarse expuesto con tal de separarse.
+ */
+function separationScore(world: BotWorld, x: number, z: number): number {
+  if (!(world.neighbourDistM < Infinity)) return 0
+  const d = distanceXZ(x, z, world.neighbourPos.x, world.neighbourPos.z)
+  if (d >= BOTS.personalSpaceM) return 0
+  return (d - BOTS.personalSpaceM) * BOTS.personalSpaceRepositionWeight
+}
+
+/**
  * Elige a dónde va un bot que está en Idle y ya llegó (o nunca tuvo) su
  * destino anterior. Este es el arreglo central de esta tarea: antes, Idle no
  * pedía ningún camino y el bot se quedaba clavado donde perdió el contacto,
@@ -590,8 +631,42 @@ function canStrafeTowards(bot: BotState, world: BotWorld, dir: number): boolean 
  * lado sirve, el sentido queda en 0 y el bot dispara plantado -- estar
  * arrinconado contra cobertura es una razón legítima para no moverse.
  */
+/**
+ * Sentido de strafe (-1 izquierda, +1 derecha, 0 = ninguno) que ALEJA al bot
+ * del participante vivo más cercano, o 0 si nadie le está encima.
+ *
+ * El eje "derecha" de mundo del bot con su yaw actual es (cos, -sin) -- el
+ * mismo que usa `canStrafeTowards` para proyectar el paso de prueba, y tiene
+ * que seguir siéndolo: si los dos se desincronizan, el bot elige el sentido
+ * que lo mete MÁS adentro del racimo. Proyectando el vector
+ * (bot - vecino) sobre ese eje, el signo dice para qué lado hay que irse.
+ */
+function separationStrafeDir(bot: BotState, world: BotWorld): number {
+  if (!(world.neighbourDistM < BOTS.personalSpaceM)) return 0
+  const s = Math.sin(bot.aimMotor.yaw)
+  const c = Math.cos(bot.aimMotor.yaw)
+  const dx = bot.player.position.x - world.neighbourPos.x
+  const dz = bot.player.position.z - world.neighbourPos.z
+  const proyeccion = dx * c - dz * s
+  // Empate exacto (dos cuerpos en el mismo punto, o separación puramente
+  // frontal): +1 y no 0 -- moverse para cualquier lado deshace el racimo,
+  // quedarse quieto no.
+  return proyeccion >= 0 ? 1 : -1
+}
+
 function updateEngageStrafe(bot: BotState, world: BotWorld, dt: number): void {
   bot.strafeHoldS += dt
+
+  // El espacio personal manda sobre el temporizador de sostén: si hay otro
+  // cuerpo adentro del radio, el sentido lo decide separarse, y se decide
+  // AHORA. El sostén existe para que un bot arrinconado no vibre; un bot
+  // encimado no está arrinconado, está estorbando.
+  const escape = separationStrafeDir(bot, world)
+  if (escape !== 0 && canStrafeTowards(bot, world, escape)) {
+    bot.strafeDir = escape
+    bot.strafeHoldS = 0
+    return
+  }
 
   if (bot.strafeDir !== 0 && canStrafeTowards(bot, world, bot.strafeDir)) {
     if (bot.strafeHoldS < BOTS.engageStrafeHoldS) return
@@ -749,6 +824,25 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
         bot.strafeHoldS = BOTS.engageStrafeHoldS
         bot.strafeDir = 0
       }
+      // Mientras haya otro cuerpo adentro del espacio personal, el ancla se
+      // re-centra en donde está el bot AHORA. Sin esto el arreglo no sirve
+      // de nada: Enfrentar hace clearPath, así que el strafe es el único
+      // movimiento que le queda al bot, y `canStrafeTowards` lo corta en
+      // cuanto se aleja engageStrafeRadiusM del ancla. Esa correa es
+      // exactamente lo que ata a dos bots al pedazo de suelo donde se
+      // encontraron.
+      //
+      // No es una licencia para emigrar: se apaga sola en cuanto el vecino
+      // sale del radio, así que el bot se corre lo justo para despegarse y
+      // vuelve a bailar alrededor de su nueva posición. El "buscar ángulo es
+      // bailar alrededor de una posición, no emigrar" de canStrafeTowards
+      // sigue valiendo -- lo que cambia es cuál es esa posición cuando
+      // alguien te la está ocupando.
+      if (world.neighbourDistM < BOTS.personalSpaceM) {
+        bot.strafeAnchor.x = bot.player.position.x
+        bot.strafeAnchor.y = bot.player.position.y
+        bot.strafeAnchor.z = bot.player.position.z
+      }
       updateEngageStrafe(bot, world, dt)
       break
     }
@@ -759,7 +853,11 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
         const targetY = bot.lastKnownTargetPos.y
         const goalCell = pickCandidateCell(bot, world, (x, y, z) => {
           const breaksLos = !hasLineOfSightBetween(world.raycastMap, x, y, z, targetX, targetY, targetZ)
-          return (breaksLos ? 1000 : 0) - distanceXZ(x, z, bot.player.position.x, bot.player.position.z)
+          return (
+            (breaksLos ? 1000 : 0) -
+            distanceXZ(x, z, bot.player.position.x, bot.player.position.z) +
+            separationScore(world, x, z)
+          )
         })
         requestPathTo(bot, world, goalCell)
       }
