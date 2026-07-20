@@ -145,6 +145,18 @@ function main(): void {
     console.error('--viewmodel y --cod son excluyentes')
     process.exit(2)
   }
+  // `--melee` marca que lo que entra es un cuchillo: el `v_knife_*` trae
+  // `@idle @draw @stab @midslash1 @midslash2` y NINGUNA recarga, así que el
+  // guard de "todo viewmodel tiene recarga" lo rechaza con razón. El flag
+  // levanta ESE guard y sólo ese, y a cambio exige un clip de ataque (ver
+  // vmdl-to-glb.py): un cuchillo sin recarga es correcto, uno sin ataque no.
+  // Va por flag y no por heurística sobre el nombre del archivo para que la
+  // excepción sea siempre una decisión de quien corre la conversión.
+  const melee = args.includes('--melee')
+  if (melee && !viewmodel) {
+    console.error('--melee sólo aplica con --viewmodel')
+    process.exit(2)
+  }
   const prefijo = viewmodel ? 'v_' : cod ? 'c_' : 'w_'
   const script = viewmodel ? SCRIPT_VIEWMODEL : SCRIPT_MUNDO
   const solo = valorDeFlag(args, '--solo')?.split(',').map((s) => s.trim())
@@ -171,6 +183,9 @@ function main(): void {
     // bodygroup y el filtro no tendría nada que hacer, así que ni se manda:
     // `keep` ausente deja el filtro apagado del lado de Blender.
     ...(cod ? { keep: chooseBodygroupModels(readBodyparts(resolve(mdl))) } : {}),
+    // Ausente = false del lado de Blender (`trabajo.get("melee", False)`), o
+    // sea que las 39 armas de fuego siguen pasando por el guard de recarga.
+    ...(melee ? { melee: true } : {}),
   }))
 
   const archivoTrabajos = join(mkdtempSync(join(tmpdir(), 'mdl2glb-')), 'trabajos.json')

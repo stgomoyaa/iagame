@@ -92,6 +92,24 @@ FPS_ESCENA = 30.0
 # los dos que conserva el bodypart.
 PATRON_BRAZOS = re.compile(r"_arms_", re.IGNORECASE)
 
+# Fallback por MATERIAL, para los modelos que no separan los brazos en un
+# bodypart. No es un caso hipotético: `v_knife_t.mdl` (los cuchillos de
+# GameBanana) trae UN solo bodypart `studio` con un solo `ref.smd` adentro que
+# fusiona hoja, manos y mangas, así que PATRON_BRAZOS no encuentra nada y las
+# 22.484 caras caen enteras en `weapon_body`.
+#
+# Eso importa porque `weapon_body` es la malla a la que el runtime le engancha
+# el camuflaje: con los brazos adentro, la skin del cuchillo pintaría también
+# los guantes. La única costura que queda en ese modelo es el MATERIAL --el
+# .smd usa uno para la hoja y otros para manga y piel-- así que se clasifica
+# por ahí.
+#
+# Va como FALLBACK y no como criterio principal a propósito: para las 39 armas
+# de fuego el bodypart ya funciona y es más confiable (un arma puede tener un
+# material llamado "hand_grip" en la empuñadura y no es un brazo). Sólo se
+# consulta cuando el bodypart no separó nada.
+PATRON_BRAZOS_MATERIAL = re.compile(r"sleeve|arm|hand|glove|skin", re.IGNORECASE)
+
 # Secuencias que el runtime reproduce, en orden de prioridad de match. La
 # clave es el nombre canónico de salida; el valor es la lista de patrones que
 # se prueban EN ORDEN sobre el nombre crudo (ya sin el `@` que Source le
@@ -111,7 +129,27 @@ SECUENCIAS = {
     "reload": [r"^start_reload$", r"^(\w+_)?reload$", r"reload"],
     "draw": [r"^(\w+_)?draw$", r"draw"],
     "idle": [r"^(\w+_)?idle$", r"idle$"],
-    "fire": [r"^(\w+_)?fire1$", r"^(\w+_)?fire$", r"^shoot1$", r"fire"],
+    # Los tres últimos son de CUERPO A CUERPO y van AL FINAL a propósito: un
+    # arma de fuego nunca los engancha (ningún `.mdl` de los 42 tiene "slash"
+    # ni "stab" en el nombre de una secuencia), así que agregarlos no puede
+    # cambiar qué clip elige ninguna de las 39 que ya funcionan.
+    #
+    # `midslash1` va antes que `stab` porque en el `v_knife_*` de Source el
+    # ataque PRIMARIO (click izquierdo) es el tajo y el secundario (click
+    # derecho) es la puñalada. `fire` es el clip que el runtime dispara al
+    # atacar, así que le corresponde el tajo. Los `@stab_miss` y `@stab_miss2`
+    # (el mismo gesto sin impacto) quedan afuera por el ANCLA `$` de estos
+    # patrones, no por PATRON_EXCLUIDO: si acá se aflojara el ancla, el laxo
+    # engancharía el "miss" y el cuchillo atacaría con la animación de fallar.
+    "fire": [
+        r"^(\w+_)?fire1$",
+        r"^(\w+_)?fire$",
+        r"^shoot1$",
+        r"fire",
+        r"^midslash1$",
+        r"^(\w+_)?slash1?$",
+        r"^stab$",
+    ],
 }
 
 # Secuencias que nunca entran, pase lo que pase. `lookat*` son las más caras
@@ -421,6 +459,38 @@ def _unir_grupo(objetos: list, nombre: str):
     return resultado
 
 
+def _material_de(obj) -> str:
+    """Nombre del material que usa la malla, leído de su primera cara.
+
+    Se lee de la CARA y no de `data.materials[0]` porque `separate(MATERIAL)`
+    conserva todos los slots en cada pedazo y sólo cambia a cuál apunta cada
+    cara: mirar el slot 0 devolvería el mismo material para todos los pedazos.
+    """
+    if not obj.data.materials or not obj.data.polygons:
+        return ""
+    indice = obj.data.polygons[0].material_index
+    material = obj.data.materials[indice] if indice < len(obj.data.materials) else None
+    return material.name if material else ""
+
+
+def _separar_por_material(mallas: list) -> list:
+    """Parte cada malla en una por material. Las de un solo material pasan igual."""
+    salida = []
+    for obj in mallas:
+        if len(obj.data.materials) <= 1:
+            salida.append(obj)
+            continue
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.separate(type="MATERIAL")
+        bpy.ops.object.mode_set(mode="OBJECT")
+        # `separate` deja seleccionados el original y los pedazos nuevos.
+        salida.extend([o for o in bpy.context.selected_objects if o.type == "MESH"])
+    return salida
+
+
 def unir_por_parte() -> dict:
     """Une las mallas en `weapon_body` y `weapon_arms`.
 
@@ -432,6 +502,17 @@ def unir_por_parte() -> dict:
     """
     mallas = [o for o in bpy.data.objects if o.type == "MESH"]
     brazos = [o for o in mallas if PATRON_BRAZOS.search(o.data.name)]
+
+    # Fallback por material (ver PATRON_BRAZOS_MATERIAL): sólo si el bodypart
+    # no separó NADA. Se parte por material y se reclasifica; si aún así no
+    # aparece ningún brazo, se sigue con todo como cuerpo, que es exactamente
+    # lo que hacía antes este código. O sea: no puede empeorar ningún caso que
+    # hoy funcione, sólo agrega separación donde no había ninguna.
+    if not brazos:
+        piezas = _separar_por_material(mallas)
+        brazos = [o for o in piezas if PATRON_BRAZOS_MATERIAL.search(_material_de(o))]
+        mallas = piezas
+
     cuerpos = [o for o in mallas if o not in brazos]
 
     if not cuerpos:
@@ -446,7 +527,7 @@ def unir_por_parte() -> dict:
     }
 
 
-def convertir(mdl_path: str, out: str) -> dict:
+def convertir(mdl_path: str, out: str, melee: bool = False) -> dict:
     from SourceIO.library.models.mdl.v49.mdl_file import MdlV49
     from SourceIO.library.utils import FileBuffer
 
@@ -482,11 +563,27 @@ def convertir(mdl_path: str, out: str) -> dict:
     rescatados = rescatar_materiales_sin_textura(os.path.join(raiz_pack, "materials"))
 
     clips = importar_animaciones(arm, mdl)
-    if not any(c["clip"] == "reload" for c in clips):
+    if not melee and not any(c["clip"] == "reload" for c in clips):
         # Falla fuerte: un viewmodel sin recarga no cumple el único motivo por
         # el que se trae. Mejor enterarse acá que en pantalla.
+        #
+        # La excepción es el CUERPO A CUERPO, y es una excepción real, no una
+        # forma de apagar el guard cuando molesta: un cuchillo no recarga, así
+        # que exigirle recarga es pedirle un clip que el archivo no puede
+        # tener. `v_knife_t.mdl` trae `@idle @draw @stab @midslash1 @midslash2`
+        # y ninguna recarga, y eso es correcto, no un modelo incompleto.
+        #
+        # Sigue siendo opt-in POR TRABAJO (`"melee": true`) y no un `try`
+        # alrededor: para las 39 armas de fuego el guard queda igual de duro, y
+        # un `v_` de fusil al que se le perdió la recarga sigue fallando acá.
         raise RuntimeError(
             f"no se encontró recarga entre {[a.name for a in mdl.anim_descs]}"
+        )
+    if melee and not any(c["clip"] == "fire" for c in clips):
+        # El equivalente melee del guard de arriba: si un cuchillo entra sin
+        # clip de ataque, queda un arma que no hace nada al hacer click.
+        raise RuntimeError(
+            f"melee sin clip de ataque entre {[a.name for a in mdl.anim_descs]}"
         )
 
     piezas = unir_por_parte()
@@ -543,7 +640,9 @@ def main() -> None:
     resultados = []
     for trabajo in trabajos:
         try:
-            resultados.append(convertir(trabajo["mdl"], trabajo["out"]))
+            resultados.append(
+                convertir(trabajo["mdl"], trabajo["out"], trabajo.get("melee", False))
+            )
         except Exception as e:
             traceback.print_exc()
             resultados.append({"mdl": trabajo["mdl"], "ok": False, "error": str(e)})

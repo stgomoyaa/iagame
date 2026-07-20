@@ -61,6 +61,16 @@ const PUEDEN_USAR_THREE = [
   // que no se pueden hacer sin three real. Mismo criterio que map/mesh.ts.
   // Es la ÚNICA entrada nueva que suma esta tarea a la lista.
   'map/external-map.ts',
+  // Injerto de brazos: cuelga la malla de un arma de COD del esqueleto de un
+  // donante de CS. Eso es manipulación de grafo de escena y de skinning --
+  // SkinnedMesh, Skeleton, boneInverses, Box3 y Matrix4-- que no tiene versión
+  // "pura": el dato de entrada ES el objeto de three que devolvió el loader.
+  // Lo que SÍ quedó fuera de acá es la decisión de qué donante le toca a cada
+  // arquetipo, que es una tabla de datos y se testea sin three.
+  // Va separado de weapons/viewmodel/renderer.ts (que ya estaba) por el mismo
+  // criterio que separó lighting.ts: es una pieza distinta y se lee mejor sola.
+  // Única entrada NUEVA que suma esta tarea a la lista.
+  'weapons/viewmodel/graft.ts',
 ]
 
 function archivosTs(dir: string, base = ''): string[] {
