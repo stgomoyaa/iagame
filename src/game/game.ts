@@ -28,7 +28,8 @@ import { createBotsRenderer } from '@/game/bots/renderer'
 import { BOTS } from '@/game/bots/tuning'
 import { raycastMap, setRaycastMap } from '@/game/combat/hitscan'
 import type { Hitbox } from '@/game/combat/hitboxes'
-import { ARCHETYPES, type ArchetypeId } from '@/game/weapons/archetypes'
+import { archetypeForStyle, ARCHETYPES, type ArchetypeId } from '@/game/weapons/archetypes'
+import { tacticalStyleForSlug, weaponAllowsAds } from '@/game/weapons/source-catalog'
 import {
   equipWeapon,
   LOADOUT_SLOTS,
@@ -1186,7 +1187,15 @@ export function createGame(
     // sigue apuntando al último arma real, así que ni el viewmodel ni el
     // combate corren por delante de lo que se ve.
     const shownSlug = viewmodel.attachedSlug
-    const archetype = shownSlug ? ARCHETYPES[getWeaponVisual(shownSlug).archetype] : null
+    // Eje táctico CS/COD: el arquetipo EFECTIVO ya resuelto por el estilo del
+    // arma (su procedencia, no su arquetipo base). Cambia daño por bala y
+    // penalización de dispersión al moverse; el id/clase/ads son los mismos, y
+    // es un lookup en una tabla precomputada (cero asignaciones por frame). Las
+    // CC0 y los bots caen en 'neutral' = el arquetipo base tal cual.
+    const style = tacticalStyleForSlug(shownSlug)
+    const archetype = shownSlug
+      ? archetypeForStyle(getWeaponVisual(shownSlug).archetype, style)
+      : null
     // El patrón es POR ARMA, no por arquetipo: el AK-47 y la M4A4 comparten
     // `ar-1` y aun así se disparan distinto (weapons/recoil-patterns.ts). Se
     // resuelve acá, junto al arquetipo, y no adentro de stepCombat: es una
@@ -1416,6 +1425,10 @@ export function createGame(
       combatInput.reloading = vmState.reloading
       combatInput.pitch = input.pitch
       combatInput.yaw = input.player.yaw
+      // Velocidad horizontal del jugador para la dispersión por movimiento del
+      // eje CS/COD (mismo valor que alimenta el bob del viewmodel más abajo):
+      // parado no penaliza, moviéndote sí, y cuánto depende del estilo.
+      combatInput.moveSpeed = Math.hypot(player.velocity.x, player.velocity.z)
       profiler.begin('combate')
       shotsFired = stepCombat(
         combatState,
@@ -1838,7 +1851,12 @@ export function createGame(
     if (shownSlug && archetype) {
       vmInput.speed = Math.hypot(player.velocity.x, player.velocity.z)
       vmInput.grounded = player.grounded
-      vmInput.ads = input.adsHeld || debugAdsHeld
+      // Eje táctico CS/COD: las armas de CS de HIERROS no apuntan (se tira a la
+      // cadera, tap). weaponAllowsAds las filtra; el botón derecho queda muerto
+      // para ellas. Como adsT nunca sube, FOV/sensibilidad/velocidad/pose se
+      // quedan en base solos, sin tocar combat/ads.ts ni el rig. Las CS con
+      // óptica (AWP, SSG08, SCAR-20, G3SG1), las de COD y las CC0 apuntan normal.
+      vmInput.ads = (input.adsHeld || debugAdsHeld) && weaponAllowsAds(shownSlug)
       vmInput.mouseDeltaX = mouseDeltaX
       vmInput.mouseDeltaY = mouseDeltaY
       // La fuente de verdad es el renderer, no el índice: lo decide por lo que

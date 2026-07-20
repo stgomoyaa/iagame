@@ -67,7 +67,7 @@
  * pantalla en ADS y hay clases donde eso no se quiere.
  */
 
-import type { ArchetypeId } from '@/game/weapons/archetypes'
+import type { ArchetypeId, TacticalStyle } from '@/game/weapons/archetypes'
 
 /**
  * Tipo de mira. Duplicado estructural (mismo union que `SightType` en
@@ -325,3 +325,45 @@ export const SOURCE_WEAPONS: readonly SourceWeaponEntry[] = [
 export const SOURCE_WEAPONS_BY_SLUG: ReadonlyMap<string, SourceWeaponEntry> = new Map(
   SOURCE_WEAPONS.map((e) => [e.slug, e]),
 )
+
+/**
+ * Estilo táctico de un arma por su slug (el eje CS/COD que pidió el dueño).
+ * Es la ÚNICA fuente de esta decisión: el estilo sale de la PROCEDENCIA del
+ * arma (de qué pack real vino), no del arquetipo ni del modelo.
+ *
+ * - Un arma del pack CS -> `cs`; del pack COD -> `cod`.
+ * - Un slug que no está en este catálogo -> `neutral`. Son las 40 CC0 (nunca
+ *   declararon procedencia real) y cualquier slug desconocido: el default
+ *   seguro es el punto medio, no inventarle un bando (ver EFFECTIVE_ARCHETYPES
+ *   en archetypes.ts para el porqué de que las CC0 queden neutrales).
+ */
+export function tacticalStyleForSlug(slug: string | null): TacticalStyle {
+  if (slug === null) return 'neutral'
+  const source = SOURCE_WEAPONS_BY_SLUG.get(slug)
+  if (source === undefined) return 'neutral'
+  return source.game === 'CS' ? 'cs' : 'cod'
+}
+
+/**
+ * Si el arma permite ADS (apuntar con el botón derecho centrando el arma).
+ *
+ * La regla del eje CS/COD: en Counter-Strike las armas de HIERROS no apuntan
+ * —se disparan a la cadera y la precisión la da quedarse quieto y tapear—, así
+ * que el botón derecho no debe centrarlas. Todo lo demás SÍ apunta:
+ *
+ * - CS con ÓPTICA (AWP, SSG08, SCAR-20, G3SG1): conserva su mira telescópica,
+ *   con su zoom real. "Sin ADS" es sólo para los hierros de CS; borrarlo acá
+ *   rompería la mira del sniper (ver feedback/scope.ts: la estampa se apoya en
+ *   que estas armas entren en ADS).
+ * - COD: apunta normal, sea hierros u óptica. Es la gracia del estilo.
+ * - CC0 / desconocido: apunta normal. Sin procedencia no se le quita el ADS.
+ *
+ * Apagar el ADS acá cascadea solo: game.ts fuerza el input de apuntado a false
+ * para estas armas, así vmState.adsT nunca sube y FOV/sensibilidad/velocidad
+ * se quedan en base sin tocar combat/ads.ts.
+ */
+export function weaponAllowsAds(slug: string | null): boolean {
+  const source = slug === null ? undefined : SOURCE_WEAPONS_BY_SLUG.get(slug)
+  if (source === undefined) return true
+  return !(source.game === 'CS' && source.sight === 'hierros')
+}
