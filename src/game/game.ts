@@ -29,7 +29,13 @@ import { BOTS } from '@/game/bots/tuning'
 import { raycastMap, setRaycastMap } from '@/game/combat/hitscan'
 import type { Hitbox } from '@/game/combat/hitboxes'
 import { ARCHETYPES, type ArchetypeId } from '@/game/weapons/archetypes'
-import { LOADOUT_SLOTS, skinForSlot, type LoadoutSlot } from '@/game/progression/loadout'
+import {
+  equipWeapon,
+  LOADOUT_SLOTS,
+  skinForSlot,
+  type Loadout,
+  type LoadoutSlot,
+} from '@/game/progression/loadout'
 import {
   accountLevel,
   careerFromProgress,
@@ -38,7 +44,7 @@ import {
 } from '@/game/progression/store'
 import { applyMatchResult, careerDifficulty, type MatchProgress } from '@/game/progression/career'
 import { performanceFromStats } from '@/game/progression/combat-score'
-import { getWeaponVisual, weaponIndex } from '@/game/weapons/registry'
+import { getWeaponVisual, resolveArchetypeId, weaponIndex } from '@/game/weapons/registry'
 import { resolveRecoilPattern } from '@/game/weapons/recoil-patterns'
 import { createRigWeapon, syncRigWeapon } from '@/game/weapons/viewmodel/adapt'
 import { createViewmodelRenderer } from '@/game/weapons/viewmodel/renderer'
@@ -130,6 +136,56 @@ import { MATCH } from '@/game/match/tuning'
 import { createMatchTuningPanel } from '@/game/match/tuning-panel'
 import { isEnemy, PLAYER_ID, teamForParticipant, type MatchMode } from '@/game/match/types'
 
+/**
+ * Lo que el HUD de combate necesita saber, en un objeto plano que el motor
+ * RELLENA (no devuelve). Es un `out` param preasignado por quien lee, igual
+ * que `ShotResult` o `VmTransform`: el HUD lo lee una vez por frame y no
+ * puede permitirse que cada lectura genere un objeto nuevo -- son 240
+ * objetos por segundo que después hay que juntar (regla de "cero
+ * asignaciones por frame" de AGENTS.md, que vale para todo lo que corre en
+ * el ritmo del rAF, no sólo para lo que corre adentro de frame()).
+ *
+ * Todos los campos son primitivos. `weaponName` es una referencia a una
+ * cadena YA construida al equipar el arma, nunca una cadena armada acá.
+ */
+export interface HudSnapshot {
+  /** Balas en el cargador y capacidad del cargador del arma equipada. */
+  ammo: number
+  magazine: number
+  /** Recargando ahora mismo: el HUD baja la opacidad del contador en vez de
+   *  mostrar un número que no significa nada durante la animación. */
+  reloading: boolean
+  health: number
+  maxHealth: number
+  alive: boolean
+  /** Segundos que faltan para reaparecer. 0 mientras se está vivo. */
+  respawnInS: number
+  /** Nombre de catálogo del arma equipada ("AK-47"), o cadena vacía si la
+   *  ranura quedó vacía. */
+  weaponName: string
+  /** Ranura equipada, para que el HUD marque cuál de las dos está en mano. */
+  slot: LoadoutSlot
+  /** Nombres de las dos ranuras, para el selector rápido del HUD. */
+  primaryName: string
+  secondaryName: string
+}
+
+export function createHudSnapshot(): HudSnapshot {
+  return {
+    ammo: 0,
+    magazine: 0,
+    reloading: false,
+    health: 0,
+    maxHealth: 0,
+    alive: true,
+    respawnInS: 0,
+    weaponName: '',
+    slot: 'primary',
+    primaryName: '',
+    secondaryName: '',
+  }
+}
+
 export interface Game {
   start(): void
   stop(): void
@@ -149,6 +205,49 @@ export interface Game {
    *  drop de skin. `null` mientras la partida sigue viva; se llena una sola
    *  vez, al terminar. */
   readonly matchProgress: MatchProgress | null
+
+  /**
+   * Rellena `out` con el estado de combate del jugador. Lectura pura: no
+   * toca nada del motor y no asigna. La llama la capa de HUD (src/ui/Hud.ts)
+   * una vez por frame desde su propio rAF -- el motor no sabe que el HUD
+   * existe, que es lo que evita el acoplamiento al revés (src/game nunca
+   * importa src/ui).
+   */
+  readHud(out: HudSnapshot): void
+
+  /**
+   * Congela la simulación Y el render. Con `true`, frame() sale antes de
+   * simular nada: el último cuadro dibujado se queda en pantalla como fondo
+   * del menú (el compositor conserva lo último presentado mientras nadie
+   * limpie el buffer) y los bots no siguen jugando contra un jugador que
+   * está mirando un menú.
+   */
+  setPaused(paused: boolean): void
+  readonly paused: boolean
+
+  /**
+   * Vuelve a leer la sensibilidad guardada (settings/store.ts). La llama la
+   * UI al cerrar el menú de pausa: el conversor de sensibilidad ahora vive
+   * también adentro de la partida, y sin esto sería un panel que guarda un
+   * valor que el motor no mira hasta la próxima partida.
+   */
+  recargarSensibilidad(): void
+
+  /** Loadout vivo de la partida. Referencia de sólo lectura para la UI: se
+   *  cambia por `equipEnPartida`, nunca escribiéndolo. */
+  readonly loadout: Loadout
+  /** Ranura en mano ahora mismo. */
+  readonly slotEquipado: LoadoutSlot
+
+  /**
+   * Cambia el arma de una ranura CON LA PARTIDA CORRIENDO (menú de pausa) y
+   * la deja en mano. Persiste el cambio en el guardado, así que sobrevive a
+   * salir de la partida: es la misma decisión que el jugador habría tomado
+   * en la armería, tomada sin salir del juego.
+   */
+  equipEnPartida(slot: LoadoutSlot, slug: string): void
+  /** Cambia de ranura sin cambiar de arma (teclas 1 y 2, y el HUD). */
+  equiparRanura(slot: LoadoutSlot): void
 }
 
 /**
@@ -574,7 +673,14 @@ export function createGame(
   // que existir antes de esa llamada. frame() lo actualiza cada frame con
   // el valor interpolado de combat/ads.ts.
   let sensMultiplier = 1
-  const sensBase = sensibilidadBase()
+  // Ya no es `const`: el menú de pausa muestra el conversor de sensibilidad
+  // (ui/SensitivitySettings.tsx) DENTRO de la partida, y ese panel guarda en
+  // localStorage al instante. Sin poder releerlo, el jugador movería la
+  // sensibilidad, cerraría el menú y la cámara seguiría girando exactamente
+  // igual: un control que no hace nada, que es peor que no tener el control.
+  // Se relee al cerrar el menú (`recargarSensibilidad`), no por movimiento
+  // de mouse -- leer localStorage en cada `mousemove` sería absurdo.
+  let sensBase = sensibilidadBase()
   const input = createInputSystem(() => sensBase * sensMultiplier)
 
   /**
@@ -632,12 +738,17 @@ export function createGame(
   const shotResult = createShotResult()
 
   // Loadout del jugador (fase 3, sección 6 del spec: un arma primaria y una
-  // secundaria). Se lee UNA vez al crear la partida, no por frame: la
-  // armería es una pantalla aparte y no se puede cambiar el loadout con la
-  // partida corriendo. La ranura arranca en la primaria, así que el arma con
-  // la que el jugador spawnea es la que eligió.
+  // secundaria). Se lee UNA vez al crear la partida y la ranura arranca en
+  // la primaria, así que el arma con la que el jugador spawnea es la que
+  // eligió.
+  //
+  // Ya no es `const`: el menú de pausa puede cambiar el arma de una ranura
+  // sin salir a la armería (equipEnPartida, más abajo). `equipWeapon`
+  // devuelve un loadout NUEVO en vez de mutar el que le pasan --
+  // progression/loadout.ts es puro a propósito-- así que la referencia de
+  // acá tiene que poder reapuntar.
   const nivel = accountLevel(progress)
-  const loadout = progress.loadout
+  let loadout = progress.loadout
 
   /**
    * Resultado de progresión de esta partida, o null mientras siga viva.
@@ -667,14 +778,34 @@ export function createGame(
     const resultado = applyMatchResult(careerFromProgress(progress), perf)
     matchProgress = resultado.progress
     progressStore.save(progressWithCareer(progress, resultado.data))
+
+    // Soltar el puntero al terminar la partida. El resumen (ui/MatchSummary)
+    // tiene botones y una caja que se abre con un click: con el mouse
+    // todavía capturado por el canvas, el cursor no existe y esos controles
+    // son inalcanzables. Se hace acá, en la transición única a 'ended', y no
+    // en frame(), para no llamar a exitPointerLock() en cada frame posterior
+    // al final.
+    if (typeof document !== 'undefined' && document.pointerLockElement === canvas) {
+      document.exitPointerLock()
+    }
   }
 
   let currentSlot: LoadoutSlot = 'primary'
   let currentSlug = loadout.primary.slug ?? loadout.secondary.slug ?? weaponIndex()[0]?.slug ?? null
 
-  function equipSlot(slot: LoadoutSlot): void {
+  /**
+   * `forzar` existe por el menú de pausa: cambiar el arma DE LA RANURA QUE
+   * YA ESTÁ EN MANO deja `slug === currentSlug` en falso sólo si el slug es
+   * distinto, pero volver a equipar la misma ranura después de un cambio de
+   * skin, o re-aplicar tras editar el loadout, sí cae en el early-return. Es
+   * el mismo guard que evita que apretar "1" con la primaria en mano
+   * reinicie la animación de draw en cada pulsación, así que no se saca: se
+   * hace saltar explícitamente desde equipEnPartida.
+   */
+  function equipSlot(slot: LoadoutSlot, forzar = false): void {
     const slug = loadout[slot].slug
-    if (slug === null || slug === currentSlug) return
+    if (slug === null) return
+    if (!forzar && slug === currentSlug) return
     currentSlot = slot
     currentSlug = slug
     viewmodel.setSkin(skinForSlot(loadout, slot))
@@ -684,12 +815,54 @@ export function createGame(
     // genérico de la clase (ver feedback/gun-audio.ts).
     weaponAudio.prewarm(slug)
     startDraw(vmState, rigWeapon)
+    // Acá y no en cada llamador: que el nombre y el cargador que muestra el
+    // HUD salgan del MISMO punto que cambia el arma es lo que garantiza que
+    // no puedan desincronizarse. Un HUD que dice "AK-47" con una pistola en
+    // mano es peor que no tener HUD.
+    refrescarDatosDeHud()
   }
 
   if (currentSlug) {
     viewmodel.setSkin(skinForSlot(loadout, currentSlot))
     viewmodel.setWeaponSlug(currentSlug)
     weaponAudio.prewarm(currentSlug)
+  }
+
+  /**
+   * Nombre de catálogo de un slug ("AK-47"), o cadena vacía si la ranura
+   * está vacía o el slug no está en el índice.
+   *
+   * Existe para que `readHud` NUNCA arme una cadena: el HUD corre a 240 Hz
+   * y `weaponIndex().find(...)` por frame sería tanto un recorrido lineal
+   * sobre 79 entradas como -- peor -- una fuente de basura. Se resuelve al
+   * equipar, que pasa un puñado de veces por partida.
+   */
+  function nombreDeArma(slug: string | null): string {
+    if (slug === null) return ''
+    return weaponIndex().find((e) => e.slug === slug)?.name ?? slug
+  }
+
+  /**
+   * Capacidad del cargador de un slug. Mismo motivo que `nombreDeArma`: se
+   * cachea al equipar en vez de resolver el arquetipo por frame.
+   */
+  function cargadorDe(slug: string | null): number {
+    return slug === null ? 0 : ARCHETYPES[resolveArchetypeId(slug)].magazine
+  }
+
+  // Datos derivados del loadout que el HUD lee cada frame. Se recalculan
+  // SÓLO cuando el loadout o la ranura cambian (ver refrescarDatosDeHud):
+  // el camino de frame los copia y nada más.
+  let hudWeaponName = nombreDeArma(currentSlug)
+  let hudMagazine = cargadorDe(currentSlug)
+  let hudPrimaryName = nombreDeArma(loadout.primary.slug)
+  let hudSecondaryName = nombreDeArma(loadout.secondary.slug)
+
+  function refrescarDatosDeHud(): void {
+    hudWeaponName = nombreDeArma(currentSlug)
+    hudMagazine = cargadorDe(currentSlug)
+    hudPrimaryName = nombreDeArma(loadout.primary.slug)
+    hudSecondaryName = nombreDeArma(loadout.secondary.slug)
   }
 
   // El botón derecho del panel de tuning sostiene ADS como acción de prueba
@@ -706,6 +879,7 @@ export function createGame(
           currentSlug = slug
           viewmodel.setWeaponSlug(slug)
           startDraw(vmState, rigWeapon)
+          refrescarDatosDeHud()
         },
         setFireHeld(held: boolean): void {
           debugFireHeld = held
@@ -722,6 +896,13 @@ export function createGame(
   let running = false
   let lastTime = 0
   let rafId = 0
+  /**
+   * Partida congelada por el menú de pausa (ui/PauseMenu.tsx). Frena la
+   * simulación entera, no sólo el input: sin esto, abrir el menú te deja
+   * parado en el mapa mientras cinco bots te siguen disparando, que es
+   * exactamente el bug que hace que un menú de pausa no sirva para nada.
+   */
+  let paused = false
 
   // Aviso en pantalla del último load de arma fallido (ver
   // ViewmodelRenderer.lastLoadError, weapons/viewmodel/renderer.ts): sin
@@ -834,6 +1015,10 @@ export function createGame(
   // sostenido que el motor lea cada tick: es un evento puntual que cambia
   // qué arma está equipada, igual que la selección del panel de tuning.
   function onLoadoutKeyDown(e: KeyboardEvent): void {
+    // Con el menú abierto las teclas 1 y 2 le pertenecen al menú (elegir
+    // ranura para editar), no al arma en mano: cambiar de arma detrás de un
+    // menú que muestra otra cosa deja las dos pantallas mintiendo.
+    if (paused) return
     if (e.code === 'Digit1') equipSlot(LOADOUT_SLOTS[0])
     else if (e.code === 'Digit2') equipSlot(LOADOUT_SLOTS[1])
   }
@@ -852,6 +1037,28 @@ export function createGame(
   function frame(now: number): void {
     if (!running) return
     rafId = requestAnimationFrame(frame)
+
+    // Pausa: se sale ANTES de stats.beginFrame() y de profiler.beginFrame()
+    // a propósito. Esos dos abren una medición que sólo cierran endFrame()
+    // al final de este mismo cuerpo; salir después de abrirlas dejaría un
+    // frame a medio medir por cada frame pausado y ensuciaría el p95 del
+    // profiler con cientos de muestras que no midieron nada.
+    //
+    // `lastTime = now` es lo que impide el salto: sin esto, reanudar
+    // después de treinta segundos de menú entrega un dt de 30 s al primer
+    // frame. sanitizeDt lo clampearía, pero el clamp es la red de
+    // seguridad, no el diseño -- acá el tiempo pausado simplemente no
+    // existió.
+    //
+    // No se dibuja nada: el compositor conserva el último cuadro
+    // presentado mientras nadie limpie el buffer, así que la pantalla
+    // queda congelada en el momento exacto en que se abrió el menú. Eso es
+    // el fondo que queremos, y además hace que el menú cueste cero GPU.
+    if (paused) {
+      lastTime = now
+      return
+    }
+
     stats.beginFrame()
     profiler.beginFrame()
 
@@ -1824,6 +2031,76 @@ export function createGame(
     },
     get matchProgress() {
       return matchProgress
+    },
+
+    readHud(out: HudSnapshot): void {
+      // Sólo copias de primitivos y de referencias a cadenas ya existentes.
+      // Cero asignaciones, cero recorridos, cero cadenas nuevas: esta
+      // función corre una vez por frame desde el rAF del HUD.
+      out.ammo = combatState.fireControl.ammo
+      out.magazine = hudMagazine
+      out.reloading = vmState.reloading
+      out.health = playerHealth.health
+      out.maxHealth = playerHealth.maxHealth
+      out.alive = playerHealth.alive
+      // `respawnT` cuenta hacia ARRIBA desde la muerte (bots/health.ts), así
+      // que lo que falta es el delay menos lo transcurrido. Se clampea a 0
+      // porque el respawn se resuelve en el tick fijo y puede quedar un
+      // instante con el contador ya vencido y `alive` todavía en false.
+      out.respawnInS = playerHealth.alive
+        ? 0
+        : Math.max(0, MATCH.respawnDelayS - playerHealth.respawnT)
+      out.weaponName = hudWeaponName
+      out.slot = currentSlot
+      out.primaryName = hudPrimaryName
+      out.secondaryName = hudSecondaryName
+    },
+
+    setPaused(value: boolean): void {
+      paused = value
+    },
+
+    recargarSensibilidad(): void {
+      sensBase = sensibilidadBase()
+    },
+
+    get paused() {
+      return paused
+    },
+
+    get loadout() {
+      return loadout
+    },
+    get slotEquipado() {
+      return currentSlot
+    },
+
+    equipEnPartida(slot: LoadoutSlot, slug: string): void {
+      loadout = equipWeapon(loadout, slot, slug)
+      // El guardado se actualiza EN EL LUGAR además de persistirse. Es
+      // deliberado y no redundante: `cerrarPartida()` guarda
+      // `progressWithCareer(progress, ...)` al terminar la partida, o sea
+      // que parte del objeto `progress` que se cargó al arrancar. Si acá
+      // sólo se persistiera una copia, el guardado de fin de partida
+      // escribiría encima el loadout VIEJO y el arma elegida en el menú se
+      // perdería al terminar de jugar -- un bug que no se ve hasta la
+      // siguiente partida.
+      progress.loadout = loadout
+      progressStore.save(progress)
+      // `forzar`: se equipa siempre, incluso si el slug elegido es el que ya
+      // estaba en mano. Sin esto, cambiar el arma de la ranura secundaria
+      // desde el menú mientras tenés la primaria en mano no cambiaría de
+      // ranura si por casualidad los slugs coincidían.
+      equipSlot(slot, true)
+      // Los nombres de las DOS ranuras cambian cuando se edita el loadout,
+      // no sólo el de la que quedó en mano; equipSlot ya llama a esto, pero
+      // sólo entra si la ranura tiene arma. Repetirlo es barato y cubre el
+      // caso de una ranura vacía.
+      refrescarDatosDeHud()
+    },
+
+    equiparRanura(slot: LoadoutSlot): void {
+      equipSlot(slot)
     },
   }
 }
