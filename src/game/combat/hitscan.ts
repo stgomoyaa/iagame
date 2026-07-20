@@ -98,6 +98,19 @@ export function buildMapBvh(boxes: Box[]): MeshBVH {
   return new MeshBVH(buildCollisionGeometry(boxes))
 }
 
+/**
+ * BVH sobre una sopa de triángulos ya horneada (9 floats por triángulo, en
+ * metros y ejes de three.js). Es el camino de los mapas importados de
+ * Source: su geometría son brushes convexos y una malla, no cajas, así que
+ * `buildMapBvh(map.boxes)` construiría un BVH VACÍO y todos los disparos
+ * pasarían de largo a través de las paredes sin que nada fallara.
+ */
+export function buildMapBvhFromTriangles(positions: Float32Array): MeshBVH {
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new BufferAttribute(positions, 3))
+  return new MeshBVH(geometry)
+}
+
 // Ray preasignado una sola vez: las funciones de acá abajo sólo mutan su
 // origin/direction en cada llamada, nunca construyen un Ray nuevo.
 const scratchRay = new Ray()
@@ -176,7 +189,12 @@ let bvhActivo = buildMapBvh(ARENA.boxes)
 export function setRaycastMap(map: MapDef): void {
   if (map === mapaActivo) return
   mapaActivo = map
-  bvhActivo = buildMapBvh(map.boxes)
+  // Los mapas importados traen su malla ya horneada (map/types.ts,
+  // `triangles`); los escritos en código derivan la suya de las cajas.
+  bvhActivo =
+    map.triangles === undefined
+      ? buildMapBvh(map.boxes)
+      : buildMapBvhFromTriangles(map.triangles)
 }
 
 /** Raycast contra el mapa activo. Atajo de raycastAgainstBvh para el único

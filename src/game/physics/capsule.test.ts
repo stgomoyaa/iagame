@@ -213,6 +213,36 @@ describe('colisión de cápsula contra convexos', () => {
     expect(pos.x).toBeGreaterThan(2)
   })
 
+  it('sube caminando un cordón de vereda de 8 cm, un tick por vez', () => {
+    // El caso que rompía nuketown: el jugador camina del asfalto a la
+    // vereda. A 128 Hz cada tick avanza ~3.5 cm, siempre MENOS que los 8 cm
+    // de alto del cordón, así que con "empujar por el plano de menor
+    // penetración" a secas el empuje sale siempre de costado y el jugador se
+    // clava contra un escalón que en el juego real ni se nota.
+    const piso = [box(-10, -1, -10, 10, 0, 10)]
+    const cordon = cuboConvexo(1, 0, -10, 10, 0.08, 10)
+    const pos = vec3(0, 0, 0)
+    for (let i = 0; i < 60; i++) {
+      resolveMove(pos, vec3(0.035, -0.02, 0), PLAYER_CAPSULE, piso, [cordon], result)
+    }
+    expect(pos.x).toBeGreaterThan(1.5)
+    expect(pos.y).toBeCloseTo(0.08, 2)
+  })
+
+  it('un muro de 2 m NO se sube caminando: el escalón tiene techo', () => {
+    // La contracara del test de arriba. Si el rescate de escalón no midiera
+    // la altura de la cara de arriba sobre los pies, esto sería una escalera
+    // hasta el techo de cualquier muro del mapa.
+    const piso = [box(-10, -1, -10, 10, 0, 10)]
+    const muro = cuboConvexo(1, 0, -10, 10, 2, 10)
+    const pos = vec3(0, 0, 0)
+    for (let i = 0; i < 60; i++) {
+      resolveMove(pos, vec3(0.035, -0.02, 0), PLAYER_CAPSULE, piso, [muro], result)
+    }
+    expect(pos.x).toBeLessThan(1 - PLAYER_CAPSULE.radius + 1e-3)
+    expect(pos.y).toBeCloseTo(0, 2)
+  })
+
   it('a alta velocidad no atraviesa un muro convexo delgado (sin tunneling)', () => {
     // Mismo razonamiento que el equivalente con Box de arriba: el punto de
     // partida se elige para que, sin colisión, el salto completo terminaría

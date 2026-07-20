@@ -77,13 +77,20 @@ probarlo en vivo era más riesgo que valor).
 
 ## 3. Política de dos niveles
 
-| | `public/assets/weapons/` | `workshop-assets/` |
-|---|---|---|
-| Origen | Packs CC0 (Quaternius y similares) | Steam Workshop de GMod |
-| Licencia | CC0, uso libre | En su mayoría no autorizada (ports de CS/CoD) |
-| ¿Se commitea? | Sí | **Nunca** |
-| ¿Se puede publicar? | Sí | **Nunca** |
-| Formato | `.glb` normalizado por `scripts/convert-weapons.ts` | Lo que sea (mallas extraídas, GLBs intermedios) |
+| | `public/assets/weapons/` | `workshop-assets/` | `public/assets/maps/` |
+|---|---|---|---|
+| Origen | Packs CC0 (Quaternius y similares) | Steam Workshop de GMod | Derivado de `workshop-assets/` |
+| Licencia | CC0, uso libre | En su mayoría no autorizada (ports de CS/CoD) | La del Workshop |
+| ¿Se commitea? | Sí | **Nunca** | **Nunca** |
+| ¿Se puede publicar? | Sí | **Nunca** | **Nunca** |
+| Formato | `.glb` normalizado por `scripts/convert-weapons.ts` | Lo que sea (mallas extraídas, GLBs intermedios) | `.json` de colisión + `.glb` texturizado |
+
+`public/assets/maps/` es la excepción incómoda: el navegador sólo puede bajar
+archivos servidos desde `/public`, así que los mapas convertidos tienen que
+estar ahí. Estar en una carpeta que el resto del repo sí publica **no** los
+convierte en publicables. Por eso está gitignoreado y por eso
+`scripts/workshop-guard.test.ts` chequea las DOS carpetas contra el índice
+de git, no sólo `workshop-assets/`.
 
 `workshop-assets/` está en `.gitignore`, pero **eso solo no alcanza**:
 `git add -f` ignora `.gitignore` a propósito, y ese es exactamente el
@@ -99,7 +106,60 @@ Esa garantía se probó de verdad, no se asumió: se forzó un archivo dummy a
 lo sacó del índice y del disco, y se confirmó que el test volvía a pasar.
 El detalle completo (comandos y salida) está en el reporte de esta tarea.
 
-## 4. Lo que NO está construido (ingesta más allá del catálogo)
+## 4. Mapas de Source: del `.bsp` al juego
+
+Un mapa importado son **dos archivos** que el juego baja por HTTP, y los dos
+salen de un `.bsp` del Workshop. Todo el proceso es offline y manual a
+propósito: parsear 47 MB de `.bsp` en el navegador sería absurdo, y los
+archivos derivados siguen siendo contenido del Workshop.
+
+```bash
+W=workshop-assets
+BSP=$W/maps/nuketown/maps/dm_nuketown.bsp
+
+# 1. Colisión (JSON) + malla sin texturas (GLB)
+node scripts/bsp-convert.ts $BSP $W/maps-convertidos
+
+# 2. Texturas del pakfile del propio .bsp, a PNG + index.json
+node scripts/extract-textures.ts $BSP $W/texturas/nuketown
+
+# 3. Pegarle las texturas a la malla -> GLB autocontenido
+node scripts/map-textures.ts \
+  $W/maps-convertidos/dm_nuketown.glb \
+  $W/texturas/nuketown \
+  $W/maps-convertidos/dm_nuketown-tex.glb
+
+# 4. PASO MANUAL: copiar a /public para que el navegador pueda bajarlos.
+#    public/assets/maps/ también está gitignoreado (ver la tabla de abajo).
+mkdir -p public/assets/maps
+cp $W/maps-convertidos/dm_nuketown.json     public/assets/maps/dm_nuketown.json
+cp $W/maps-convertidos/dm_nuketown-tex.glb  public/assets/maps/dm_nuketown.glb
+```
+
+El nombre del mapa y las dos rutas se declaran en `MAPAS_EXTERNOS`
+(`src/game/map/registry.ts`). Con eso aparece en el desplegable del panel de
+tuning (tecla M) y en `?map=<nombre>`. Si los archivos no están, elegir ese
+mapa **cae al mapa por defecto** con un error en consola: la copia es
+manual, así que faltar es el caso esperable, no un bug.
+
+Hoy hay dos mapas declarados: `nuketown` (`dm_nuketown`) y `lasertag`
+(`gm_lasertag_arena`). El segundo se usó para verificar la orientación de
+las UV contra un cartel con texto legible ("DO NOT BLOCK / FIRE EXIT"), que
+es la única forma de comprobar que las texturas no salen dadas vuelta.
+
+Limitaciones conocidas del pipeline:
+
+- Los **displacements** (terreno esculpido) no se convierten: sus caras se
+  descartan. nuketown tiene 6.
+- Los **props estáticos** (`prop_static`) no entran: la malla sale de los
+  brushes del mapa, no del lump de props. Los muebles, autos y cercas de
+  nuketown no están.
+- Los materiales que apuntan a texturas del juego base y no van empacados en
+  el `.bsp` se quedan con un color plano (10 de 43 en nuketown).
+- Los brushes `CONTENTS_PLAYERCLIP` (los muros invisibles que Source usa
+  para acotar al jugador) **no** se importan: sólo entra `CONTENTS_SOLID`.
+
+## 5. Lo que NO está construido (ingesta más allá del catálogo)
 
 Esto es deliberadamente honesto sobre lo que falta. Nada de esto se probó:
 

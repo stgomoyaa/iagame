@@ -109,10 +109,80 @@ export function leerPlanos(buf: Buffer, lump: Lump): Planos {
  * contarlos rompería tanto el conteo de planos esperado (una caja da más de
  * 6) como, en bsp-analyze.ts, la detección de si el brush es una caja.
  */
+/** Material de herramienta de los volúmenes de trigger de Hammer. */
+const MATERIAL_TRIGGER = 'TOOLS/TOOLSTRIGGER'
+
+/**
+ * Nombre de material de cada BRUSHSIDE, indexado por índice de lado.
+ *
+ * Se arma acá y no en el llamador porque `leerBrushesSolidos` necesita
+ * distinguir un brush de verdad de un volumen de trigger, y esa distinción
+ * NO está en `contents` (ver `esVolumenDeTrigger`). Recorre tres lumps
+ * (texinfo -> texdata -> tabla de strings) una sola vez por archivo.
+ */
+function materialPorLado(buf: Buffer, lumps: Lump[]): string[] {
+  const lSides = lumps[LUMP_BRUSHSIDES]
+  const lTexinfo = lumps[LUMP_TEXINFO]
+  const lTexdata = lumps[LUMP_TEXDATA]
+  const lTabla = lumps[LUMP_TEXDATA_STRING_TABLE]
+  const lDatos = lumps[LUMP_TEXDATA_STRING_DATA]
+
+  const numTexinfo = Math.floor(lTexinfo.largo / TAM_TEXINFO)
+  const numTexdata = Math.floor(lTexdata.largo / TAM_TEXDATA)
+  const numNombres = Math.floor(lTabla.largo / 4)
+
+  // Cache por texinfo: varios miles de lados comparten un puñado de
+  // materiales, y resolver el string una vez por lado sería releer la tabla
+  // de strings decenas de miles de veces.
+  const porTexinfo: string[] = new Array<string>(numTexinfo).fill('')
+  for (let i = 0; i < numTexinfo; i++) {
+    const td = buf.readInt32LE(lTexinfo.offset + i * TAM_TEXINFO + 68)
+    if (td < 0 || td >= numTexdata) continue
+    const nameId = buf.readInt32LE(lTexdata.offset + td * TAM_TEXDATA + 12)
+    if (nameId < 0 || nameId >= numNombres) continue
+    const abs = lDatos.offset + buf.readInt32LE(lTabla.offset + nameId * 4)
+    const fin = buf.indexOf(0, abs)
+    porTexinfo[i] = buf.toString('ascii', abs, fin === -1 ? abs : fin)
+  }
+
+  const numLados = Math.floor(lSides.largo / TAM_BRUSHSIDE)
+  const out: string[] = new Array<string>(numLados).fill('')
+  for (let s = 0; s < numLados; s++) {
+    const ti = buf.readInt16LE(lSides.offset + s * TAM_BRUSHSIDE + 2)
+    if (ti >= 0 && ti < numTexinfo) out[s] = porTexinfo[ti]
+  }
+  return out
+}
+
+/**
+ * ¿Este brush es en realidad un volumen de trigger?
+ *
+ * Hace falta preguntarlo por MATERIAL y no por `contents` porque vbsp deja
+ * los brushes de las entidades trigger con `contents = CONTENTS_SOLID`: lo
+ * que los hace atravesables en el juego es la entidad a la que pertenecen,
+ * no el brush. Sin este filtro, dm_nuketown mete 25 cajones invisibles y
+ * macizos en el mapa -- entre ellos uno de 8x15x2.4 m que tapa una casa
+ * entera y deja adentro los 16 spawns de ese lado. Se detectó porque los 32
+ * spawns del mapa daban "dentro de geometría sólida"; ningún test lo veía
+ * porque la geometría cargaba perfecto, sólo que era mentira.
+ *
+ * Se exige que TODOS los lados sean trigger: un brush sólido de verdad
+ * nunca tiene una cara con esa textura, y así una cara suelta mal texturada
+ * no borra un muro real.
+ */
+function esVolumenDeTrigger(nombreDeLado: string[], primerLado: number, numLados: number): boolean {
+  if (numLados === 0) return false
+  for (let s = 0; s < numLados; s++) {
+    if (nombreDeLado[primerLado + s]?.toUpperCase() !== MATERIAL_TRIGGER) return false
+  }
+  return true
+}
+
 export function leerBrushesSolidos(buf: Buffer, lumps: Lump[]): number[][] {
   const lBrushes = lumps[LUMP_BRUSHES]
   const lSides = lumps[LUMP_BRUSHSIDES]
   const numBrushes = Math.floor(lBrushes.largo / TAM_BRUSH)
+  const nombreDeLado = materialPorLado(buf, lumps)
 
   const resultado: number[][] = []
   for (let b = 0; b < numBrushes; b++) {
@@ -121,6 +191,7 @@ export function leerBrushesSolidos(buf: Buffer, lumps: Lump[]): number[][] {
     const numLados = buf.readInt32LE(o + 4)
     const contents = buf.readInt32LE(o + 8)
     if ((contents & CONTENTS_SOLID) === 0) continue
+    if (esVolumenDeTrigger(nombreDeLado, primerLado, numLados)) continue
 
     const planos: number[] = []
     for (let s = 0; s < numLados; s++) {

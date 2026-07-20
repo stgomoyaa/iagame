@@ -21,6 +21,9 @@ const REPO_ROOT = process.cwd()
 /** Directorio local-only para assets derivados del Workshop. Ver docs/WORKSHOP.md. */
 const WORKSHOP_ASSETS_DIR = 'workshop-assets'
 
+/** Copia servible de los mapas convertidos. Local-only por el mismo motivo. */
+const PUBLIC_MAPS_DIR = 'public/assets/maps'
+
 const WORKSHOP_CATALOG_FILES = ['workshop-catalog.csv', 'workshop-catalog.json']
 
 function gitTrackedFiles(pathspec: string): string[] {
@@ -39,6 +42,24 @@ describe('guardia de publicación: assets del Workshop', () => {
       `estos archivos de ${WORKSHOP_ASSETS_DIR}/ están en el índice de git y no deberían: ${tracked.join(', ')}. ` +
         `Si se agregaron con "git add -f", sacarlos con "git rm --cached <archivo>".`,
     ).toEqual([])
+  })
+
+  // La integración de mapas de Source abrió una segunda puerta: el
+  // navegador sólo puede bajar archivos que estén bajo /public, así que los
+  // mapas convertidos se COPIAN ahí. Son los mismos bytes derivados del
+  // Workshop, sólo que en una carpeta que el resto del repo sí publica --
+  // exactamente el accidente que este guard existe para atajar.
+  it('git ls-files no encuentra ningún mapa importado dentro de public/assets/maps/', () => {
+    const tracked = gitTrackedFiles(PUBLIC_MAPS_DIR)
+    expect(
+      tracked,
+      `estos archivos de ${PUBLIC_MAPS_DIR}/ están en el índice de git y no deberían: ${tracked.join(', ')}.`,
+    ).toEqual([])
+  })
+
+  it('.gitignore declara public/assets/maps/ como ignorado', () => {
+    const gitignore = readFileSync(join(REPO_ROOT, '.gitignore'), 'utf8')
+    expect(gitignore).toMatch(/^\/public\/assets\/maps\/$/m)
   })
 
   it('el catálogo del Workshop (csv/json) tampoco está trackeado', () => {

@@ -58,6 +58,13 @@ assets-src/
 #     test existe para detectar.
 workshop-assets/
 
+# Mapas importados de Source que el juego sirve por HTTP. Son COPIAS de lo
+# que produce el pipeline sobre workshop-assets/ (ver docs/WORKSHOP.md): el
+# navegador no puede leer un archivo fuera de /public, pero eso no los
+# convierte en assets publicables. Misma política que workshop-assets/, y el
+# paso de copia es manual a propósito.
+/public/assets/maps/
+
 # Salida del catalogador del Workshop (scripts/workshop-catalog.ts): son
 # datos de trabajo que se regeneran corriendo el script, no código ni
 # assets. No tienen contenido con copyright (sólo metadata pública del
