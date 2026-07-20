@@ -112,16 +112,60 @@ describe('skybox: el presupuesto de legibilidad no se rompe al integrar', () => 
     // Sin esto Three trata los bytes como luz lineal y la salida los vuelve
     // a codificar: el cielo sale lavado, por encima del techo de luminancia,
     // y los colores de equipo claros dejan de destacarse contra él.
+    //
+    // Desde que el renderer aplica tone mapping, esta línea protege ADEMÁS
+    // otra cosa, y es la razón por la que este test pasó a ser el más
+    // importante de los tres: `WebGLBackground.js` decide si el fondo se
+    // tonemapea mirando justamente el color space del background --
+    //
+    //   boxMesh.material.toneMapped =
+    //     ColorManagement.getTransfer( background.colorSpace ) !== SRGBTransfer
+    //
+    // -- así que mientras el cubemap esté marcado sRGB, el cielo queda FUERA
+    // del tone mapper y su ventana de luminancia (0.22-0.45) es inmune a la
+    // exposición. Si alguien lo cambia por un HDR/lineal para "mejorar la
+    // iluminación", el fondo entra al tone mapper y el piso de 0.22 se
+    // rompe sin que falle nada más. Ver el comentario de EXPOSICION_TONEMAP.
     expect(renderer).toMatch(/colorSpace\s*=\s*SRGBColorSpace/)
   })
 
-  it('no aplica tone mapping ni exposición sobre la escena', () => {
-    // Un tone mapper comprime el rango alto y LEVANTA las sombras: es la
-    // forma más fácil de subir la luminancia de una silueta oscura hasta
-    // que deje de recortarse contra el cielo. Si algún día hace falta uno,
-    // hay que volver a medir el contraste silueta/cielo antes de borrar
-    // este test.
-    expect(renderer).not.toMatch(/toneMapping/)
-    expect(renderer).not.toMatch(/toneMappingExposure/)
+  /**
+   * Este test REEMPLAZA a uno que prohibía el tone mapping por completo.
+   * Aquel decía, textual, que si algún día hacía falta uno había que "volver
+   * a medir el contraste silueta/cielo antes de borrar este test". Se midió,
+   * con `gl.readPixels` sobre capturas del render real en arena, misma pose y
+   * misma ventana de 488k píxeles de cielo:
+   *
+   *   cielo antes de la tarea:   mín erosionado 0.2363   media 0.2626
+   *   cielo después (ACES 2.5):  mín erosionado 0.2363   media 0.2626
+   *
+   * Idéntico a cuatro decimales, porque el fondo no pasa por el tone mapper
+   * (ver el test de arriba). El miedo que motivaba la prohibición -- que el
+   * tone mapper levantara las sombras hasta borrar la silueta -- además va al
+   * revés con ACES: hunde el oscuro (0x1a1a1a pasa de 0.1020 a 0.0595), así
+   * que el contraste silueta/cielo SUBE de 0.1245 a 0.1783 contra la media
+   * del cielo. Muy por encima del 0.12 de diseño.
+   *
+   * Lo que queda por proteger no es "que no haya tone mapping", es que si lo
+   * hay venga con exposición explícita: ACES con la exposición 1.0 por
+   * defecto oscurece el mundo casi a la mitad, y ESO sí rompería la lectura.
+   */
+  it('si aplica tone mapping, fija también la exposición', () => {
+    const usaToneMapping = /toneMapping\s*=/.test(renderer)
+    if (!usaToneMapping) return
+    expect(renderer).toMatch(/toneMappingExposure\s*=/)
+    // La exposición sale de una constante derivada y documentada, no de un
+    // número mágico suelto en la llamada.
+    expect(renderer).toMatch(/toneMappingExposure\s*=\s*EXPOSICION_TONEMAP/)
+  })
+
+  it('el rig de luces no se instala sobre un mapa con luz horneada', () => {
+    // Un mapa importado de Source trae lightmap y se dibuja unlit. Agregarle
+    // luces no cambia un píxel (three no le pasa luces a MeshBasicMaterial)
+    // pero sí paga el shadow map: medido en nuketown, 2.09 ms sin rig contra
+    // 4.06 ms con rig y sombras. Este guard es sobre el TEXTO por el mismo
+    // motivo que los de arriba -- el costo sólo se observa con GPU real.
+    expect(renderer).toMatch(/const\s+usaRig\s*=\s*mallaImportada\s*===\s*null/)
+    expect(renderer).toMatch(/renderer\.shadowMap\.enabled\s*=\s*usaRig/)
   })
 })

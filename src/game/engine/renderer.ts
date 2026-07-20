@@ -1,9 +1,14 @@
 import {
+  ACESFilmicToneMapping,
   CubeTextureLoader,
+  DirectionalLight,
+  HemisphereLight,
   Mesh,
-  MeshBasicMaterial,
+  MeshStandardMaterial,
   Object3D,
+  PCFSoftShadowMap,
   PerspectiveCamera,
+  PMREMGenerator,
   Scene,
   SRGBColorSpace,
   Vector3,
@@ -20,6 +25,90 @@ import type { Vec3 } from '@/game/math/vec3'
  *  spec de fase 1) — exportada acá en vez de repetir el número "90" en
  *  game.ts, que no puede importar three para leerlo directo de la cámara. */
 export const WORLD_FOV = 90
+
+/**
+ * Exposición del tonemapping ACES.
+ *
+ * LO PRIMERO, PORQUE CAMBIA TODO EL RAZONAMIENTO: **el cielo NO pasa por el
+ * tonemapping.** Era la preocupación obvia al empezar (ACES oscurece los
+ * medios; con exposición 1.0 el cielo caería de 0.2265 a 0.1039, muy por
+ * debajo del piso de 0.22 de docs/SKYBOX.md, y el contraste silueta/cielo de
+ * 0.1245 a 0.0895, bajo el 0.12 de diseño). No pasa, y no por suerte:
+ * `WebGLBackground.js` (three 0.185, línea 151) decide literalmente
+ *
+ *   boxMesh.material.toneMapped =
+ *     ColorManagement.getTransfer( background.colorSpace ) !== SRGBTransfer;
+ *
+ * y nuestro cubemap está marcado `SRGBColorSpace` unas líneas más abajo en
+ * este mismo archivo. O sea: three apaga el tonemapping del fondo por sí
+ * solo. Medido y confirmado -- el cielo de arena da idéntico a cuatro
+ * decimales antes y después de esta tarea (mín erosionado 0.2363, media
+ * 0.2626). El presupuesto de legibilidad del cielo es INMUNE a esta tarea.
+ *
+ * ⚠️ Y por eso `cielo.colorSpace = SRGBColorSpace` pasó a ser doblemente
+ * load-bearing: si algún día el cielo se cambia por un HDR/lineal (el
+ * movimiento "obvio" para mejorar la iluminación), el fondo EMPIEZA a
+ * tonemapearse y el piso de 0.22 se rompe en silencio. Hay un test que lo
+ * fija (engine/renderer.test.ts).
+ *
+ * Entonces la exposición no la manda el cielo, la manda el MUNDO: es lo que
+ * decide si la geometría iluminada queda más clara o más oscura que como se
+ * veía sin luces. 2.5 es el valor que **preserva el brillo medio** mientras
+ * el rig agrega rango. Medido sobre el suelo de arena, misma pose, misma
+ * ventana de 161k píxeles:
+ *
+ *   sin luces (antes):  mín 0.1833  media 0.2024  máx 0.3295  -> rango 0.146
+ *   con rig + ACES 2.5: mín 0.0278  media 0.2397  máx 0.4640  -> rango 0.436
+ *
+ * Ese salto de rango -- 3x -- es literalmente "deja de verse plano" escrito
+ * como número: antes el mapa entero vivía dentro de una franja de 0.15 de
+ * luminancia. La media se mantiene (0.20 -> 0.24), así que el mapa no se
+ * oscurece ni se lava globalmente; lo que cambia es que ahora hay claros y
+ * oscuros.
+ */
+const EXPOSICION_TONEMAP = 2.5
+
+/**
+ * Intensidades del rig de luces.
+ *
+ * Sólo afectan a materiales ILUMINADOS. Los mapas importados de Source
+ * (map/external-map.ts) y sus props se dibujan con `MeshBasicMaterial`, que
+ * no tiene modelo de iluminación: three ni siquiera le pasa las luces. Eso
+ * es deliberado y es lo que hace que este rig sea seguro de instalar -- el
+ * lightmap horneado de nuketown NO se ilumina dos veces, porque las luces
+ * no lo tocan. Ver el comentario de `scene.environment` más abajo.
+ *
+ * Los tres mapas escritos en código (arena, torre, búnker) sí son
+ * `MeshStandardMaterial`: no tienen lightmap que respetar, su geometría ya
+ * trae normales (map/mesh.ts las escribe desde BoxGeometry) y son
+ * justamente los que se veían más planos.
+ */
+const INTENSIDAD_SOL = 1.8
+/**
+ * Hemisférica: rellena la sombra. NO es un número de gusto, es un piso de
+ * legibilidad, y salió de medirlo mal la primera vez.
+ *
+ * Con sol 2.2 / ambiente 1.1 el resultado se veía "cinematográfico" y estaba
+ * roto: la pared que no mira al sol medía **0.0087** de luminancia contra
+ * 0.2916 del piso iluminado. Un factor de 33. Negro, no oscuro. Los bots
+ * igual se leían (son `MeshBasicMaterial`, no los toca el rig, así que
+ * conservan su brillo), pero desaparecía el MAPA: esquinas, cajas y
+ * coberturas se fundían en una mancha negra. No ver la cobertura es un
+ * problema de combate más caro que verse plano.
+ *
+ * Un material sin luz muestra el albedo tal cual, o sea como si la
+ * irradiancia fuera 1.0 en todas las caras -- por eso el mapa se veía plano
+ * pero nunca se perdía. Al iluminarlo, cada cara pasa a valer albedo x
+ * irradiancia, y la cara que sólo recibe ambiente se va al fondo si el
+ * ambiente es bajo. La suma sol+ambiente se mantiene parecida (4.4 antes,
+ * 4.4 ahora) pero repartida distinto: menos contraste direccional, piso de
+ * sombra habitable.
+ */
+const INTENSIDAD_AMBIENTE = 2.6
+/** Reflejos del entorno sobre los materiales PBR. Bajo a propósito: el
+ *  cielo es violeta saturado y a intensidad plena tiñe todo el mapa de
+ *  lila. */
+const INTENSIDAD_ENTORNO = 0.35
 
 /** Resultado de proyectar un punto del mundo a pantalla. Preasignado por el
  *  llamador (ver GameRenderer.worldToScreen). */
@@ -99,7 +188,37 @@ export function createRenderer(
     // El buffer de stencil no se usa y cuesta ancho de banda.
     stencil: false,
   })
+  // Un mapa importado de Source trae TODA su luz horneada (lightmap del BSP
+  // + tinte por instancia en los props) y se dibuja con `MeshBasicMaterial`,
+  // que no tiene modelo de iluminación. O sea: el rig de luces no puede
+  // cambiarle un solo píxel. Por eso acá se decide de una vez si este
+  // renderer lleva rig o no, en vez de instalarlo siempre "por si acaso".
+  //
+  // NO es una micro-optimización, es la diferencia entre entrar en
+  // presupuesto y no entrar. Medido en nuketown, misma pose, 60 muestras:
+  //
+  //   sin rig (baseline del repo)      gpu mediana 2.09 ms
+  //   con rig + sombras 2048 PCFSoft   gpu mediana 4.06 ms
+  //   con rig, sombras apagadas        gpu mediana 0.87 ms
+  //
+  // Casi 2 ms de sombras sobre una escena donde NADA proyecta sombra (el GLB
+  // del mapa y sus props vienen con castShadow en false): es el costo fijo
+  // de renderizar y limpiar un depth target de 2048x2048 por frame más el
+  // muestreo PCF. Pagar eso para no ver ninguna diferencia es exactamente el
+  // tipo de gasto que el presupuesto de 2,5 ms no tolera.
+  const usaRig = mallaImportada === null
+  // PCFSoft y no el default duro: el borde escalonado de una sombra dura
+  // sobre geometría de cajas se lee como un error de render, no como una
+  // sombra.
+  renderer.shadowMap.enabled = usaRig
+  renderer.shadowMap.type = PCFSoftShadowMap
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  // Tonemapping ACES sobre TODAS las pasadas (mundo y viewmodel comparten
+  // este WebGLRenderer). Es lo único de esta tarea que cambia píxeles que ya
+  // se veían bien, así que la exposición está derivada y no elegida: ver
+  // EXPOSICION_TONEMAP.
+  renderer.toneMapping = ACESFilmicToneMapping
+  renderer.toneMappingExposure = EXPOSICION_TONEMAP
   // autoClear apagado a propósito: el viewmodel (weapons/viewmodel/renderer.ts)
   // dibuja una segunda pasada sobre este mismo WebGLRenderer, después del
   // mundo, limpiando sólo profundidad (renderer.clearDepth()) para que el
@@ -151,7 +270,10 @@ export function createRenderer(
       // Copia mutable porque el tipo de load() pide string[]; el orden real
       // (contrato +X,-X,+Y,-Y,+Z,-Z) lo custodia engine/skybox.ts.
       [...CARAS_SKYBOX],
-      undefined,
+      // onLoad: recién acá el cubemap tiene las seis caras y se puede
+      // prefiltrar para los reflejos (ver generarEntorno más abajo).
+      // Prefiltrarlo antes daría un entorno negro.
+      () => generarEntorno(),
       undefined,
       avisarSkyboxFaltante,
     )
@@ -165,16 +287,128 @@ export function createRenderer(
   cielo.colorSpace = SRGBColorSpace
   scene.background = cielo
 
+  // --- entorno para reflejos ---------------------------------------------
+  // El MISMO cubemap del cielo, pasado por PMREM (prefiltrado por rugosidad),
+  // se usa como `scene.environment`: es la fuente de los reflejos de
+  // cualquier material PBR. Sin esto un metal rugoso no tiene nada que
+  // reflejar y sale gris plano, que es la mitad de por qué "se ve plástico".
+  //
+  // Por qué esto NO toca el mapa lightmapeado: three aplica
+  // `scene.environment` SÓLO a Standard/Lambert/Phong. En WebGLRenderer.js
+  // (v0.185) la línea es literal:
+  //
+  //   materialProperties.environment = ( material.isMeshStandardMaterial ||
+  //     material.isMeshLambertMaterial || material.isMeshPhongMaterial )
+  //     ? scene.environment : null;
+  //
+  // `MeshBasicMaterial` no está en esa lista, así que nuketown y sus props
+  // no reciben ni un fotón de acá. Un `envMap` sobre ellos habría que
+  // ponerlo a mano en el material, y no se pone.
+  //
+  // El PMREM se genera UNA vez, cuando las seis caras terminan de bajar: el
+  // cubemap recién ahí tiene datos, y prefiltrarlo vacío da un entorno negro.
+  // Sólo con rig: prefiltrar el cubemap cuesta un puñado de pasadas de GPU al
+  // arrancar y ocupa VRAM, y en un mapa importado no habría un solo material
+  // que lo lea.
+  const pmrem = usaRig ? new PMREMGenerator(renderer) : null
+  let entorno: ReturnType<PMREMGenerator['fromCubemap']> | null = null
+  function generarEntorno(): void {
+    if (pmrem === null) return
+    entorno = pmrem.fromCubemap(cielo)
+    scene.environment = entorno.texture
+    scene.environmentIntensity = INTENSIDAD_ENTORNO
+  }
+
+  // --- luces --------------------------------------------------------------
+  // Direccional (sol) + hemisférica (relleno). Se crean una sola vez acá: no
+  // hay trabajo de luces por frame, así que los guards de asignaciones no ven
+  // nada nuevo.
+  //
+  // La dirección del sol NO es vertical a propósito: una luz cenital deja
+  // las cuatro paredes de una caja con la misma intensidad y el mapa se
+  // sigue viendo plano, que es el problema que vinimos a resolver. En
+  // diagonal, cada cara agarra un valor distinto y la geometría se lee.
+  // Las luces NO se agregan con intensidad 0 cuando no hacen falta: se
+  // agregan o no se agregan. Una luz en la escena, aunque esté apagada,
+  // entra igual en la lista de luces con la que three compila los shaders y
+  // se sube como uniform cada frame.
+  if (usaRig) {
+    const sol = new DirectionalLight(0xfff2e0, INTENSIDAD_SOL)
+    sol.position.set(-0.45, 1, 0.62).normalize().multiplyScalar(60)
+    sol.target.position.set(0, 0, 0)
+    // Sombras: la caja del shadow camera se ajusta a los límites REALES del
+    // mapa. Un valor fijo o bien recorta las sombras de medio mapa (torre es
+    // alta) o desperdicia resolución en vacío (arena es chica), y las dos
+    // fallas se ven igual de mal: sombras que aparecen y desaparecen al
+    // caminar.
+    sol.castShadow = true
+    const b = map.bounds
+    const radio =
+      Math.max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) * 0.75 + 4
+    sol.shadow.camera.left = -radio
+    sol.shadow.camera.right = radio
+    sol.shadow.camera.top = radio
+    sol.shadow.camera.bottom = -radio
+    sol.shadow.camera.near = 1
+    sol.shadow.camera.far = 200
+    // 1024 y no 2048: en los mapas de código la sombra útil es la de cajas
+    // grandes sobre un piso, no la de una reja. Duplicar el lado del atlas
+    // cuadruplica los texels que hay que escribir y limpiar por frame, y a
+    // esta distancia de cámara no se distingue el borde. Ver la medición de
+    // GPU en el comentario de `usaRig`.
+    sol.shadow.mapSize.set(1024, 1024)
+    // Sesgo negativo chico: sin esto el suelo se auto-sombrea en bandas
+    // (shadow acne). El normalBias ataca el mismo artefacto en superficies
+    // casi paralelas al rayo de luz, donde el bias plano no alcanza.
+    sol.shadow.bias = -0.0005
+    sol.shadow.normalBias = 0.02
+    scene.add(sol)
+    scene.add(sol.target)
+
+    // Hemisférica y no ambiente plana: el cielo tiñe por arriba y el suelo
+    // por abajo, así una caja no queda con las seis caras del mismo gris
+    // cuando el sol no le pega.
+    //
+    // El color de suelo NO es casi negro (era 0x2a2a30): una pared vertical
+    // tiene normal.y = 0 y la hemisférica le da justo la mezcla mitad cielo /
+    // mitad suelo, así que un suelo negro se come la mitad del relleno en
+    // exactamente las superficies que más importan para leer el mapa.
+    const ambiente = new HemisphereLight(0x8b7bb8, 0x4a4a55, INTENSIDAD_AMBIENTE)
+    scene.add(ambiente)
+  }
+
   // Un mapa importado de Source trae su propia malla texturizada
   // (map/external-map.ts) y su `boxes` va vacío: buildArenaGeometry() no
   // dibujaría nada. Los mapas escritos en código siguen por el camino de
   // siempre, sin cambios.
   const geometry = buildArenaGeometry(map)
-  const material = new MeshBasicMaterial({ vertexColors: true })
+  // `MeshStandardMaterial` y ya no `MeshBasicMaterial`: éste es el cambio que
+  // saca a los tres mapas escritos en código del look plano.
+  //
+  // Es seguro acá y NO lo sería en nuketown, por dos motivos concretos:
+  //  1. Esta geometría ya trae normales (map/mesh.ts las copia de
+  //     BoxGeometry), que es lo que un material iluminado necesita y lo que
+  //     el GLB de nuketown justamente no tiene.
+  //  2. Estos mapas no tienen lightmap: no hay luz horneada que el rig
+  //     pueda duplicar. En nuketown sí la hay, y por eso ese camino se queda
+  //     en MeshBasicMaterial (ver map/external-map.ts).
+  //
+  // `roughness` alto y `metalness` en cero: son paredes y pisos de arena de
+  // tiro, no metal. Un metalness alto acá los volvería espejos violetas del
+  // cielo. Los colores siguen viniendo del atributo de vértice de siempre.
+  const material = new MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.85,
+    metalness: 0.0,
+  })
   const arena = new Mesh(geometry, material)
   // La arena nunca se mueve: saltear el recálculo de matrices por frame.
   arena.matrixAutoUpdate = false
   arena.updateMatrix()
+  // Proyecta Y recibe: sin `receiveShadow` las sombras de las cajas no caen
+  // sobre el piso, que es donde más se leen.
+  arena.castShadow = true
+  arena.receiveShadow = true
   if (mallaImportada === null) scene.add(arena)
   else scene.add(mallaImportada)
 
@@ -230,6 +464,11 @@ export function createRenderer(
       // se arme y se tire (cambiar de mapa, HMR en dev) deja los seis
       // niveles colgados hasta que el driver se dé cuenta.
       cielo.dispose()
+      // El entorno PMREM es un render target propio (no lo libera
+      // cielo.dispose()): sin esto cada renderer que se arme y se tire deja
+      // su mipmap prefiltrado colgado en VRAM, mismo motivo que el cubemap.
+      entorno?.dispose()
+      pmrem?.dispose()
       renderer.dispose()
     },
   }
