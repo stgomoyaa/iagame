@@ -59,7 +59,7 @@ describe('integración con el ramp real de adsT (weapons/viewmodel/rig.ts)', () 
   }
 
   function input(ads: boolean): ViewmodelInput {
-    return { speed: 0, grounded: true, ads, mouseDeltaX: 0, mouseDeltaY: 0 }
+    return { speed: 0, grounded: true, ads, mouseDeltaX: 0, mouseDeltaY: 0 , clipDriven: false}
   }
 
   it('alcanza exactamente sus tres objetivos al cumplirse adsTime', () => {

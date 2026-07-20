@@ -33,15 +33,16 @@ const QUIETO: ViewmodelInput = {
   ads: false,
   mouseDeltaX: 0,
   mouseDeltaY: 0,
+  clipDriven: false,
 }
 
 describe('determinismo de composición', () => {
   it('la misma secuencia de entradas produce la misma transformación, bit a bit', () => {
     const secuencia: ViewmodelInput[] = [
-      { speed: 3, grounded: true, ads: false, mouseDeltaX: 0.01, mouseDeltaY: -0.02 },
-      { speed: 6, grounded: true, ads: true, mouseDeltaX: 0.02, mouseDeltaY: 0 },
-      { speed: 8, grounded: false, ads: true, mouseDeltaX: -0.01, mouseDeltaY: 0.03 },
-      { speed: 2, grounded: true, ads: false, mouseDeltaX: 0, mouseDeltaY: 0 },
+      { speed: 3, grounded: true, ads: false, mouseDeltaX: 0.01, mouseDeltaY: -0.02 , clipDriven: false},
+      { speed: 6, grounded: true, ads: true, mouseDeltaX: 0.02, mouseDeltaY: 0 , clipDriven: false},
+      { speed: 8, grounded: false, ads: true, mouseDeltaX: -0.01, mouseDeltaY: 0.03 , clipDriven: false},
+      { speed: 2, grounded: true, ads: false, mouseDeltaX: 0, mouseDeltaY: 0 , clipDriven: false},
     ]
 
     function correr(): VmTransform {
@@ -92,6 +93,7 @@ describe('determinismo de composición', () => {
         ads: false,                // amplitud plena de bob
         mouseDeltaX: 0.02,         // sway constante
         mouseDeltaY: -0.01,
+        clipDriven: false,
       }
       if (i === 2) startReload(state, WEAPON) // reload: tick 2-7
       stepViewmodel(state, input, WEAPON, out, TICK_DT)
@@ -289,6 +291,7 @@ describe('timing de eventos de recarga', () => {
       ads: false,
       mouseDeltaX: 0,
       mouseDeltaY: 0,
+      clipDriven: false,
     }
     const pyBase = WEAPON.hip.py
 
@@ -345,6 +348,7 @@ describe('independencia del framerate', () => {
         ads: true,
         mouseDeltaX: mouseVelX * dt,
         mouseDeltaY: mouseVelY * dt,
+        clipDriven: false,
       }
       for (let t = 0; t < duracion - 1e-9; t += dt) {
         stepViewmodel(state, input, WEAPON, out, dt)
@@ -394,6 +398,7 @@ describe('sway: velocidad de mouse, no delta acumulado por frame', () => {
       ads: false,
       mouseDeltaX: mouseVelX * dt,
       mouseDeltaY: 0,
+      clipDriven: false,
     }
     let pico = 0
     for (let t = 0; t < duracionS - 1e-9; t += dt) {
@@ -480,6 +485,7 @@ describe('bob', () => {
       ads: false,
       mouseDeltaX: 0,
       mouseDeltaY: 0,
+      clipDriven: false,
     }
     for (let i = 0; i < 20; i++) stepViewmodel(state, moviendo, armaBob, out, TICK_DT)
     const faseAlParar = state.bobPhase
@@ -507,6 +513,7 @@ describe('bob', () => {
       ads: false,
       mouseDeltaX: 0,
       mouseDeltaY: 0,
+      clipDriven: false,
     }
     // Corre en el suelo hasta que el bob esté a amplitud plena.
     for (let i = 0; i < 150; i++) stepViewmodel(state, enSuelo, armaBob, out, TICK_DT)
@@ -535,6 +542,7 @@ describe('bob', () => {
       ads: true,
       mouseDeltaX: 0,
       mouseDeltaY: 0,
+      clipDriven: false,
     }
     for (let i = 0; i < 40; i++) stepViewmodel(state, enAds, armaBob, out, TICK_DT)
     expect(state.adsT).toBe(1)
@@ -551,6 +559,7 @@ describe('bob', () => {
       ads: false,
       mouseDeltaX: 0,
       mouseDeltaY: 0,
+      clipDriven: false,
     }
     let maxAbsPx = 0
     for (let i = 0; i < 60; i++) {
@@ -627,6 +636,7 @@ describe('robustez ante dt hostil (Defecto 3)', () => {
     startReload(state, WEAPON)
     const activo: ViewmodelInput = {
       speed: 5, grounded: true, ads: true, mouseDeltaX: 0.02, mouseDeltaY: -0.01,
+      clipDriven: false,
     }
     for (let i = 0; i < 5; i++) stepViewmodel(state, activo, WEAPON, out, TICK_DT)
 
@@ -687,5 +697,81 @@ describe('disparo', () => {
     for (let i = 0; i < 200; i++) stepViewmodel(state, QUIETO, WEAPON, out, TICK_DT)
     expect(Math.abs(out.pz)).toBeLessThan(Math.abs(pzInmediato))
     expect(Math.abs(out.pz)).toBeLessThan(1e-4)
+  })
+})
+
+describe('clipDriven: las armas con animación importada de CS no llevan la coreografía procedural encima', () => {
+  const CLIP: ViewmodelInput = { ...QUIETO, clipDriven: true }
+
+  /** Avanza `ticks` de recarga y devuelve la pose resultante. */
+  function poseDeRecarga(input: ViewmodelInput, ticks: number): VmTransform {
+    const state = createViewmodelState()
+    const out = transform()
+    startReload(state, WEAPON)
+    for (let i = 0; i < ticks; i++) stepViewmodel(state, input, WEAPON, out, TICK_DT)
+    return out
+  }
+
+  it('con clipDriven la pose a mitad de recarga queda en reposo, sin el bajón ni el roll procedurales', () => {
+    // 64 ticks = medio reloadTime: el centro de la meseta de reloadEnvelope,
+    // donde la coreografía procedural está en su máximo. Si algo de ella se
+    // colara, se vería justo acá.
+    const conClip = poseDeRecarga(CLIP, 64)
+
+    expect(conClip.py).toBe(0)
+    expect(conClip.px).toBe(0)
+    expect(conClip.rx).toBe(0)
+    expect(conClip.rz).toBe(0)
+    expect(conClip.ry).toBe(0)
+  })
+
+  it('sin clipDriven la misma recarga SÍ mueve el arma: la comparación es lo que hace válido al test de arriba', () => {
+    const sinClip = poseDeRecarga(QUIETO, 64)
+
+    // Si esto fuera cero, el test de arriba pasaría por la razón equivocada
+    // (que la recarga no mueve nada nunca) y no probaría nada.
+    expect(sinClip.py).not.toBe(0)
+    expect(sinClip.rz).not.toBe(0)
+  })
+
+  it('el ESTADO de la recarga avanza igual con clip: los eventos de audio y la fracción del HUD no dependen de quién dibuja el gesto', () => {
+    const state = createViewmodelState()
+    const out = transform()
+    startReload(state, WEAPON)
+
+    for (let i = 0; i < 64; i++) stepViewmodel(state, CLIP, WEAPON, out, TICK_DT)
+    expect(state.reloading).toBe(true)
+    expect(state.reloadT).toBeCloseTo(0.5, 6)
+    expect(state.emittedMagOut).toBe(true)
+
+    for (let i = 0; i < 64; i++) stepViewmodel(state, CLIP, WEAPON, out, TICK_DT)
+    expect(state.emittedMagIn).toBe(true)
+    expect(state.reloading).toBe(false)
+  })
+
+  it('las capas que responden al jugador (ADS) siguen corriendo con clipDriven: no son imitaciones de lo que el clip ya trae', () => {
+    const state = createViewmodelState()
+    const out = transform()
+    const apuntando: ViewmodelInput = { ...QUIETO, ads: true, clipDriven: true }
+
+    for (let i = 0; i < 32; i++) stepViewmodel(state, apuntando, WEAPON, out, TICK_DT)
+
+    expect(state.adsT).toBe(1)
+    expect(out.py).toBe(WEAPON.ads.py)
+    expect(out.pz).toBe(WEAPON.ads.pz)
+  })
+
+  it('el draw tampoco escribe pose con clip, pero sí termina a tiempo', () => {
+    const state = createViewmodelState()
+    const out = transform()
+    startDraw(state, WEAPON)
+
+    for (let i = 0; i < 16; i++) stepViewmodel(state, CLIP, WEAPON, out, TICK_DT)
+    // A mitad del draw, la caída procedural valdría varios centímetros.
+    expect(out.py).toBe(0)
+    expect(state.drawing).toBe(true)
+
+    for (let i = 0; i < 16; i++) stepViewmodel(state, CLIP, WEAPON, out, TICK_DT)
+    expect(state.drawing).toBe(false)
   })
 })

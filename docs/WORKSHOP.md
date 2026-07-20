@@ -256,6 +256,84 @@ cruceta con una desviación de ±1 px sobre 1280, y ningún cuerpo de arma
 tapando el punto al que se apunta. En el francotirador la cruceta cae dentro
 del tubo del visor, no sobre su techo.
 
+## 5 bis. Viewmodels de Source: la recarga REAL de Counter-Strike
+
+Todo lo de la sección 5 describe los modelos de **mundo** (`w_`): sólo malla,
+sin esqueleto, animados por el rig procedural de seis capas. Esta sección
+describe el otro camino, el de los **viewmodels** (`v_`), que es el que hace
+que la recarga sea la del juego original y no una imitación nuestra.
+
+La diferencia de fondo: un `v_` trae **esqueleto (47-78 huesos), brazos
+modelados con guantes, y las secuencias originales** — recarga, draw, disparo
+y reposo. El `w_` no trae nada de eso.
+
+```bash
+# 1. Blender: importa los v_*.mdl con esqueleto, brazos y animaciones.
+node scripts/mdl-to-glb.ts \
+  workshop-assets/csgo-weapons/models \
+  workshop-assets/glb-viewmodels \
+  --viewmodel
+
+# 2. Normalizar: hornea la textura en COLOR_0, colapsa materiales, tira las
+#    texturas y CONSERVA skin y animaciones. Escribe directo en la carpeta
+#    gitignoreada que sirve el navegador.
+node scripts/convert-source-viewmodels.ts \
+  workshop-assets/glb-viewmodels \
+  public/assets/weapons-local
+```
+
+Los slugs de salida son **los mismos** que los del pipeline `w_` (`ak47.glb`,
+`awp.glb`, ...), a propósito: son la misma arma vista de dos maneras, así que
+cambiar de una familia a la otra no toca ni una fila del registry, del
+catálogo, de los arquetipos ni de los nombres. Correr el pipeline `v_` pisa
+los `.glb` del `w_`; para volver atrás, se vuelve a correr
+`convert-source-weapons.ts`.
+
+**Tres cosas que hay que saber si se toca esto.**
+
+1. **El importador de animaciones de SourceIO está roto en Blender 4.4+.** Usa
+   `action.groups` y `action.fcurves`, que desaparecieron con las "slotted
+   actions". `scripts/blender/vmdl-to-glb.py` trae su propia conversión contra
+   la API nueva; el porqué y la matemática están en el encabezado de ese
+   archivo.
+
+2. **Los brazos de CS:GO usan el shader `character`, que SourceIO tampoco
+   implementa**, y sin rescate salen BLANCOS (el material queda sin textura y
+   el horneado a `COLOR_0` hornea blanco). El script parsea el `.vmt` a mano
+   para sacar `$basetexture` y reconstruye la cadena de nodos. Si algún día
+   los brazos vuelven a salir blancos, es acá.
+
+3. **La geometría NO se normaliza con una matriz**, al revés que en el
+   pipeline `w_`. La malla está skinneada: mover los vértices sin mover las
+   matrices de bind inversas deja malla y esqueleto en espacios distintos y el
+   arma explota al animar. Un `v_` además ya viene posado en espacio de vista
+   —su origen es el ojo del jugador—, así que la única corrección que necesita
+   es una rotación de ejes constante, aplicada al nodo padre en el runtime
+   (`SOURCE_VIEWMODEL_YAW`, `viewmodel/renderer.ts`).
+
+**Costo, medido en el navegador** con `?debug=1`, arma equipada:
+
+| | draws | triángulos |
+|---|---|---|
+| Arma CC0 (una pieza) | 8 | 2,2k |
+| AK-47 `w_` (cuerpo + cargador) | 9 | ~3,3k |
+| AK-47 `v_` (cuerpo + brazos) | 10 | 25,4k |
+| AWP `v_` (cuerpo + mira + brazos) | 11 | 33,8k |
+
+Los `.glb` pesan ~1,2-2,1 MB contra los ~105 KB del `w_`. Se baja uno por arma
+equipada, no los 39.
+
+**Lo que queda pendiente.** El `adsOffset` de estas armas hay que medirlo a
+ojo una por una: la línea de puntería que mide el pipeline se mide sobre la
+pose de BIND, que en un `v_` no es la pose que se dibuja (esa la produce el
+clip `idle`). Hoy sólo `ak47` está medida, en `public/weapons_tuning.json`.
+Las otras 38 tienen `adsOffset` en cero, o sea que apuntar no mueve el arma.
+
+Las tres escopetas de bombeo (`nova`, `sawedoff`, `xm1014`) recargan cartucho
+por cartucho en CS: el `.mdl` trae `start_reload`, un bucle y `after_reload`.
+El pipeline se queda con `start_reload`, así que su recarga se ve como el
+arranque del gesto y no como el gesto completo.
+
 ## 6. Sonidos de disparo por arma
 
 Tercer pipeline con el mismo patrón y el mismo paso manual de copia. Antes

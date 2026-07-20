@@ -27,6 +27,7 @@ const input: ViewmodelInput = {
   ads: true,
   mouseDeltaX: 0.01,
   mouseDeltaY: 0.01,
+  clipDriven: false,
 }
 const out: VmTransform = { px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0 }
 

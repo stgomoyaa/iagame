@@ -235,6 +235,7 @@ describe('la recarga se lee como recarga, no como un agachón', () => {
     ads: false,
     mouseDeltaX: 0,
     mouseDeltaY: 0,
+    clipDriven: false,
   }
 
   /** Corre una recarga entera y devuelve una muestra por tick. */
@@ -327,6 +328,7 @@ describe('independencia del framerate de la recarga', () => {
       ads: false,
       mouseDeltaX: 0,
       mouseDeltaY: 0,
+      clipDriven: false,
     }
 
     /** Pose del cuerpo y del cargador a los `objetivo` segundos de recarga. */

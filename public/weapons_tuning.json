@@ -1,5 +1,5 @@
 {
-  "_comment": "Generado automaticamente desde los seeds heuristicos de src/game/weapons/seed.ts (ver seedWeaponOffsets y scripts/convert-weapons.ts), mas correcciones de orientacion hechas a mano mirando la pantalla con ?debug=1. A mano: assaultrifle-1 (hipOffset/adsOffset/rotationOffset tuneados por Santiago, ground truth) y dos armas con rotationOffset.ry = pi, bullpup-1 y submachinegun-2, las unicas dos que la deteccion de boca del pipeline no resuelve: ambas tienen el cano y la culata igual de finos, las dos salen con needsManualReview y confianza 0.03-0.04, y las dos se verificaron en el navegador. Los otros 21 flips manuales de 180 grados se borraron al arreglar la deteccion de boca en scripts/lib/geometry.ts: ahora el GLB exportado ya sale con el cano hacia -Z, asi que dejarlos habria aplicado el giro dos veces. De assaultrifle-1 se resto solo esa componente sistematica de 180 grados y se conservaron los 4 grados de correccion en rx/ry/rz que puso Santiago. No se edita a mano el resto: el boton EXPORT del panel de tuning sobreescribe este archivo completo la proxima vez que alguien ajuste algo.",
+  "_comment": "Generado automaticamente desde los seeds heuristicos de src/game/weapons/seed.ts (ver seedWeaponOffsets y scripts/convert-weapons.ts), mas correcciones de orientacion hechas a mano mirando la pantalla con ?debug=1. A mano: assaultrifle-1 (hipOffset/adsOffset/rotationOffset tuneados por Santiago, ground truth) y dos armas con rotationOffset.ry = pi, bullpup-1 y submachinegun-2, las unicas dos que la deteccion de boca del pipeline no resuelve: ambas tienen el cano y la culata igual de finos, las dos salen con needsManualReview y confianza 0.03-0.04, y las dos se verificaron en el navegador. Los otros 21 flips manuales de 180 grados se borraron al arreglar la deteccion de boca en scripts/lib/geometry.ts: ahora el GLB exportado ya sale con el cano hacia -Z, asi que dejarlos habria aplicado el giro dos veces. De assaultrifle-1 se resto solo esa componente sistematica de 180 grados y se conservaron los 4 grados de correccion en rx/ry/rz que puso Santiago. No se edita a mano el resto: el boton EXPORT del panel de tuning sobreescribe este archivo completo la proxima vez que alguien ajuste algo. | ak47 es la primera arma del pipeline de VIEWMODELS de Source (v_): su hipOffset es cero porque el modelo ya viene posado en espacio de vista, y su adsOffset (x=-0.096, y=+0.048) se midio a ojo con ?debug=1 hasta dejar el alza sobre la cruceta -residuo 0 px en x y 13 px en y sobre un cuadro de 2560x1440-. Las otras 38 armas v_ siguen con adsOffset cero y necesitan la misma medicion.",
   "assaultrifle-1": {
     "hipOffset": {
       "x": 0.23,
@@ -510,5 +510,31 @@
       "ry": 0,
       "rz": 0
     }
+  },
+  "ak47": {
+    "hipOffset": {
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "adsOffset": {
+      "x": -0.096,
+      "y": 0.048,
+      "z": 0,
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "rotationOffset": {
+      "rx": 0,
+      "ry": 0,
+      "rz": 0
+    },
+    "scaleAdjust": 1,
+    "adsTime": 0.22,
+    "kickMagnitude": 0.6
   }
 }

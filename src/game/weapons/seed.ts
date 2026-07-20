@@ -49,6 +49,20 @@ export interface WeaponIndexEntry {
   sightHeight?: number
   /** Desplazamiento lateral de esa línea. Mismo origen y misma condición. */
   sightLateral?: number
+  /**
+   * El `.glb` es un VIEWMODEL de Source (`v_`): trae esqueleto, brazos
+   * modelados y las secuencias originales del juego.
+   *
+   * Cambia de raíz cómo se posa el arma, y por eso vive acá y no sólo en el
+   * renderer. Un modelo de mundo (`w_`) es un objeto suelto centrado en su
+   * bounding box, y las poses de cadera y mira son la respuesta a "dónde
+   * pondría un brazo este objeto". Un `v_` ya viene POSADO en espacio de
+   * vista: su origen es el ojo del jugador y el arma cuelga de ahí exactamente
+   * donde el juego original la muestra, con manos incluidas. La pose que hay
+   * que sumarle es cero, y toda la heurística de `seedHipOffset` —pensada para
+   * el otro caso— sólo la movería de donde ya está bien.
+   */
+  viewmodel?: boolean
 }
 
 /** Posición (metros) + rotación (radianes) de una pose del viewmodel. */
@@ -149,7 +163,14 @@ function characteristicSize(bounds: WeaponBounds): number {
  * antes, que alejaba un rifle grande de la cámara muy por encima de lo que
  * el brazo del jugador podría sostener.
  */
+/** Pose neutra. Es la semilla de los viewmodels de Source: ver
+ *  `WeaponIndexEntry.viewmodel`. */
+const POSE_NEUTRA: Transform = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 }
+
 export function seedHipOffset(entry: WeaponIndexEntry): Transform {
+  // Un viewmodel de Source ya viene posado: la semilla correcta es no moverlo.
+  if (entry.viewmodel === true) return { ...POSE_NEUTRA }
+
   const { bounds } = entry
   const centerX = (bounds.min[0] + bounds.max[0]) / 2
   const centerY = (bounds.min[1] + bounds.max[1]) / 2
@@ -202,6 +223,21 @@ export function seedHipOffset(entry: WeaponIndexEntry): Transform {
  * la misma proporción de "se acercó al hombro" que cualquier otra arma.
  */
 export function seedAdsOffset(entry: WeaponIndexEntry): Transform {
+  // Los viewmodels de Source arrancan también en cero, y NO con la medición de
+  // `sightHeight` de la rama de abajo, aunque el índice la traiga.
+  //
+  // El motivo es que esa medición no significa lo mismo acá. El pipeline mide
+  // la línea de puntería sobre la geometría en pose de BIND —el esqueleto sin
+  // animar—, y en un `v_` la pose de bind es una pose de referencia, no la de
+  // sostener el arma: la que se ve en pantalla la produce el clip `idle`.
+  // Alinear la cámara contra un número medido en una pose que nunca se dibuja
+  // sería peor que no alinear nada, porque parecería derivado.
+  //
+  // Así que el ADS de estas armas se mide MIRANDO, con el panel de tuning, y
+  // queda guardado en `weapons_tuning.json`. Cero es el punto de partida
+  // honesto: el arma se queda donde CS la pone.
+  if (entry.viewmodel === true) return { ...POSE_NEUTRA }
+
   const { bounds } = entry
   const sizeY = bounds.max[1] - bounds.min[1]
   const hipZ = seedHipOffset(entry).z
