@@ -224,6 +224,17 @@ export function GameCanvas() {
       // hace falta: el navegador ya suelta el lock solo, y eso dispara
       // 'bloqueo-perdido' por el efecto de arriba.
       if (e.code === 'Escape' && fase === 'reanudando') despachar('menu-pedido')
+
+      // Bots en caliente (sección "Bots en caliente" de la tarea): + agrega,
+      // - saca. Sólo jugando, no con el menú abierto (ahí el teclado le
+      // pertenece a los botones). El motor decide cuántos y en qué equipo
+      // (game.agregarBot/quitarBot); acá sólo se traduce la tecla. `Equal`
+      // es la tecla del + y `Minus` la del -; se aceptan también las del
+      // teclado numérico para no depender del layout.
+      if (fase === 'jugando' && game !== null) {
+        if (e.code === 'Equal' || e.code === 'NumpadAdd') game.agregarBot()
+        else if (e.code === 'Minus' || e.code === 'NumpadSubtract') game.quitarBot()
+      }
     }
     function onKeyUp(e: KeyboardEvent): void {
       if (e.code === 'Tab') setScoreboardHeld(false)
@@ -234,7 +245,7 @@ export function GameCanvas() {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [fase, despachar])
+  }, [fase, despachar, game])
 
   /**
    * Volver al juego. El orden importa:
@@ -293,6 +304,18 @@ export function GameCanvas() {
   void loadoutTick
   const loadout = game?.loadout ?? null
 
+  // El marcador y el resumen muestran sólo a quien ALGUNA VEZ jugó (jugador +
+  // bots que entraron, incluido el que ya salió), no los slots que el motor
+  // reservó de más para poder agregar bots en caliente. `matchState.participants`
+  // tiene siempre el tamaño del roster completo (game.ts lo dimensiona así
+  // para poder indexar por id a cualquier bot que entre); recortar acá con la
+  // marca de agua del motor es lo que evita filas fantasma con 0 kills. El
+  // recorte va acá y no en el motor porque es una decisión de PRESENTACIÓN:
+  // los datos de los slots reservados existen y son válidos, sólo no se
+  // muestran. El slice corre a 200 ms (el sondeo de partida), no por frame.
+  const visibles = game?.participantesVisibles ?? matchState?.participants.length ?? 0
+  const participantesVisibles = matchState ? matchState.participants.slice(0, visibles) : []
+
   return (
     <>
       <canvas ref={ref} className="block h-screen w-screen cursor-crosshair" />
@@ -300,13 +323,13 @@ export function GameCanvas() {
         <>
           <Killfeed killfeed={matchState.killfeed} />
           <Scoreboard
-            participants={matchState.participants}
+            participants={participantesVisibles}
             mode={matchState.mode}
             visible={scoreboardHeld}
           />
           {matchState.phase === 'ended' && (
             <MatchSummary
-              summary={buildSummary(matchState, MATCH)}
+              summary={buildSummary({ ...matchState, participants: participantesVisibles }, MATCH)}
               progress={game?.matchProgress ?? null}
             />
           )}
@@ -318,6 +341,7 @@ export function GameCanvas() {
           loadout={loadout}
           slotEquipado={game.slotEquipado}
           nivelCuenta={nivelCuenta}
+          rosterEditable={game.rosterEditable}
           onReanudar={reanudar}
           onEquipar={equipar}
         />
