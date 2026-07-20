@@ -4,7 +4,7 @@ import { box } from '@/game/map/arena'
 import { buildMapBvh, raycastAgainstBvh, raycastMap, type MapHit } from '@/game/combat/hitscan'
 
 function out(): MapHit {
-  return { hit: false, distance: 0 }
+  return { hit: false, distance: 0, normalX: 0, normalY: 1, normalZ: 0 }
 }
 
 describe('raycastAgainstBvh', () => {

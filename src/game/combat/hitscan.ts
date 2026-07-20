@@ -23,6 +23,16 @@ import type { Vec3 } from '@/game/math/vec3'
 export interface MapHit {
   hit: boolean
   distance: number
+  /**
+   * Normal de la cara golpeada, en espacio de mundo y ya orientada CONTRA el
+   * rayo (ver raycastAgainstBvh). La necesitan los impactos y las calcomanías
+   * de feedback/vfx.ts para orientar el quad contra la pared en vez de
+   * dejarlo mirando a cámara. Sólo es válida cuando `hit` es true; con `hit`
+   * en false queda como estaba, nadie la lee.
+   */
+  normalX: number
+  normalY: number
+  normalZ: number
 }
 
 /**
@@ -122,6 +132,28 @@ export function raycastAgainstBvh(
   if (hit) {
     out.hit = true
     out.distance = hit.distance
+
+    // La normal sale de la cara golpeada, pero buildCollisionGeometry arma
+    // los triángulos con devanado inconsistente a propósito (ver el
+    // comentario de `verts`: a raycastFirst le da igual), así que la normal
+    // cruda puede apuntar hacia adentro de la caja. Se la orienta contra el
+    // rayo: siempre se dispara desde AFUERA de la geometría sólida, así que
+    // la normal correcta es siempre la que se opone a la dirección de tiro.
+    // Sin esto, la mitad de las calcomanías quedarían enterradas en la pared.
+    const face = hit.face
+    if (face) {
+      const d = face.normal.x * dir.x + face.normal.y * dir.y + face.normal.z * dir.z
+      const s = d > 0 ? -1 : 1
+      out.normalX = face.normal.x * s
+      out.normalY = face.normal.y * s
+      out.normalZ = face.normal.z * s
+    } else {
+      // Sin cara (no debería pasar con este BVH, pero la firma de three lo
+      // permite): mirar de vuelta al tirador es la aproximación segura.
+      out.normalX = -dir.x
+      out.normalY = -dir.y
+      out.normalZ = -dir.z
+    }
   } else {
     out.hit = false
     out.distance = Infinity

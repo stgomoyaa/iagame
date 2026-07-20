@@ -1,4 +1,5 @@
 import { degToRad } from '@/game/weapons/archetypes'
+import type { WeaponClass } from '@/game/weapons/archetypes'
 
 /**
  * Todos los números del sistema de feedback (sección 5 del spec de fase 1)
@@ -140,5 +141,163 @@ export const FEEDBACK: FeedbackTuning = {
     // Headshot kill: el nivel más alto, agudo Y largo, la ganancia más alta
     // del arsenal de sonidos -- inconfundible.
     headshotKill: { type: 'square', freqStart: 2600, freqEnd: 900, durationS: 0.16, gain: 0.34 },
+  },
+}
+
+/**
+ * Números de los efectos visuales de disparo (fulgor de boca, trazadores,
+ * impactos y calcomanías). Van en un objeto aparte de FEEDBACK porque los
+ * consume otro sistema (feedback/vfx.ts + feedback/vfx-renderer.ts), pero
+ * siguen el mismo patrón mutable para que un panel de debug pueda tocarlos
+ * en caliente.
+ *
+ * Los tamaños de pool son el techo de todo: no hay crecimiento dinámico en
+ * ningún lado. Están elegidos contra el presupuesto de 2.5 ms combinado —
+ * el riesgo real acá no es CPU (escribir instancias es ruido) sino FILL
+ * RATE: cada partícula aditiva es overdraw de pantalla completa en potencia.
+ * Por eso los quads son chicos y las vidas cortas.
+ */
+export interface VfxTuning {
+  /** Fulgores de boca simultáneos. Con cadencia alta se solapan dos o tres. */
+  muzzlePoolSize: number
+  /** Vida del fulgor, segundos. Muy corto a propósito: un fulgor que dura
+   *  se lee como bengala, no como disparo. */
+  muzzleLifeS: number
+  /** Tamaño del quad del fulgor en espacio del viewmodel (metros). */
+  muzzleScale: number
+  /** Variación aleatoria de escala, fracción (0.3 = ±30%). */
+  muzzleScaleJitter: number
+
+  /** Trazadores simultáneos. Techo pensado para jugador + 10 bots disparando. */
+  tracerPoolSize: number
+  /** Vida del trazador, segundos. */
+  tracerLifeS: number
+  /** Velocidad de viaje del trazador, m/s. No es la del proyectil real (el
+   *  hitscan resuelve instantáneo): es la que hace que se LEA como un tiro. */
+  tracerSpeed: number
+  /** Largo del segmento luminoso, metros. */
+  tracerLength: number
+  /** Ancho del segmento, metros. */
+  tracerWidth: number
+  /** Fracción de disparos que dejan trazador (1 = todos). Menos de 1 se ve
+   *  más real y baja el fill; los shooters suelen usar 1 de cada 3-5. */
+  tracerFraction: number
+
+  /** Impactos (chispa + humo) simultáneos. */
+  impactPoolSize: number
+  impactLifeS: number
+  /** Tamaño del quad de chispa, metros. */
+  impactScale: number
+  /**
+   * Cuánto se despega la chispa de la superficie, metros. No es cosmético:
+   * el quad es un billboard CENTRADO en el punto de impacto, así que puesto
+   * exactamente sobre la pared queda medio enterrado -- la mitad de atrás la
+   * descarta el depth test y la de adelante pelea en z. El efecto se veía
+   * cuando lo agrandé a 2 m (sobresalía) y desaparecía al tamaño real, que
+   * es exactamente el síntoma de esto.
+   */
+  impactOffset: number
+
+  /** Calcomanías vivas a la vez. Es un anillo: la número (n+1) pisa la más
+   *  vieja, así que el costo queda plano por más que la partida dure horas.
+   *  Ese acotamiento es el punto -- calcomanías sin techo son la forma
+   *  clásica de filtrar draw calls y memoria a lo largo de una partida. */
+  decalPoolSize: number
+  /** Vida de la calcomanía, segundos. Se desvanece al final en vez de
+   *  desaparecer de golpe. */
+  decalLifeS: number
+  /** Fracción final de la vida en la que se desvanece. */
+  decalFadeFraction: number
+  /** Tamaño de la calcomanía, metros. */
+  decalScale: number
+  /** Cuánto se despega de la pared para no pelear en z con ella, metros. */
+  decalOffset: number
+}
+
+export const VFX: VfxTuning = {
+  muzzlePoolSize: 4,
+  muzzleLifeS: 0.07,
+  muzzleScale: 0.2,
+  muzzleScaleJitter: 0.35,
+
+  tracerPoolSize: 48,
+  tracerLifeS: 0.09,
+  tracerSpeed: 420,
+  tracerLength: 5.5,
+  tracerWidth: 0.045,
+  tracerFraction: 1,
+
+  impactPoolSize: 96,
+  impactLifeS: 0.22,
+  impactScale: 0.2,
+  impactOffset: 0.12,
+
+  decalPoolSize: 64,
+  decalLifeS: 18,
+  decalFadeFraction: 0.2,
+  decalScale: 0.12,
+  decalOffset: 0.05,
+}
+
+/**
+ * Audio de arma con samples reales (a diferencia de los hitmarkers, que
+ * siguen siendo osciladores: un click filtrado se sintetiza convincente y
+ * gratis, un disparo no).
+ *
+ * El mapeo es por FAMILIA de arma, no por modelo: 10 arquetipos comparten 7
+ * disparos y 4 recargas. Eso es deliberado — un sample por arma multiplicaría
+ * el peso de descarga sin que nadie note la diferencia entre dos fusiles.
+ */
+export interface WeaponAudioTuning {
+  /** Ganancia del disparo (0-1). Los samples ya vienen normalizados a -3 dBFS
+   *  de pico, esto es el nivel dentro de la mezcla. */
+  shotGain: number
+  /** Ganancia de la recarga. Más bajo que el disparo: es un sonido de
+   *  manipulación, no un evento de combate. */
+  reloadGain: number
+  /** Ganancia del impacto (sintetizado, ver gun-audio.ts). */
+  impactGain: number
+  /** Variación aleatoria de tono por disparo, fracción de playbackRate.
+   *  Sin esto, fuego sostenido suena a bucle de una sola muestra — es el
+   *  truco más barato para que una sola grabación no se delate. */
+  shotDetune: number
+  /** Ganancia del disparo de un bot, relativa a la del jugador. */
+  botShotGain: number
+  /** Distancia (m) a partir de la cual el disparo de un bot deja de oírse. */
+  botAudibleRange: number
+  /** Archivo de disparo por clase de arma. */
+  shotByClass: Record<WeaponClass, string>
+  /** Archivo de recarga por clase de arma. */
+  reloadByClass: Record<WeaponClass, string>
+}
+
+export const WEAPON_AUDIO: WeaponAudioTuning = {
+  shotGain: 0.5,
+  reloadGain: 0.42,
+  impactGain: 0.3,
+  shotDetune: 0.06,
+  botShotGain: 0.55,
+  botAudibleRange: 60,
+
+  shotByClass: {
+    smg: 'shot-smg.mp3',
+    ar: 'shot-ar.mp3',
+    lmg: 'shot-lmg.mp3',
+    sniper: 'shot-sniper.mp3',
+    marksman: 'shot-marksman.mp3',
+    pistol: 'shot-pistol.mp3',
+    shotgun: 'shot-shotgun.mp3',
+  },
+
+  reloadByClass: {
+    // Cuatro recargas para siete clases: el cargador de fusil sirve igual
+    // para SMG, AR, LMG y marksman -- son todos "sacar mag, meter mag".
+    smg: 'reload-mag.mp3',
+    ar: 'reload-mag.mp3',
+    lmg: 'reload-mag.mp3',
+    marksman: 'reload-mag.mp3',
+    sniper: 'reload-bolt.mp3',
+    pistol: 'reload-pistol.mp3',
+    shotgun: 'reload-pump.mp3',
   },
 }

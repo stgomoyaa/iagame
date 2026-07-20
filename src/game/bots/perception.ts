@@ -20,7 +20,7 @@ export type RaycastMapFn = (origin: Vec3, dir: Vec3, maxDistance: number, out: M
 // varias veces por tick de IA (una por bot), nunca asigna un Vec3/MapHit
 // nuevo.
 const scratchDir: Vec3 = vec3()
-const scratchHit: MapHit = { hit: false, distance: 0 }
+const scratchHit: MapHit = { hit: false, distance: 0, normalX: 0, normalY: 1, normalZ: 0 }
 
 /** Margen restado a la distancia del raycast de línea de vista: sin esto, un
  *  objetivo parado justo en el umbral de una puerta o pegado a una pared
