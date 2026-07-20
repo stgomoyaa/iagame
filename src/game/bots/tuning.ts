@@ -76,8 +76,21 @@ export interface BotsTuning {
    *  que TARGETS.respawnDelayS. */
   respawnDelayS: number
 
+  /**
+   * Escala uniforme aplicada al modelo del personaje (bots/renderer.ts).
+   * Los cuatro personajes comparten esqueleto: el hueso `Head` vive a 1.709 m
+   * en pose de bind y el cuerpo mide 1.854 m. 0.971 = 1.8/1.854 deja la
+   * silueta exactamente dentro de la cápsula de física (PLAYER_CAPSULE.height
+   * = 1.8) y, de paso, el centro del cráneo a 1.66 -- que es donde vive la
+   * hitbox de cabeza. Cualquier cambio acá desalinea lo que se ve de lo que
+   * se dispara: ver bots/hitbox-modelo.test.ts, que ancla los dos números.
+   */
+  modelScale: number
+
   torsoRadius: number
   headRadius: number
+  /** Radio de la hitbox de piernas ('limb', x0.85). */
+  legsRadius: number
   /** Altura (Y, relativa a la base de la cápsula -- player.position.y es el
    *  PIE, no el centro, ver physics/capsule.ts) del centro de la hitbox de
    *  torso. Cápsula de 1.8m de alto (PLAYER_CAPSULE): pecho/torso cae más o
@@ -96,6 +109,15 @@ export interface BotsTuning {
    *  SÍ usaba player.eyeHeight directamente (asimetría entre cómo se armaba
    *  la hitbox del jugador y la de los bots, ver game.ts). */
   headOffsetY: number
+  /**
+   * Altura del centro de la hitbox de piernas. Existe desde que los bots
+   * dejaron de ser cápsulas: con sólo torso y cabeza, la mitad inferior de
+   * un cuerpo claramente visible no registraba ningún impacto -- se le
+   * disparaba a las piernas de algo que se ve como una persona y no pasaba
+   * nada. Usa el multiplicador 'limb' (x0.85) que ya existía en
+   * combat/hitboxes.ts y hasta ahora ningún objetivo estrenaba.
+   */
+  legsOffsetY: number
 
   /** Radio de búsqueda de candidatos al reposicionar/retirarse, metros. */
   repositionSearchRadiusM: number
@@ -200,12 +222,30 @@ export const BOTS: BotsTuning = {
   maxHealth: 100,
   respawnDelayS: 3.0,
 
-  torsoRadius: 0.4,
-  headRadius: 0.2,
-  // Cápsula de 1.8m: torso a mitad de altura, cabeza cerca de la altura de
-  // ojos real (MOVEMENT.eyeHeight = 1.65) -- ver el comentario del campo.
-  torsoOffsetY: 0.95,
-  headOffsetY: 1.6,
+  modelScale: 0.971,
+
+  // Los tres radios y las tres alturas salen de MEDIR el modelo ya escalado
+  // (scripts/convert-characters.ts imprime la geometría de origen; los
+  // números de abajo son esas medidas x modelScale), no de tantear hasta
+  // que "se sienta bien". Con el personaje de pie sobre y=0:
+  //
+  //   parte    visible          hitbox           multiplicador
+  //   piernas  0.00 .. 0.83     0.02 .. 0.82     x0.85 (limb)
+  //   torso    0.83 .. 1.53     0.80 .. 1.56     x1.0
+  //   cabeza   1.52 .. 1.80     1.50 .. 1.82     x1.8
+  //
+  // La cabeza queda centrada en 1.66, a 1 cm de MOVEMENT.eyeHeight (1.65):
+  // el ancla que pide el comentario de headOffsetY se respeta mejor que
+  // antes, cuando estaba en 1.6 y el cráneo dibujado caía en 1.71 -- 11 cm
+  // más arriba que su propia hitbox. Ese desfase es exactamente el bug que
+  // esta tarea venía a evitar: la parte de arriba de una cabeza claramente
+  // visible no registraba, y el pecho alto contaba como headshot.
+  torsoRadius: 0.38,
+  headRadius: 0.16,
+  legsRadius: 0.4,
+  torsoOffsetY: 1.18,
+  headOffsetY: 1.66,
+  legsOffsetY: 0.42,
 
   repositionSearchRadiusM: 12,
   repositionCandidateCount: 8,

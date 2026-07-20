@@ -94,7 +94,7 @@ import { createMatchBots, stepMatchBotsThink } from '@/game/match/squad'
 import { createMatchTargets, type MatchTargets } from '@/game/match/targeting'
 import { MATCH } from '@/game/match/tuning'
 import { createMatchTuningPanel } from '@/game/match/tuning-panel'
-import { isEnemy, PLAYER_ID, type MatchMode } from '@/game/match/types'
+import { isEnemy, PLAYER_ID, teamForParticipant, type MatchMode } from '@/game/match/types'
 
 export interface Game {
   start(): void
@@ -290,7 +290,12 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   // frame().
   const botGrid = buildNavGrid(mapaActual)
   const botWorld = createBotWorld(mapaActual.boxes, raycastMap, botGrid)
-  const botsRenderer = createBotsRenderer(gfx.scene, bots)
+  // El equipo de cada bot sale de la MISMA función que usa el puntaje
+  // (match/types.ts): el color que ve el jugador y el bando que decide si
+  // hay fuego amigo no pueden salir de dos fuentes distintas o el juego
+  // mentiría sobre a quién se le puede disparar.
+  const botTeams = bots.map((_, i) => teamForParticipant(matchMode, i + 1))
+  const botsRenderer = createBotsRenderer(gfx.scene, bots, botTeams)
 
   // Participantes de la partida: 0 = jugador (PLAYER_ID), 1..N = bots por
   // índice+1 (match/types.ts). El jugador reusa bots/health.ts tal cual --
@@ -353,12 +358,11 @@ export function createGame(canvas: HTMLCanvasElement): Game {
   playerHitboxes[0].owner = targetCount + PLAYER_ID
   playerHitboxes[1].owner = targetCount + PLAYER_ID
   bots.forEach((bot, i) => {
-    bot.hitboxes[0].owner = targetCount + (i + 1)
-    bot.hitboxes[1].owner = targetCount + (i + 1)
+    for (const hitbox of bot.hitboxes) hitbox.owner = targetCount + (i + 1)
   })
 
   const allCombatantHitboxes: Hitbox[] = [playerHitboxes[0], playerHitboxes[1]]
-  for (const bot of bots) allCombatantHitboxes.push(bot.hitboxes[0], bot.hitboxes[1])
+  for (const bot of bots) allCombatantHitboxes.push(...bot.hitboxes)
 
   // Lista de hitboxes ENEMIGAS por participante, construida UNA vez acá
   // (referencias reusadas cada frame, cero asignaciones en frame()): en TDM
@@ -768,9 +772,10 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     for (let b = 0; b < bots.length; b++) {
       const bot = bots[b]
       if (!bot.health.alive) continue // ya en radio 0 vía syncBotHitboxes
+      // For indexado y no for-of: esto corre por bot y por frame, y el
+      // iterador de for-of asigna (ver bots/allocations.test.ts).
       if (isInvulnerable(invulnerableUntilS[b + 1], matchState.elapsedS)) {
-        bot.hitboxes[0].radius = 0
-        bot.hitboxes[1].radius = 0
+        for (let h = 0; h < bot.hitboxes.length; h++) bot.hitboxes[h].radius = 0
       }
     }
 
@@ -995,7 +1000,11 @@ export function createGame(canvas: HTMLCanvasElement): Game {
     }
 
     targetsRenderer.sync(targetsState)
-    botsRenderer.sync(bots)
+    // La distancia para el throttle de mixers se mide desde la CÁMARA ya
+    // interpolada de este frame, no desde player.position: es el punto de
+    // vista real, que es lo único que define si alguien puede notar que una
+    // animación corre a menos Hz.
+    botsRenderer.sync(bots, dt, gfx.camera.position.x, gfx.camera.position.z)
 
     // El timer de GPU bracketea desde acá (antes del clear + render del
     // mundo) hasta después de la pasada del viewmodel, más abajo: esas dos

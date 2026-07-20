@@ -20,11 +20,17 @@ const PUEDEN_USAR_THREE = [
   // único punto de contacto con la escena real para dibujarlas (mismo
   // motivo que map/mesh.ts).
   'targets/renderer.ts',
-  // Bots (fase 2, sección 8): cuerpos placeholder (cápsula + esfera) sobre
-  // el cerebro real de bots/bot.ts, que es matemática pura igual que
-  // targets/targets.ts. Único archivo nuevo de esta tarea con permiso de
-  // importar three -- mismo motivo que targets/renderer.ts.
+  // Bots (fase 2, sección 8): el cerebro (bots/bot.ts) es matemática pura
+  // igual que targets/targets.ts, y éste es el único punto de contacto con
+  // la escena -- mismo motivo que targets/renderer.ts. Desde la tarea de
+  // modelos dibuja personajes rigged con AnimationMixer en vez de cápsulas.
   'bots/renderer.ts',
+  // Tinte de equipo del personaje: separado de bots/renderer.ts porque es
+  // una pieza distinta (un material y su shader, no la escena) y porque el
+  // criterio de legibilidad de equipos se lee mejor solo. Único archivo
+  // NUEVO que esta tarea suma a la lista -- mismo criterio que
+  // skins/material.ts, que ya hacía lo propio para las armas.
+  'bots/character-material.ts',
   // Skins (fase 3, sección 7): el generador (skins/generator.ts y todo lo
   // que cuelga de él) es matemática pura y no importa three. Estos dos son
   // el borde contra la escena, mismo criterio que map/mesh.ts:
