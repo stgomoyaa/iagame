@@ -50,6 +50,8 @@ import {
   puntoSourceAThreeMetros,
   rotacionPropSourceAThree,
 } from './lib/bsp.ts'
+import { cuboEnPunto, leerAmbiente, promedioCubo } from './lib/leaf-ambient.ts'
+import { exposicionDelMapa } from './lib/lightmap.ts'
 import { extractPakfileFromBsp } from './lib/pakfile.ts'
 import { extraerResultados } from './mdl-to-glb.ts'
 
@@ -71,6 +73,18 @@ export interface InstanciaProp {
   pos: [number, number, number]
   /** Rotación como cuaternión [x,y,z,w] del motor. */
   quat: [number, number, number, number]
+  /**
+   * Tinte de luz horneada de ESTA instancia, LINEAL y ya dividido por la
+   * exposición del mapa (ver `scripts/lib/leaf-ambient.ts`). Multiplica el
+   * albedo del prop igual que el lightmap multiplica el de las paredes, así
+   * que un 1,1,1 es "sin tocar" y la ausencia del campo significa lo mismo.
+   *
+   * Es opcional porque un mapa sin lightmap horneado (o sin los lumps
+   * ambientales) tiene que dejar los props a albedo pleno: sus paredes
+   * también van a albedo pleno, y tintar sólo los props produce el
+   * desajuste al revés del que esto vino a arreglar.
+   */
+  luz?: [number, number, number]
 }
 
 export interface PropsMapa {
@@ -87,6 +101,21 @@ export interface ReporteProps {
   sinModelo: number
   enSkybox3D: number
   modelosFaltantes: string[]
+  /** Instancias que salieron con tinte de luz horneada. */
+  conLuz: number
+  /**
+   * Instancias montadas sobre una superficie (origen dentro de un brush)
+   * cuya luz se resolvió sondeando el aire de al lado.
+   */
+  luzPorSondeo: number
+  /**
+   * Instancias que ni sondeando encontraron aire con muestras y cayeron a
+   * la muestra más cercana del mapa. Se reporta porque un número alto
+   * significa que el tinte está viniendo de lejos y deja de ser confiable.
+   */
+  luzPorCercania: number
+  /** Divisor de exposición usado, o null si el mapa no trae lightmap. */
+  exposicion: number | null
 }
 
 interface PropCrudo {
@@ -210,6 +239,24 @@ function cajaJugable(buf: Buffer, lumps: Lump[]): { min: [number, number, number
  */
 const MARGEN_JUGABLE = 4096
 
+/**
+ * POR QUÉ SE MUESTREA EN EL ORIGEN DEL PROP Y NO MÁS ARRIBA
+ * ---------------------------------------------------------
+ * La tentación es subir el punto de muestreo al centro de la caja del
+ * modelo (que es lo que Source llama "lighting origin"), porque el origen
+ * de una cerca está al ras del piso. Se midió, y en este mapa EMPEORA: los
+ * props montados en el techo o en una pared -- las 8 `light_domelight02` y
+ * las 6 `windowshutters` de nuketown -- tienen su origen contra la
+ * superficie donde están clavados, así que subir 32 unidades los saca por
+ * ARRIBA del techo, al aire libre, y una lámpara de interior pasa de 0.010
+ * (correcto: el cuarto está oscuro) a 0.394 (la luz del sol de afuera).
+ *
+ * En cambio, para los props que sí se extienden -- las cercas largas, los
+ * autos -- el campo ambiental medido a su alrededor casi no varía: entre
+ * ±64 unidades (1.2 m) el tinte cambia x1.0-x1.8 en todas las cercas del
+ * mapa. O sea que el error de tintarlas con UNA muestra es chico, y mucho
+ * más chico que el de muestrear en el lugar equivocado.
+ */
 export function construirProps(
   buf: Buffer,
   glbDisponible: (nombreGlb: string) => boolean,
@@ -218,12 +265,23 @@ export function construirProps(
   const crudos = leerPropsEstaticos(buf, lumps)
   const { min, max } = cajaJugable(buf, lumps)
 
+  // La luz de los props y la de las paredes se encienden JUNTAS: si el mapa
+  // no trae lightmap no hay exposición con la que normalizar, y las paredes
+  // van a salir a albedo pleno -- tintar sólo los props los dejaría más
+  // oscuros que la pared, que es el mismo desajuste al revés.
+  const exposicion = exposicionDelMapa(buf, lumps)
+  const ambiente = exposicion === null ? null : leerAmbiente(buf, lumps)
+  const cubo = new Float32Array(18)
+
   const modelos: string[] = []
   const indicePorModelo = new Map<string, number>()
   const instancias: InstanciaProp[] = []
   const faltantes = new Set<string>()
   let sinModelo = 0
   let enSkybox = 0
+  let conLuz = 0
+  let luzPorSondeo = 0
+  let luzPorCercania = 0
 
   for (const p of crudos) {
     if (esDelSkybox3D(p.origin, min, max, MARGEN_JUGABLE)) {
@@ -242,11 +300,31 @@ export function construirProps(
       modelos.push(glb)
       indicePorModelo.set(glb, idx)
     }
-    instancias.push({
+
+    const instancia: InstanciaProp = {
       modelo: idx,
       pos: puntoSourceAThreeMetros(p.origin),
       quat: rotacionPropSourceAThree(p.angles[0], p.angles[1], p.angles[2]),
-    })
+    }
+
+    if (ambiente !== null && exposicion !== null) {
+      const origen = cuboEnPunto(ambiente, p.origin[0], p.origin[1], p.origin[2], cubo)
+      if (origen === 'vecindario') luzPorSondeo++
+      if (origen === 'lejano') luzPorCercania++
+      if (origen !== null) {
+        const [r, g, b] = promedioCubo(cubo)
+        // Se recorta en 1: el tinte multiplica el albedo, y un factor mayor
+        // que 1 no "ilumina" sino que quema el color del prop a blanco.
+        instancia.luz = [
+          Math.min(1, r / exposicion),
+          Math.min(1, g / exposicion),
+          Math.min(1, b / exposicion),
+        ]
+        conLuz++
+      }
+    }
+
+    instancias.push(instancia)
   }
 
   const pedidos = new Set(crudos.map((p) => p.modelo)).size
@@ -260,6 +338,10 @@ export function construirProps(
       sinModelo,
       enSkybox3D: enSkybox,
       modelosFaltantes: [...faltantes].sort(),
+      conLuz,
+      luzPorSondeo,
+      luzPorCercania,
+      exposicion,
     },
   }
 }
@@ -340,6 +422,15 @@ function main(): void {
   console.log(`instancias emitidas:        ${reporte.instanciasEmitidas}`)
   console.log(`descartadas (sin modelo):   ${reporte.sinModelo}`)
   console.log(`descartadas (skybox 3D):    ${reporte.enSkybox3D}`)
+  if (reporte.exposicion === null) {
+    console.log('luz horneada:               (el mapa no trae lightmap; props a albedo pleno)')
+  } else {
+    console.log(
+      `luz horneada:               ${reporte.conLuz}/${reporte.instanciasEmitidas} instancias ` +
+        `(exposición ${reporte.exposicion.toFixed(3)}, ${reporte.luzPorSondeo} por sondeo, ` +
+        `${reporte.luzPorCercania} por cercanía)`,
+    )
+  }
   if (reporte.modelosFaltantes.length > 0) {
     console.log('\nmodelos que el .bsp no empaqueta (vienen de los VPK de CS:S/HL2):')
     for (const m of reporte.modelosFaltantes) console.log(`  - ${m}`)
