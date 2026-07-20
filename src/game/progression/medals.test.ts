@@ -8,6 +8,8 @@
  * excepción ni inventar progreso.
  */
 
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   CATALOGO_MEDALLAS,
@@ -42,6 +44,24 @@ describe('búsqueda en el catálogo', () => {
     expect(medalIconPath('doble-baja', 64)).toBe('/assets/ui/64/medalla-doble-baja.png')
     expect(medalIconPath('doble-baja', 256)).toBe('/assets/ui/256/medalla-doble-baja.png')
     expect(medalIconPath('doble-baja')).toBe('/assets/ui/64/medalla-doble-baja.png')
+  })
+
+  // Los iconos los genera una herramienta externa a partir del NOMBRE de la
+  // medalla, mientras que el juego los pide por SLUG. Cuando los dos no
+  // coinciden el archivo existe, se ve bien en la carpeta, y el juego igual
+  // recibe un 404 -- que en un <img> no rompe nada, sólo deja el hueco.
+  // Ya pasó con tres de quince: "Racha de 5" quedó como `racha-5` en vez de
+  // `racha-de-5`, y "Dominación" conservó el nombre viejo del rename. Este
+  // test es la única forma de enterarse sin abrir la pantalla y contar.
+  it('cada medalla del catálogo tiene su PNG en disco, en los dos tamaños', () => {
+    const faltantes: string[] = []
+    for (const medalla of CATALOGO_MEDALLAS) {
+      for (const size of [64, 256] as const) {
+        const ruta = medalIconPath(medalla.slug, size)
+        if (!existsSync(join(process.cwd(), 'public', ruta))) faltantes.push(ruta)
+      }
+    }
+    expect(faltantes).toEqual([])
   })
 })
 
