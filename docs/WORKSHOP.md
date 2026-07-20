@@ -256,6 +256,60 @@ cruceta con una desviación de ±1 px sobre 1280, y ningún cuerpo de arma
 tapando el punto al que se apunta. En el francotirador la cruceta cae dentro
 del tubo del visor, no sobre su techo.
 
+## 5 ter. Las 69 armas de Call of Duty, y la trampa de la orientación
+
+Mismo script que la sección 5, otra carpeta de entrada. El catálogo
+(`source-catalog.ts`) marca cada fila con `game: 'COD'` y eso elige el camino
+**PBR** en vez del horneado a color por vértice: estos modelos traen 26
+texturas e hierros modelados, y hornearlos a `COLOR_0` tiraría exactamente eso.
+
+```bash
+node scripts/convert-source-weapons.ts \
+  workshop-assets/cod-arc9/glb \
+  public/assets/weapons-local
+```
+
+Con eso el arsenal queda en **148 armas** (40 CC0 + 39 CS + 69 COD).
+
+**La trampa, porque costó las 69.** Los `.mdl` de estos modelos traen huesos
+`tag_*` puestos por el autor: `tag_flash` en la boca de fuego, `tag_clip` en el
+cargador. Medirlos es la forma correcta de sacar la orientación — pero se miden
+en el espacio del `.mdl`, que es **Z-up**, y lo que consume el pipeline es el
+`.glb` que exporta Blender, que es **Y-up por spec de glTF**. El exportador
+rota: `X_glb = X_source`, `Y_glb = Z_source`, `Z_glb = -Y_source`.
+
+El eje del cañón (X) sobrevive esa rotación y el vertical no. Declarar
+`upAxis: 2` leyendo los huesos en crudo mandaba el eje del GROSOR del arma a la
+vertical de pantalla: las 69 entraban **roladas 90°, acostadas de lado**, con la
+mira apuntando al costado. Y como `lib/sight.ts` busca la cresta de miras sobre
++Y, medía a lo ancho del arma: **32 de 69 quedaban con línea de puntería
+dudosa**, el AK-47 con confianza 0,00.
+
+Con `upAxis: 1` quedan **4 de 69** dudosas y la confianza mediana del pack es
+0,500 — el mismo número que las 39 de CS, que están verificadas al píxel.
+
+**El guard que lo hace irrepetible.** `assertDeclaredAxes()` (lib/geometry.ts)
+corre en cada conversión y contrasta lo declarado contra la silueta real: el
+cañón tiene que ser el eje más largo, y el vertical el más extenso de los otros
+dos (un arma es más alta que gruesa). Con el bug puesto a propósito, falla en
+las 69 con el número al lado. Cinco armas están exentas del segundo invariante
+por nombre y con la medición que lo justifica (`SILUETA_LATERAL_ANCHA`): son
+ametralladoras con caja de cinta al costado y snipers con bípode desplegado,
+que quedan tan anchas como altas. Ésas se verifican mirándolas, no midiéndolas.
+
+**`tag_ads` no sirve para esto**, aunque el nombre lo prometa. Medido, es la
+posición de la CÁMARA del jugador: el origen en los modelos de COD4 y
+`[-0.068, -5.336, 61.621]` en los de MW3 — el mismo valor para todas las armas
+del pack, o sea cero información por arma. La línea de puntería se sigue
+midiendo con `detectSightLine()` sobre la malla ya normalizada.
+
+**Peso.** 96 MB en 69 archivos (~1,36 MB por arma), del mismo orden que los
+viewmodels `v_` de CS (~1,47 MB). El **78% de cada `.glb` son las texturas
+PNG**, con lado nativo 512 o 1024 y tope en `MAX_LADO_CUERPO = 1024`. Bajar ese
+tope a 512 recorta las de 1024 a la cuarta parte: la palanca está ahí y es una
+constante. La carga es perezosa por slug, así que nada de esto pesa en el
+arranque — se baja un `.glb` por arma equipada.
+
 ## 5 bis. Viewmodels de Source: la recarga REAL de Counter-Strike
 
 Todo lo de la sección 5 describe los modelos de **mundo** (`w_`): sólo malla,
