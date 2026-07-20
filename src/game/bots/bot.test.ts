@@ -487,6 +487,130 @@ describe('Idle caza en vez de esperar', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Enfrentar se ACERCA cuando el objetivo está lejos.
+//
+// La causa de fondo del amontonamiento: Enfrentar hacía `clearPath` siempre,
+// así que un bot que adquiría blanco se plantaba a disparar a cualquier
+// distancia (hasta 45m, el alcance de visión) con el strafe atado a 3m como
+// único movimiento. Medido en nuketown con 8 bots, la mitad de las muestras
+// de bot vivo caían en Enfrentar: dos bots que se cruzaban quedaban
+// congelados juntos todo el tiroteo.
+// ---------------------------------------------------------------------------
+
+describe('Enfrentar se acerca en vez de quedarse clavado a distancia', () => {
+  // Duelo largo en la arena: 24m de separación, muy por encima de
+  // engageAdvanceM (18), con línea de vista limpia por el carril.
+  function mundoDeDueloLargo() {
+    const grid = buildNavGrid(ARENA, 1, 1.8)
+    const world = createBotWorld(ARENA.boxes, raycastMap, grid)
+    const bot = createBotState(vec3(-16, 0.1, 12), 0.5, ARCHETYPE, 51)
+    bot.aimMotor.yaw = 0
+    world.targetEye.x = -16
+    world.targetEye.y = 1.6
+    world.targetEye.z = -12
+    return { world, bot }
+  }
+
+  function distanciaAlObjetivo(bot: ReturnType<typeof createBotState>, world: BotWorld): number {
+    return Math.hypot(
+      bot.player.position.x - world.targetEye.x,
+      bot.player.position.z - world.targetEye.z,
+    )
+  }
+
+  it('a 24m acorta la distancia en vez de disparar desde donde adquirió el blanco', () => {
+    const { world, bot } = mundoDeDueloLargo()
+    const alEmpezar = distanciaAlObjetivo(bot, world)
+
+    for (let tick = 0; tick < 1400; tick++) {
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+    }
+
+    expect(bot.fsm.current).toBe('engage')
+    const alTerminar = distanciaAlObjetivo(bot, world)
+    // Umbral ABSOLUTO, no relativo a BOTS.engageAdvanceM: con la distancia
+    // medida contra la propia constante que gobierna el avance, subirla a
+    // 1e9 (o sea, apagar el arreglo) hace pasar la prueba igual. Verificado
+    // rompiendo la implementación a propósito.
+    //
+    // El bot arranca a 24m. Con el `clearPath` incondicional viejo no tenía
+    // forma de avanzar -- sólo strafe atado a 3m del ancla -- así que
+    // acortar 10m es imposible sin el arreglo.
+    expect(alEmpezar).toBeGreaterThan(20)
+    expect(
+      alEmpezar - alTerminar,
+      `arrancó a ${alEmpezar.toFixed(1)}m y quedó a ${alTerminar.toFixed(1)}m`,
+    ).toBeGreaterThan(10)
+  })
+
+  it('acercándose sigue disparando y no esprinta', () => {
+    const { world, bot } = mundoDeDueloLargo()
+    let avanzoAlgunaVez = false
+
+    for (let tick = 0; tick < 900; tick++) {
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+      if (bot.fsm.current !== 'engage') continue
+      if (bot.engageAdvancing) {
+        avanzoAlgunaVez = true
+        // Avanza disparando: acercarse no es dejar de pelear.
+        expect(bot.combatInput.triggerHeld || bot.combat.recoil.pitchOffset > 0).toBe(true)
+      }
+      expect(bot.input.sprint, 'un bot en combate no esprinta ni acercándose').toBe(false)
+    }
+
+    expect(avanzoAlgunaVez, 'nunca entró en modo de avance').toBe(true)
+  })
+
+  it('llegado a distancia de duelo re-ancla y vuelve a bailar en el sitio', () => {
+    const { world, bot } = mundoDeDueloLargo()
+
+    for (let tick = 0; tick < 1400; tick++) {
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+    }
+    expect(bot.engageAdvancing, 'debería haber dejado de avanzar').toBe(false)
+
+    // Ya en duelo: el ancla tiene que estar DONDE LLEGÓ, no en el punto
+    // lejano donde entró en Enfrentar. Si no se re-anclara, canStrafeTowards
+    // rechazaría todo paso lateral y el bot quedaría plantado justo después
+    // de acercarse -- el mismo bug, movido de lugar.
+    for (let tick = 0; tick < 600; tick++) {
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+      if (bot.fsm.current !== 'engage' || bot.engageAdvancing) continue
+      const d = Math.hypot(
+        bot.player.position.x - bot.strafeAnchor.x,
+        bot.player.position.z - bot.strafeAnchor.z,
+      )
+      expect(d).toBeLessThan(BOTS.engageStrafeRadiusM + BOTS.engageStrafeProbeM + 1)
+    }
+  })
+
+  it('a distancia de duelo (12m) NO avanza: el umbral no se dispara solo', () => {
+    const grid = buildNavGrid(ARENA, 1, 1.8)
+    const world = createBotWorld(ARENA.boxes, raycastMap, grid)
+    const bot = createBotState(vec3(-16, 0.1, 6), 0.5, ARCHETYPE, 51)
+    bot.aimMotor.yaw = 0
+    world.targetEye.x = -16
+    world.targetEye.y = 1.6
+    world.targetEye.z = -6
+
+    for (let tick = 0; tick < 900; tick++) {
+      world.simTimeS += TICK_DT
+      stepAllBotsThink([bot], world, TICK_DT)
+      stepAllBotsMotor([bot], world, TICK_DT)
+      expect(bot.engageAdvancing, `tick ${tick}: avanzó estando a distancia de duelo`).toBe(false)
+    }
+  })
+})
+
 describe('Enfrentar strafea en vez de disparar plantado', () => {
   function mundoDeDuelo() {
     const grid = buildNavGrid(ARENA, 1, 1.8)

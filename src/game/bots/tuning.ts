@@ -157,6 +157,37 @@ export interface BotsTuning {
    *  que el bot ya tenía: nada de posiciones vivas de enemigos. */
   huntMemoryS: number
 
+  /**
+   * Distancia al objetivo, metros, por encima de la cual un bot en Enfrentar
+   * deja de bailar en el sitio y CAMINA hacia él.
+   *
+   * Es el arreglo de fondo del amontonamiento. Enfrentar hacía `clearPath`
+   * SIEMPRE: un bot que adquiría blanco se plantaba a disparar sin importar
+   * la distancia, con el strafe atado a `engageStrafeRadiusM` como único
+   * movimiento. Medido en nuketown con 8 bots, la mitad de las muestras de
+   * bot vivo caían en Enfrentar: media partida con los bots clavados. Dos
+   * que se cruzaban quedaban congelados juntos todo el tiroteo, y ese es el
+   * racimo de la captura.
+   *
+   * Quedarse parado a cielo abierto a 45 m (el alcance de visión) tampoco es
+   * lo que hace un jugador. Por encima de este umbral el bot navega -- lo
+   * que además le devuelve la separación al caminar de steerAlongPath, que
+   * en Enfrentar no corría nunca porque sin camino no hay steering.
+   *
+   * 18 m y no menos: es la separación que saldría de repartir 8 bots parejo
+   * por la zona jugable de nuketown (18.2 m). Un duelo a esa distancia ya
+   * está holgadamente por encima de los 3 m con que se mide el racimo, así
+   * que acercarse más no compra separación, sólo la gasta.
+   */
+  engageAdvanceM: number
+  /**
+   * Distancia, metros, a la que el avance de Enfrentar se detiene y vuelve
+   * el duelo lateral. Estrictamente menor que `engageAdvanceM`: es
+   * histéresis, no un segundo umbral. Sin la banda muerta, un bot parado
+   * justo en el umbral alterna entre navegar y strafear en cada think de
+   * 15Hz y no hace ninguna de las dos cosas.
+   */
+  engageAdvanceStopM: number
   /** Metros a los que el bot en Enfrentar sondea el terreno lateral antes de
    *  strafear hacia ahí (celda caminable + cobertura, ver bots/cover.ts). */
   engageStrafeProbeM: number
@@ -326,6 +357,11 @@ export const BOTS: BotsTuning = {
   // patrullar voy a mirar dónde pasó la cosa.
   huntMemoryS: 12,
 
+  // 18/12: la banda muerta de 6m es más ancha que lo que un bot camina entre
+  // dos decisiones (walkSpeed a 15Hz da ~0.35m), así que el estado no puede
+  // vibrar aunque el objetivo se mueva hacia él.
+  engageAdvanceM: 18,
+  engageAdvanceStopM: 12,
   engageStrafeProbeM: 1.5,
   engageStrafeRadiusM: 3.0,
   // 0.9s de sostén: a la velocidad de caminata da ~3m de recorrido lateral,

@@ -270,6 +270,11 @@ export interface BotState {
   /** Punto donde el bot entró en Enfrentar: el strafe no se aleja más de
    *  BOTS.engageStrafeRadiusM de acá. */
   strafeAnchor: Vec3
+  /** true mientras el bot en Enfrentar está ACERCÁNDOSE al objetivo en vez
+   *  de bailar en el sitio. Es el estado de la histéresis entre
+   *  BOTS.engageAdvanceM y engageAdvanceStopM -- ver stepBotThink caso
+   *  'engage'. */
+  engageAdvancing: boolean
 
   /** Segundos moviéndose por debajo de BOTS.stuckSpeedThreshold pese a tener
    *  intención de avanzar. Dispara el salto de emergencia -- ver stepBotMotor. */
@@ -359,6 +364,7 @@ export function createBotState(
     strafeDir: 0,
     strafeHoldS: 0,
     strafeAnchor: vec3(spawn.x, spawn.y, spawn.z),
+    engageAdvancing: false,
 
     stuckTimeS: 0,
     // Escalonado inicial: se completa cuando se llama createBotSquad (más
@@ -420,6 +426,14 @@ function requestPathTo(bot: BotState, world: BotWorld, goalCellIndex: number): v
   bot.pathGoalCellIndex = goalCellIndex
   bot.pathIndex = 0
   bot.path = entry.found ? entry.path : []
+}
+
+/** Re-centra el ancla del strafe de Enfrentar en donde está el bot AHORA.
+ *  Escribe los tres campos in place -- ningún Vec3 nuevo por think. */
+function anclarStrafe(bot: BotState): void {
+  bot.strafeAnchor.x = bot.player.position.x
+  bot.strafeAnchor.y = bot.player.position.y
+  bot.strafeAnchor.z = bot.player.position.z
 }
 
 function clearPath(bot: BotState): void {
@@ -816,14 +830,62 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
       break
     }
     case 'engage': {
-      clearPath(bot)
       if (justEntered) {
-        bot.strafeAnchor.x = bot.player.position.x
-        bot.strafeAnchor.y = bot.player.position.y
-        bot.strafeAnchor.z = bot.player.position.z
+        anclarStrafe(bot)
         bot.strafeHoldS = BOTS.engageStrafeHoldS
         bot.strafeDir = 0
+        bot.engageAdvancing = false
       }
+
+      // Acercarse si está lejos. Antes acá había un `clearPath` incondicional:
+      // el bot que veía a alguien a 45 m se plantaba a dispararle desde donde
+      // estuviera parado. Ver BOTS.engageAdvanceM para la medición.
+      //
+      // La histéresis (avanza por encima de engageAdvanceM, se detiene por
+      // debajo de engageAdvanceStopM) es lo que impide que el bot alterne
+      // entre navegar y strafear en el borde y no haga ninguna de las dos.
+      const distanciaAlObjetivo = distanceXZ(
+        bot.player.position.x,
+        bot.player.position.z,
+        bot.lastKnownTargetPos.x,
+        bot.lastKnownTargetPos.z,
+      )
+      const veniaAvanzando = bot.engageAdvancing
+      if (bot.engageAdvancing) {
+        if (distanciaAlObjetivo <= BOTS.engageAdvanceStopM) bot.engageAdvancing = false
+      } else if (distanciaAlObjetivo > BOTS.engageAdvanceM) {
+        bot.engageAdvancing = true
+      }
+      // Llegó a distancia de duelo: el ancla se re-centra DONDE LLEGÓ. Sin
+      // esto el strafe seguiría midiéndose contra el punto donde entró en
+      // Enfrentar -- a decenas de metros -- y `canStrafeTowards` rechazaría
+      // todo, dejando al bot plantado justo después de acercarse.
+      if (veniaAvanzando && !bot.engageAdvancing) anclarStrafe(bot)
+
+      if (bot.engageAdvancing) {
+        const goalCell = nearestWalkableCellIndex(
+          world.grid,
+          bot.lastKnownTargetPos.x,
+          bot.lastKnownTargetPos.z,
+          4,
+          world.reachable,
+        )
+        requestPathTo(bot, world, goalCell)
+        if (!hasArrivedAtGoal(bot)) {
+          // Con camino real: el movimiento lo lleva steerAlongPath (que
+          // además aplica la separación al caminar). El strafe se apaga --
+          // son dos movimientos distintos, no se suman.
+          bot.strafeDir = 0
+          break
+        }
+        // Sin camino utilizable hacia el objetivo (encaramado, otro
+        // componente conexo, A* sin ruta): no se queda plantado esperando,
+        // vuelve al duelo lateral desde donde está.
+        bot.engageAdvancing = false
+        anclarStrafe(bot)
+      }
+
+      clearPath(bot)
       // Mientras haya otro cuerpo adentro del espacio personal, el ancla se
       // re-centra en donde está el bot AHORA. Sin esto el arreglo no sirve
       // de nada: Enfrentar hace clearPath, así que el strafe es el único
@@ -838,11 +900,7 @@ export function stepBotThink(bot: BotState, world: BotWorld, dt: number): void {
       // bailar alrededor de una posición, no emigrar" de canStrafeTowards
       // sigue valiendo -- lo que cambia es cuál es esa posición cuando
       // alguien te la está ocupando.
-      if (world.neighbourDistM < BOTS.personalSpaceM) {
-        bot.strafeAnchor.x = bot.player.position.x
-        bot.strafeAnchor.y = bot.player.position.y
-        bot.strafeAnchor.z = bot.player.position.z
-      }
+      if (world.neighbourDistM < BOTS.personalSpaceM) anclarStrafe(bot)
       updateEngageStrafe(bot, world, dt)
       break
     }
@@ -1091,6 +1149,7 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
       bot.investigatedLastActivity = false
       bot.strafeDir = 0
       bot.strafeHoldS = 0
+      bot.engageAdvancing = false
     }
     bot.input.forward = 0
     bot.input.right = 0
@@ -1145,15 +1204,20 @@ export function stepBotMotor(bot: BotState, world: BotWorld, dt: number): void {
     : { forward: 0, right: 0 }
 
   const strafing = bot.fsm.current === 'engage' && bot.strafeDir !== 0
-  // Enfrentar no sigue ningún camino (clearPath en stepBotThink): su
-  // movimiento es puro lateral en ejes LOCALES, o sea exactamente las teclas
-  // A/D del jugador con la mira puesta en el objetivo. Mismo stepPlayer,
-  // misma velocidad de caminata, sin sprint -- un bot no se desliza más
+  // Enfrentar tiene dos movimientos excluyentes (ver stepBotThink caso
+  // 'engage'): acercarse siguiendo un camino, o bailar en el sitio. Cuando
+  // baila, el movimiento es puro lateral en ejes LOCALES, o sea exactamente
+  // las teclas A/D del jugador con la mira puesta en el objetivo. Mismo
+  // stepPlayer, misma velocidad de caminata -- un bot no se desliza más
   // rápido que un humano.
   bot.input.forward = strafing ? 0 : axes.forward
   bot.input.right = strafing ? bot.strafeDir : axes.right
   bot.input.yaw = bot.aimMotor.yaw
-  bot.input.sprint = steer.moving && !strafing
+  // Nunca esprinta en combate, ni siquiera acercándose: el bot avanza
+  // disparando, y un jugador que corre a fondo no está disparando. Es
+  // además lo que mantiene el avance legible como "avanzo sobre vos" y no
+  // como una embestida.
+  bot.input.sprint = steer.moving && !strafing && bot.fsm.current !== 'engage'
   bot.input.crouch = false
 
   const horizontalSpeed = Math.hypot(bot.player.velocity.x, bot.player.velocity.z)
