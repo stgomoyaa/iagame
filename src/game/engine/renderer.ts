@@ -1,4 +1,15 @@
-import { Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from 'three'
+import {
+  CubeTextureLoader,
+  Mesh,
+  MeshBasicMaterial,
+  Object3D,
+  PerspectiveCamera,
+  Scene,
+  SRGBColorSpace,
+  Vector3,
+  WebGLRenderer,
+} from 'three'
+import { CARAS_SKYBOX, mensajeSkyboxFaltante, RUTA_SKYBOX } from '@/game/engine/skybox'
 import { ARENA } from '@/game/map/arena'
 import { buildArenaGeometry } from '@/game/map/mesh'
 import type { MapDef } from '@/game/map/types'
@@ -100,6 +111,60 @@ export function createRenderer(
   const scene = new Scene()
   const camera = new PerspectiveCamera(WORLD_FOV, 1, 0.1, 200)
 
+  // --- cielo -------------------------------------------------------------
+  // Se declara ANTES del cargador y no después: CubeTextureLoader engancha
+  // un onError POR CADA una de las seis caras, así que un asset ausente
+  // dispara seis veces. Sin este candado el aviso sale sextuplicado y se
+  // lee como un bug distinto del que es.
+  let avisoSkyboxEmitido = false
+  function avisarSkyboxFaltante(): void {
+    if (avisoSkyboxEmitido) return
+    avisoSkyboxEmitido = true
+    // `console.error` y no `warn`: esto NO es cosmético. El juego sigue
+    // andando con el cielo negro -- exactamente el estado que esta tarea
+    // vino a eliminar -- así que tiene que doler en la consola.
+    //
+    // Se reporta la carpeta y no la URL del evento: el `error` de un
+    // <img> es un Event pelado, sin la ruta que falló (esa info se la
+    // guarda el navegador para la pestaña de red). Inventar un nombre de
+    // archivo concreto a partir de ahí sería adivinar; con la carpeta
+    // alcanza, porque o están las seis caras o no está ninguna.
+    console.error(mensajeSkyboxFaltante(`${RUTA_SKYBOX}{${CARAS_SKYBOX.join(',')}}`))
+  }
+
+  // El MISMO cielo para los cuatro mapas, incluidos los importados de Source
+  // (que traen su propia idea de skybox en el BSP y acá se ignora a
+  // propósito): es una decisión de dirección de arte, no una limitación.
+  //
+  // Va sobre `scene.background`, no sobre una malla gigante: así lo dibuja
+  // el propio render() de Three con su shader de fondo, a profundidad
+  // máxima y sin escribir el z-buffer. No suma un draw call de geometría ni
+  // se puede atravesar volando. Y NO hay estado por frame acá: se carga una
+  // vez al armar el renderer, así que los guards de asignaciones no ven
+  // nada nuevo.
+  //
+  // Los mapas escritos en código (arena, torre, búnker) no tienen techo:
+  // esto se ve por encima de sus paredes, que es lo buscado.
+  const cielo = new CubeTextureLoader()
+    .setPath(RUTA_SKYBOX)
+    .load(
+      // Copia mutable porque el tipo de load() pide string[]; el orden real
+      // (contrato +X,-X,+Y,-Y,+Z,-Z) lo custodia engine/skybox.ts.
+      [...CARAS_SKYBOX],
+      undefined,
+      undefined,
+      avisarSkyboxFaltante,
+    )
+  // Explícito aunque CubeTextureLoader ya lo ponga por su cuenta en esta
+  // versión de three: es la propiedad de la que depende TODO el presupuesto
+  // de legibilidad del cielo (docs/SKYBOX.md). Si se tratan estos bytes como
+  // luz lineal, la salida los vuelve a codificar a sRGB, el cielo sale
+  // lavado muy por encima de la luminancia diseñada y las siluetas dejan de
+  // recortarse. Dejarlo escrito hace que un cambio de default en un bump de
+  // three no lo apague en silencio.
+  cielo.colorSpace = SRGBColorSpace
+  scene.background = cielo
+
   // Un mapa importado de Source trae su propia malla texturizada
   // (map/external-map.ts) y su `boxes` va vacío: buildArenaGeometry() no
   // dibujaría nada. Los mapas escritos en código siguen por el camino de
@@ -161,6 +226,10 @@ export function createRenderer(
     dispose(): void {
       geometry.dispose()
       material.dispose()
+      // El cubemap son ~25 MB de VRAM con mips: sin esto, cada renderer que
+      // se arme y se tire (cambiar de mapa, HMR en dev) deja los seis
+      // niveles colgados hasta que el driver se dé cuenta.
+      cielo.dispose()
       renderer.dispose()
     },
   }
