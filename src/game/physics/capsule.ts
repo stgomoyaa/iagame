@@ -47,15 +47,51 @@ const MAX_SUBSTEPS = 64
  * número que Source (18 unidades = 0.343 m), a propósito: los mapas
  * importados están construidos dando por sentado exactamente ese valor --
  * cordones de vereda, umbrales y escalones de porche caen justo debajo.
+ *
+ * Exportado porque el navgrid (bots/navgrid.ts) lo necesita para decidir qué
+ * desnivel entre celdas es realmente franqueable en un mapa de brushes: si
+ * ese número y éste fueran dos, el grafo de navegación prometería subidas
+ * que esta función no ejecuta.
  */
-const MAX_ESCALON = 0.35
+export const MAX_ESCALON = 0.35
 
 /**
- * Componente Y mínima de la normal de una cara para considerarla PISABLE.
- * 0.7 es ~45 grados: más empinado que eso ya no es un escalón que se sube
- * sino una pared inclinada que se rodea.
+ * ¿Una cara con normal (nx,ny,nz) es PISO, o es pared?
+ *
+ * Éste es EL umbral de pendiente del motor, y no está elegido a ojo: sale de
+ * despejar el criterio que el propio resolvedor de abajo ya venía usando
+ * para clasificar el empuje ("es piso si el empuje es más vertical que
+ * horizontal"), que es `ny > hypot(nx, nz)`. Para una normal unitaria,
+ * hypot(nx,nz) = sqrt(1 - ny^2), y entonces
+ *
+ *     ny > sqrt(1 - ny^2)   <=>   ny^2 > 1 - ny^2   <=>   ny > 1/sqrt(2)
+ *
+ * o sea exactamente 45 grados de inclinación. El umbral no es una constante
+ * nueva: ya estaba adentro de la física, sin escribir. Lo único que faltaba
+ * era decirlo en voz alta y que el navgrid leyera el MISMO predicado en vez
+ * de una copia. (De paso corrige una incoherencia real que había acá: el
+ * test de escalón usaba 0.7 -- un pelo POR DEBAJO de 1/sqrt(2) -- así que una
+ * cara de 45.3 grados contaba como escalón subible mientras el resolvedor la
+ * clasificaba como pared.)
+ *
+ * Se compara contra `hypot(nx,nz)` y no contra la constante 1/sqrt(2) para
+ * no depender de que la normal esté normalizada: los brushes importados hoy
+ * lo están (verificado sobre los 8821 planos de nuketown), pero la forma
+ * geométrica del criterio no necesita esa suposición.
+ *
+ * `margen` sube el listón sin mover el umbral. Lo usa el navgrid: nuketown
+ * tiene 118 planos EXACTAMENTE a 45 grados (los techos a dos aguas de las
+ * casas), justo sobre el empate, donde el redondeo de punto flotante decide
+ * el resultado. La física puede resolver un empate para cualquier lado sin
+ * consecuencias -- un tick de contacto raro y nada más. El navgrid no: si
+ * hornea "caminable" un techo que la física llama pared, planta destinos
+ * allá arriba y los bots quedan pidiendo caminos imposibles, que es el bug
+ * caro que ya costó 51,5% de muestras trabadas en el búnker. Falla del lado
+ * de no prometer.
  */
-const NORMAL_MINIMA_PISABLE = 0.7
+export function esNormalPisable(nx: number, ny: number, nz: number, margen = 0): boolean {
+  return ny > Math.hypot(nx, nz) + margen
+}
 
 /**
  * Aproximamos la cápsula por su AABB envolvente. Para un mundo de cajas
@@ -190,7 +226,7 @@ function overlapAndResolveConvex(
     }
 
     if (
-      pny >= NORMAL_MINIMA_PISABLE &&
+      esNormalPisable(pnx, pny, pnz) &&
       penetracion <= MAX_ESCALON &&
       penetracion < escalonPenetracion
     ) {
@@ -229,13 +265,15 @@ function overlapAndResolveConvex(
   position.y += ny * minPenetracion
   position.z += nz * minPenetracion
 
-  // Piso/techo sólo si el empuje es más vertical que horizontal; si no, es
-  // pared (incluye rampas empinadas -- qué ángulo es "caminable" lo decide
-  // la tarea de integración con el navgrid, no ésta).
-  const horizontal = Math.hypot(nx, nz)
-  if (Math.abs(ny) > horizontal) {
-    if (ny > 0) out.hitGround = true
-    else out.hitCeiling = true
+  // Piso, techo o pared, con el MISMO predicado de pendiente que hornea el
+  // navgrid (ver esNormalPisable arriba): una rampa que acá cuenta como piso
+  // es exactamente una rampa que allá cuenta como caminable. Antes esto era
+  // un `Math.abs(ny) > hypot(nx,nz)` escrito a mano; es la misma cuenta,
+  // ahora con nombre y con un solo lugar donde vive.
+  if (esNormalPisable(nx, ny, nz)) {
+    out.hitGround = true
+  } else if (esNormalPisable(-nx, -ny, -nz)) {
+    out.hitCeiling = true
   } else {
     out.hitWall = true
   }

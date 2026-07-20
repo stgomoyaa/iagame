@@ -18,7 +18,7 @@
 import {
   cellCenterX,
   cellCenterZ,
-  cellsConnected,
+  cellLinkedTo,
   NEIGHBOR_OFFSETS,
   type NavGrid,
 } from '@/game/bots/navgrid'
@@ -185,7 +185,10 @@ export function findPath(ctx: PathfindingContext, startIndex: number, goalIndex:
 
       const neighbor = nRow * cols + nCol
       if (ctx.closedGen[neighbor] === gen) continue
-      if (!cellsConnected(grid, current, neighbor)) continue
+      // cellLinkedTo y no cellsConnected: son la misma respuesta (el mismo
+      // byte horneado), pero acá ya tenemos el índice `n` del vecino y no
+      // hace falta que la función lo redescubra restando columnas y filas.
+      if (!cellLinkedTo(grid, current, n)) continue
 
       // Costo real (distancia entre centros de celda), no 1/sqrt2 fijo: así
       // un futuro cellSize no uniforme (o un grid no cuadrado) sigue dando
