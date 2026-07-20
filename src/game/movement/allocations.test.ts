@@ -64,53 +64,60 @@ describe('presupuesto de asignaciones', () => {
       stepPlayer(s, input, ARENA.boxes, TICK_DT)
     }
 
-    // gc() sólo antes de la lectura inicial: establece una base limpia.
-    // A propósito NO se llama gc() antes de "después": si hubiera un
+    // gc() ANTES y DESPUÉS del tramo medido: es lo que hace que este guard
+    // mida una fuga y no el humor del recolector.
+    //
+    // Antes se llamaba gc() sólo antes, con este argumento: si hubiera un
     // objeto transitorio por tick (creado y descartado, nunca acumulado),
     // barrer justo antes de medir lo eliminaría del heap y el guard nunca
-    // podría verlo. Sin ese segundo gc(), la basura de los ticks medidos
-    // sigue en el heap al momento de leer "después".
+    // podría verlo. El argumento suena bien pero no se sostiene contra la
+    // medición: la lectura SIN gc() final no depende de cuántos ticks
+    // corriste, depende de en qué punto de su ciclo quedó el GC de V8.
+    // Medido a 200_000 ticks de código limpio (6 corridas, Node v26.3.1,
+    // --expose-gc) daba 7.65-7.71MB -- por encima incluso del umbral de
+    // 4.5MB que este guard tenía. O sea: el guard viejo pasaba a 1.8M ticks
+    // por dónde caía el ciclo del GC, no por margen. Con gc() de los dos
+    // lados, el mismo tramo mide -0.002 a 0.003MB (mismas 6 corridas): tres
+    // órdenes de magnitud menos ruido.
+    //
+    // Lo que se pierde es la detección de basura transitoria por tick; lo
+    // que se gana es un guard que puede fallar por la razón correcta. Con
+    // 7.7MB de ruido, esa detección era teórica: nada por debajo de ~8MB de
+    // basura por tramo se distinguía del fondo.
     global.gc?.()
     const antes = process.memoryUsage().heapUsed
 
     // Derivación (mismo estilo que movement/tuning.ts): el guard tiene que
     // detectar una fuga tan chica como UN number retenido por tick (~8 bytes
     // en V8 -- un `push` a un array a nivel de módulo, el tipo de fuga MÁS
-    // fácil de introducir sin querer, y más chica que el objeto {x,y,z} con
-    // el que se calibró el umbral de 4.5MB originalmente -- ver el informe
-    // de cierre de la tarea "guards de asignaciones"). Para que esa fuga
-    // supere el umbral con un margen holgado (3x o más, no un empate a filo
-    // de cuchillo con el ruido de GC): ticks >= 3 * umbral_bytes / 8 =
-    // 3 * 4.5 * 1_048_576 / 8 = 1_769_472. Antes este guard corría 300_000
-    // ticks -- suficiente para el umbral ORIGINAL (calibrado contra fugas de
-    // objeto, ~24-64 bytes cada una) pero insuficiente para un number: a
-    // 300_000 ticks, una fuga de 8 bytes/tick da sólo 2.4MB, por DEBAJO del
-    // umbral de 4.5MB -- ni siquiera lo cruza, el guard no vería nada.
-    // 1_800_000 redondea hacia arriba y deja ~3.05x de margen (1_800_000 * 8B
-    // = 13.73MB de fuga esperada contra un umbral de 4.5MB). Confirmado a
-    // mano: con un array a nivel de módulo que hace push de un number por
-    // tick en stepPlayer() (movement/step.ts), este guard con 1_800_000
-    // ticks pasó de verde a rojo -- ver el informe de cierre para el
-    // crecimiento medido exacto.
-    for (let i = 0; i < 1_800_000; i++) {
+    // fácil de introducir sin querer). Para que esa fuga supere el umbral
+    // con un margen holgado (3x o más, no un empate a filo de cuchillo con
+    // el ruido): ticks >= 3 * umbral_bytes / 8 = 3 * 0.5 * 1_048_576 / 8 =
+    // 196_608. 200_000 redondea hacia arriba y deja ~3.05x de margen
+    // (200_000 * 8B = 1.53MB de fuga esperada contra un umbral de 0.5MB).
+    //
+    // Este guard corrió 1_800_000 ticks: la misma relación 3x, pero contra
+    // un umbral de 4.5MB. El umbral era el problema, no las iteraciones --
+    // 4.5MB estaba calibrado contra el ruido SIN gc() final. Bajando el
+    // umbral a 0.5MB (el mismo que usa engine/profiler.test.ts) se consigue
+    // el mismo margen de detección con 9 veces menos iteraciones.
+    for (let i = 0; i < 200_000; i++) {
       input.yaw += 0.01
       stepPlayer(s, input, ARENA.boxes, TICK_DT)
     }
 
+    global.gc?.()
     const despues = process.memoryUsage().heapUsed
     const crecimientoMB = (despues - antes) / 1024 / 1024
 
-    // Umbral calibrado empíricamente a 300k ticks (10 corridas con
-    // --expose-gc, Node v26.3.1): sin el gc() final, el ruido de heap del
-    // runtime por 300k ticks de código limpio se observó en 2.58-2.69MB (10
-    // corridas). Un objeto {x,y,z} recreado y descartado cada tick, sin
-    // acumularse (fuga inyectada a propósito para calibrar, la misma
-    // metodología que dejó el umbral original de 7MB a 100k ticks), se
-    // observó en 6.15-6.33MB (10 corridas), separado sin solape del ruido.
-    // 4.5MB queda a medio camino de ese hueco: ~1.8MB de margen sobre el
-    // techo de ruido observado y ~1.65MB por debajo del piso de la fuga
-    // inyectada.
-    expect(crecimientoMB).toBeLessThan(4.5)
+    // Ruido medido con esta metodología (200k ticks, gc() de los dos lados,
+    // 6 corridas, Node v26.3.1): -0.002 a 0.003MB. 0.5MB deja >150x de
+    // margen sobre el techo de ruido. Fuga inyectada para verificar que
+    // este guard PUEDE fallar (un array a nivel de módulo que hace push de
+    // un number por tick en stepPlayer(), movement/step.ts): 1.80MB, 3.6x
+    // por encima del umbral -- por encima de los 1.53MB teóricos porque el
+    // array crece duplicando capacidad, no justo a medida.
+    expect(crecimientoMB).toBeLessThan(0.5)
   })
 
   it('con un mapa importado (miles de brushes convexos) tampoco crece', () => {
@@ -133,15 +140,21 @@ describe('presupuesto de asignaciones', () => {
     global.gc?.()
     const antes = process.memoryUsage().heapUsed
 
-    for (let i = 0; i < 300_000; i++) {
+    for (let i = 0; i < 200_000; i++) {
       input.yaw += 0.01
       stepPlayer(s, input, ARENA.boxes, TICK_DT, convexes)
     }
 
+    global.gc?.()
     const crecimientoMB = (process.memoryUsage().heapUsed - antes) / 1024 / 1024
-    // Mismo umbral y misma metodología que el caso de sólo cajas de arriba:
-    // el punto es detectar bytes POR TICK acumulándose, no medir un número
-    // absoluto.
-    expect(crecimientoMB).toBeLessThan(4.5)
+    // Mismo umbral y misma metodología que el caso de sólo cajas de arriba
+    // (200k ticks, gc() de los dos lados): el punto es detectar bytes POR
+    // TICK acumulándose, no medir un número absoluto. Ruido medido en 6
+    // corridas: -0.661MB constante -- el heap TERMINA más chico que como
+    // arrancó, porque el mundo sintético de 1500 convexos deja basura de
+    // construcción que el gc() del final barre. Un ruido negativo no puede
+    // hacer saltar un `toBeLessThan`, así que no compite con el umbral.
+    // Con la fuga inyectada en stepPlayer() este guard midió 1.80MB.
+    expect(crecimientoMB).toBeLessThan(0.5)
   })
 })

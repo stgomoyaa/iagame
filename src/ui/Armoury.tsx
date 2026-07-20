@@ -41,6 +41,7 @@ import type { PreviewItem } from '@/game/skins/preview'
 import { loadLocalWeapons, resolveArchetype, weaponIndex } from '@/game/weapons/registry'
 import { CLASS_LABEL, statBars } from '@/game/weapons/stats'
 import { WeaponPreview } from '@/ui/WeaponPreview'
+import { SensitivitySettings } from '@/ui/SensitivitySettings'
 
 const MUESCAS = 12
 
@@ -304,6 +305,15 @@ export function Armoury() {
             })}
           </div>
         </section>
+      </div>
+
+      {/* Sensibilidad: fuera de la grilla de tres columnas porque no es una
+          elección de loadout, es un ajuste de control. Vive igual en la
+          armería y no en /play porque es donde el jugador prepara la
+          partida antes de entrar, y porque cambiarla necesita un teclado
+          libre -- dentro del juego el pointer lock se lo come. */}
+      <div className="mt-4">
+        <SensitivitySettings />
       </div>
     </main>
   )

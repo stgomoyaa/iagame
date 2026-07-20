@@ -64,8 +64,11 @@ describe('presupuesto de asignaciones del combate', () => {
     // una): 0.0003-0.02MB, sin tendencia creciente. Una fuga inyectada a
     // propósito (un objeto {x,y,z} retenido por disparo, misma escala,
     // 64000 disparos) dio 6.47MB — casi 3 órdenes de magnitud por encima
-    // del ruido real. 1MB deja ~50x de margen sobre el ruido observado y
-    // sigue ~6x por debajo de la fuga inyectada.
+    // del ruido real. Remedido con la escala actual (200k disparos, 6
+    // corridas, Node v26.3.1): -0.017 a 0.017MB, consistente con aquello.
+    // 0.5MB deja ~30x de margen sobre el techo de ruido observado.
+    // Fuga inyectada en stepCombat() (combat/combat.ts) para verificar que
+    // este guard PUEDE fallar: 1.95MB, 3.9x por encima del umbral.
     global.gc?.()
     const antes = process.memoryUsage().heapUsed
 
@@ -74,16 +77,12 @@ describe('presupuesto de asignaciones del combate', () => {
     // por disparo (~8 bytes en V8, el tamaño de un `push` a un array a nivel
     // de módulo -- el tipo de fuga más fácil de introducir sin querer, más
     // chica que el objeto {x,y,z} con el que se calibró originalmente este
-    // umbral). Para que esa fuga supere el umbral de 1MB con un margen
+    // umbral). Para que esa fuga supere el umbral de 0.5MB con un margen
     // holgado (3x o más, no un empate a filo de cuchillo con el ruido):
-    // iteraciones >= 3 * umbral_bytes / 8 = 3 * 1_048_576 / 8 = 393_216.
-    // 400_000 redondea hacia arriba y deja ~3.05x de margen (400_000 * 8B =
-    // 3.05MB de fuga esperada contra un umbral de 1MB). Confirmado a mano:
-    // con un array a nivel de módulo que hace push de un number por disparo
-    // en fireShot() (combat/shot.ts), este guard con 400_000 iteraciones
-    // pasó de verde a rojo -- ver el informe de cierre de la tarea para el
-    // crecimiento medido exacto.
-    const ITERACIONES = 400_000
+    // iteraciones >= 3 * umbral_bytes / 8 = 3 * 0.5 * 1_048_576 / 8 =
+    // 196_608. 200_000 redondea hacia arriba y deja ~3.05x de margen
+    // (200_000 * 8B = 1.53MB de fuga esperada contra un umbral de 0.5MB).
+    const ITERACIONES = 200_000
     let shotsDisparados = 0
     for (let i = 0; i < ITERACIONES; i++) shotsDisparados += dispararUno()
     expect(shotsDisparados).toBeGreaterThan(2000)
@@ -92,6 +91,6 @@ describe('presupuesto de asignaciones del combate', () => {
     const despues = process.memoryUsage().heapUsed
     const crecimientoMB = (despues - antes) / 1024 / 1024
 
-    expect(crecimientoMB).toBeLessThan(1)
+    expect(crecimientoMB).toBeLessThan(0.5)
   })
 })

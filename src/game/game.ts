@@ -70,6 +70,8 @@ import { vec3, type Vec3 } from '@/game/math/vec3'
 import type { ScreenPoint } from '@/game/engine/renderer'
 import { applyHit, createDefaultTargetDefs, createTargets, stepTargets } from '@/game/targets/targets'
 import { createTargetsRenderer } from '@/game/targets/renderer'
+import { esModoPractica } from '@/game/targets/practica'
+import { createSensitivityStore, radianesPorConteo } from '@/game/settings/store'
 import { createFeedbackAudio } from '@/game/feedback/audio'
 import { createWeaponAudio, gananciaPorDistancia } from '@/game/feedback/gun-audio'
 import { createVfxRenderer } from '@/game/feedback/vfx-renderer'
@@ -131,7 +133,21 @@ export interface Game {
   readonly matchProgress: MatchProgress | null
 }
 
-const SENSITIVITY = 0.0022
+/**
+ * Sensibilidad base en radianes por conteo de mouse. Ya no es una constante:
+ * sale del conversor de sensibilidad que el jugador usa en la armería
+ * (settings/store.ts + settings/sensitivity.ts). Con nada guardado da
+ * exactamente 0.0022, el valor fijo que este archivo tuvo desde la fase 1
+ * -- ver SENS_POR_DEFECTO para la derivación.
+ *
+ * Se lee UNA vez, acá, al construir la partida: es el mismo criterio que el
+ * loadout y el mapa. localStorage es síncrono, así que no hay carrera
+ * posible entre "leer el ajuste" y "arrancar el motor" (el bug de foto
+ * vieja que ya pasó con el registro de armas, ver ui/GameCanvas.tsx).
+ */
+function sensibilidadBase(): number {
+  return radianesPorConteo(createSensitivityStore().load())
+}
 
 /** Cuántos bots poblar la arena, vía `?bots=N` (mismo patrón que
  *  `?debug=1` en weapons/viewmodel/tuning-panel.ts). Default MATCH.botCount
@@ -188,9 +204,14 @@ function posicionBoca(origen: Vec3, disparo: ShotResult, out: Vec3): void {
 
 function getBotCount(): number {
   const raw = new URLSearchParams(window.location.search).get('bots')
-  if (raw === null) return MATCH.botCount
+  // En modo práctica (targets/practica.ts) el default es 0 bots, no
+  // MATCH.botCount: el punto del modo es plinkear dianas sin nadie
+  // disparándote. `?bots=N` explícito sigue mandando -- practicar con un
+  // par de bots sueltos al lado de las dianas es un caso legítimo, sólo
+  // no es lo que pasa si no lo pedís.
+  if (raw === null) return esModoPractica() ? 0 : MATCH.botCount
   const n = Number.parseInt(raw, 10)
-  if (!Number.isFinite(n)) return MATCH.botCount
+  if (!Number.isFinite(n)) return esModoPractica() ? 0 : MATCH.botCount
   return Math.max(0, Math.min(MAX_BOT_COUNT, n))
 }
 
@@ -326,17 +347,24 @@ export function createGame(
 
   applyQuickMatchOverrides()
 
-  // Dianas de la arena (sección 6 del spec de fase 1): hitboxes reales,
+  // Dianas de práctica (sección 6 del spec de fase 1): hitboxes reales,
   // estáticas y móviles, que stepCombat() consume tal cual consumía la
   // lista vacía que había acá antes -- el sistema de combate no cambia,
-  // sólo deja de recibir un array vacío. No participan del puntaje de
-  // partida -- son sólo para plinkear fuera del combate real.
+  // sólo deja de recibir un array vacío. No participan del puntaje.
+  //
+  // SÓLO EN MODO PRÁCTICA (`?practica=1`, ver targets/practica.ts). Se
+  // construyeron en la fase 1, antes de que existieran los bots, y hasta
+  // ahora seguían apareciendo durante las partidas: esferas azules sin
+  // silueta humanoide mezcladas con los bots, que ensucian la lectura de a
+  // qué se le puede disparar. En partida la lista va vacía, que es
+  // exactamente el estado que este mismo código manejaba antes de la fase 1.
+  //
   // Las dianas de plinkeo viven sobre el corredor z=6 de la arena, verificado
   // libre de geometría y blindado con un test (targets/targets.test.ts). Ese
-  // corredor no existe en los otros mapas: ahí la lista va vacía en vez de
-  // dejar dianas flotando dentro de un muro.
+  // corredor no existe en los otros mapas: ahí la lista va vacía aunque se
+  // pida el modo práctica, en vez de dejar dianas flotando dentro de un muro.
   const targetsState = createTargets(
-    mapaActual === ARENA ? createDefaultTargetDefs() : [],
+    mapaActual === ARENA && esModoPractica() ? createDefaultTargetDefs() : [],
   )
   const targetsRenderer = createTargetsRenderer(gfx.scene, targetsState)
 
@@ -498,7 +526,8 @@ export function createGame(
   // que existir antes de esa llamada. frame() lo actualiza cada frame con
   // el valor interpolado de combat/ads.ts.
   let sensMultiplier = 1
-  const input = createInputSystem(() => SENSITIVITY * sensMultiplier)
+  const sensBase = sensibilidadBase()
+  const input = createInputSystem(() => sensBase * sensMultiplier)
 
   /**
    * Deja al jugador mirando hacia donde el mapper apuntó ese spawn. Sin
@@ -1478,6 +1507,15 @@ export function createGame(
               .length,
             vinetasActivas: feedbackState.vignette.pool.items.filter((e) => e.active).length,
           },
+          // `practica` acompaña a `targets` para que la verificación en el
+          // navegador distinga las dos razones por las que la lista puede
+          // venir vacía: no se pidió el modo, o se pidió en un mapa que no
+          // tiene corredor de dianas (ver targets/practica.ts).
+          practica: esModoPractica(),
+          // Sensibilidad EFECTIVA de esta partida (settings/store.ts), para
+          // verificar en el navegador que lo elegido en la armería llegó de
+          // verdad al motor y no se quedó en el panel.
+          sensibilidadRadPorConteo: sensBase,
           targets: targetsState.targets.map((t) => ({
             alive: t.alive,
             health: t.health,
