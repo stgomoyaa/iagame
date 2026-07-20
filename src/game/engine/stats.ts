@@ -1,4 +1,5 @@
 import { FRAME_BUDGET_MS } from '@/game/engine/constants'
+import type { ProfilerStats } from '@/game/engine/profiler'
 
 export interface FrameStats {
   cpuMs: number
@@ -22,14 +23,45 @@ export interface StatsTracker {
   /** gpuMs/gpuPeakMs son opcionales y quedan en -1 por defecto: el timer de
    *  GPU (engine/gpu-timer.ts) recién resuelve resultados varios frames
    *  después de haberlos arrancado, así que game.ts los pasa acá cuando los
-   *  tiene. Los tests de este tracker no necesitan simular eso. */
-  endFrame(drawCalls: number, triangles: number, gpuMs?: number, gpuPeakMs?: number): void
+   *  tiene. Los tests de este tracker no necesitan simular eso.
+   *  profilerStats es igual de opcional: el desglose por sistema
+   *  (engine/profiler.ts) se agrega a la línea del HUD si viene, pero este
+   *  tracker no depende de él para nada de lo que ya hacía. */
+  endFrame(
+    drawCalls: number,
+    triangles: number,
+    gpuMs?: number,
+    gpuPeakMs?: number,
+    profilerStats?: ProfilerStats,
+  ): void
   mount(parent: HTMLElement): void
   unmount(): void
 }
 
 /** El HUD se refresca 4 veces por segundo: escribir texto a 240Hz cuesta más que el juego. */
 const HUD_INTERVAL_MS = 250
+
+/** Mediana/p95 de una sección, "0.12/0.34" -- ver formatProfilerBreakdown. */
+function formatProfilerSection(s: { medianMs: number; p95Ms: number }): string {
+  return `${s.medianMs.toFixed(2)}/${s.p95Ms.toFixed(2)}`
+}
+
+/** Arma el segmento de desglose por sistema que se agrega al final de la
+ *  línea del HUD (ver el bloque de abajo, dentro de HUD_INTERVAL_MS -- esto
+ *  NO corre cada frame, mismo throttle que ya tenía el resto de la línea).
+ *  Nombres de sección tal cual vienen de engine/profiler.ts
+ *  (fisica/ia/combate/feedback/viewmodel/render/otro): mismo vocabulario en
+ *  el código, los comentarios y la pantalla, sin abreviar -- es un HUD de
+ *  diagnóstico, no hace falta ahorrar caracteres a costa de tener que
+ *  recordar qué significa cada sigla. */
+function formatProfilerBreakdown(p: ProfilerStats): string {
+  return (
+    `fisica ${formatProfilerSection(p.fisica)}  ia ${formatProfilerSection(p.ia)}  ` +
+    `combate ${formatProfilerSection(p.combate)}  feedback ${formatProfilerSection(p.feedback)}  ` +
+    `viewmodel ${formatProfilerSection(p.viewmodel)}  render ${formatProfilerSection(p.render)}  ` +
+    `otro ${formatProfilerSection(p.otro)}  (mediana/p95 ms)`
+  )
+}
 
 export function createStatsTracker(): StatsTracker {
   const stats: FrameStats = {
@@ -49,7 +81,13 @@ export function createStatsTracker(): StatsTracker {
       frameStart = performance.now()
     },
 
-    endFrame(drawCalls: number, triangles: number, gpuMs = -1, gpuPeakMs = -1): void {
+    endFrame(
+      drawCalls: number,
+      triangles: number,
+      gpuMs = -1,
+      gpuPeakMs = -1,
+      profilerStats?: ProfilerStats,
+    ): void {
       const now = performance.now()
       stats.cpuMs = now - frameStart
       stats.gpuMs = gpuMs
@@ -96,7 +134,14 @@ export function createStatsTracker(): StatsTracker {
             `${stats.fps.toFixed(0)} fps  |  cpu ${stats.cpuMs.toFixed(2)}ms  |  ` +
             `gpu ${gpu}  |  ${stats.drawCalls} draws  |  ` +
             `${(stats.triangles / 1000).toFixed(1)}k tris  |  ` +
-            `presupuesto ${FRAME_BUDGET_MS}ms`
+            `presupuesto ${FRAME_BUDGET_MS}ms` +
+            // Desglose por sistema (engine/profiler.ts): se agrega al final
+            // de la MISMA línea, no reemplaza nada de lo de arriba (spec de
+            // la tarea de profiling: "no cambies el formato de lo que el
+            // HUD ya muestra"). profilerStats es opcional -- sin él (nadie
+            // llamó a profiler.beginFrame/begin/end este frame, o game.ts
+            // no lo pasó) la línea queda exactamente como antes.
+            (profilerStats ? `  |  ${formatProfilerBreakdown(profilerStats)}` : '')
           hud.style.color = stats.overBudget ? '#ff5f5f' : '#5fff9f'
         }
       }
