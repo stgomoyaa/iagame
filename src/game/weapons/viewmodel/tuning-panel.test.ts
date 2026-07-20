@@ -299,6 +299,7 @@ describe('weaponOptionLabel', () => {
       muzzleConfidence: 0.9,
       upAxisConfidence: 0.9,
       needsManualReview: false,
+      origin: 'cc0',
     })
     expect(label).toBe('Foo 1')
   })
@@ -312,6 +313,7 @@ describe('weaponOptionLabel', () => {
       muzzleConfidence: 0.1,
       upAxisConfidence: 0.8,
       needsManualReview: true,
+      origin: 'cc0',
     })
     expect(label).not.toBe('Foo 1')
     expect(label).toContain('Foo 1')

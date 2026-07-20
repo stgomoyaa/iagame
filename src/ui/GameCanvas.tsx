@@ -6,6 +6,7 @@ import { cargarMapaExterno, type MapaExternoCargado } from '@/game/map/external-
 import { mapaExternoSeleccionado } from '@/game/map/seleccion'
 import { buildSummary } from '@/game/match/match'
 import { MATCH } from '@/game/match/tuning'
+import { loadLocalWeapons } from '@/game/weapons/registry'
 import { Killfeed } from '@/ui/Killfeed'
 import { Scoreboard } from '@/ui/Scoreboard'
 import { MatchSummary } from '@/ui/MatchSummary'
@@ -62,8 +63,18 @@ export function GameCanvas() {
             return null
           })
 
-    carga
-      .then((mapa) => {
+    // El catálogo de armas locales (docs/WORKSHOP.md) se espera ANTES de
+    // armar el motor, no en paralelo. createGame() lee el catálogo de una
+    // sola vez al arrancar -- elige el arma inicial con `weaponIndex()[0]` y
+    // valida el loadout guardado contra WEAPON_REGISTRY (progression/
+    // loadout.ts) -- así que si el fetch todavía está en vuelo, la partida
+    // arranca con las 40 CC0 y un loadout que apuntaba a un arma local queda
+    // "inválido" y se descarta en silencio. El jugador vería su arma elegida
+    // en la armería y otra distinta al entrar. Es el mismo bug de foto vieja
+    // que ya pasó con el panel de tuning (ver registry.ts), y la forma de no
+    // repetirlo es que no haya carrera: se espera.
+    Promise.all([carga, loadLocalWeapons()])
+      .then(([mapa]) => {
         if (cancelado) return
         juego = createGame(canvas, mapa)
         setGame(juego)

@@ -6,7 +6,7 @@ import {
   nivelMaximoDeDesbloqueo,
   unlockedWeapons,
   unlockLevelFor,
-  UNLOCK_LEVELS,
+  unlockLevelsSnapshot,
   xpParaNivel,
   XP_POR_NIVEL,
 } from '@/game/progression/unlocks'
@@ -16,7 +16,7 @@ describe('desbloqueo por nivel de cuenta', () => {
   it('cubre las 40 armas del pack', () => {
     const slugs = weaponIndex().map((e) => e.slug)
     expect(slugs.length).toBe(40)
-    for (const slug of slugs) expect(UNLOCK_LEVELS[slug]).toBeGreaterThan(0)
+    for (const slug of slugs) expect(unlockLevelsSnapshot()[slug]).toBeGreaterThan(0)
   })
 
   it('tira con un arma que no existe en vez de dejarla desbloqueada', () => {
