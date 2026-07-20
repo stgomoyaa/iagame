@@ -1,7 +1,18 @@
-import { BufferGeometry, Mesh, MeshBasicMaterial, Object3D, SRGBColorSpace, Texture } from 'three'
+import {
+  BufferGeometry,
+  InstancedMesh,
+  Matrix4,
+  Mesh,
+  MeshBasicMaterial,
+  MeshStandardMaterial,
+  Object3D,
+  SRGBColorSpace,
+  Texture,
+  Vector3,
+} from 'three'
 import { describe, expect, it } from 'vitest'
 
-import { aplicarLightmap } from '@/game/map/external-map'
+import { aplicarLightmap, construirProps, esPropsMapaJson } from '@/game/map/external-map'
 
 /**
  * El atlas de lightmap tiene cuatro formas de quedar enganchado "casi bien",
@@ -96,5 +107,170 @@ describe('aplicarLightmap', () => {
 
     expect(aplicarLightmap(raiz, new Texture())).toBe(1)
     expect(mat.lightMap).not.toBeNull()
+  })
+})
+
+describe('esPropsMapaJson', () => {
+  const valido = {
+    modelos: ['a.glb', 'b.glb'],
+    instancias: [{ modelo: 1, pos: [1, 2, 3], quat: [0, 0, 0, 1] }],
+  }
+
+  it('acepta la forma que produce scripts/bsp-props.ts', () => {
+    expect(esPropsMapaJson(valido)).toBe(true)
+  })
+
+  it('rechaza un índice de modelo fuera de rango', () => {
+    // Es el error que más silencio hace: el prop se dibuja igual, pero con
+    // el modelo equivocado o con ninguno, y el mapa queda "casi bien".
+    expect(esPropsMapaJson({ ...valido, instancias: [{ modelo: 2, pos: [0, 0, 0], quat: [0, 0, 0, 1] }] })).toBe(false)
+    expect(esPropsMapaJson({ ...valido, instancias: [{ modelo: -1, pos: [0, 0, 0], quat: [0, 0, 0, 1] }] })).toBe(false)
+  })
+
+  it('rechaza un cuaternión de 3 componentes', () => {
+    expect(esPropsMapaJson({ ...valido, instancias: [{ modelo: 0, pos: [0, 0, 0], quat: [0, 0, 1] }] })).toBe(false)
+  })
+
+  it('rechaza NaN en la posición', () => {
+    expect(esPropsMapaJson({ ...valido, instancias: [{ modelo: 0, pos: [0, NaN, 0], quat: [0, 0, 0, 1] }] })).toBe(false)
+  })
+
+  it('rechaza un 404 servido como HTML', () => {
+    expect(esPropsMapaJson('<!DOCTYPE html>')).toBe(false)
+    expect(esPropsMapaJson(null)).toBe(false)
+  })
+})
+
+describe('construirProps', () => {
+  function modeloConMallas(cantidad: number): Object3D {
+    const raiz = new Object3D()
+    for (let i = 0; i < cantidad; i++) raiz.add(new Mesh(new BufferGeometry(), new MeshBasicMaterial()))
+    return raiz
+  }
+
+  function instanciados(raiz: Object3D): InstancedMesh[] {
+    const out: InstancedMesh[] = []
+    raiz.traverse((o) => {
+      if (o instanceof InstancedMesh) out.push(o)
+    })
+    return out
+  }
+
+  it('agrupa las instancias del mismo modelo en UN InstancedMesh', () => {
+    const props = {
+      modelos: ['a.glb'],
+      instancias: [
+        { modelo: 0, pos: [0, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+        { modelo: 0, pos: [5, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+        { modelo: 0, pos: [9, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+      ],
+    }
+    const malla = instanciados(construirProps([modeloConMallas(1)], props))
+    // Tres props, un solo draw call.
+    expect(malla).toHaveLength(1)
+    expect(malla[0].count).toBe(3)
+  })
+
+  it('coloca cada instancia en su posición', () => {
+    const props = {
+      modelos: ['a.glb'],
+      instancias: [
+        { modelo: 0, pos: [1, 2, 3] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+        { modelo: 0, pos: [-4, 5, -6] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+      ],
+    }
+    const malla = instanciados(construirProps([modeloConMallas(1)], props))[0]
+    const m = new Matrix4()
+    const p = new Vector3()
+
+    malla.getMatrixAt(0, m)
+    p.setFromMatrixPosition(m)
+    expect([p.x, p.y, p.z]).toEqual([1, 2, 3])
+
+    malla.getMatrixAt(1, m)
+    p.setFromMatrixPosition(m)
+    expect([p.x, p.y, p.z]).toEqual([-4, 5, -6])
+  })
+
+  it('aplica la rotación de cada instancia', () => {
+    // Media vuelta sobre Y: el eje X del modelo tiene que terminar en -X.
+    const props = {
+      modelos: ['a.glb'],
+      instancias: [
+        { modelo: 0, pos: [0, 0, 0] as [number, number, number], quat: [0, 1, 0, 0] as [number, number, number, number] },
+      ],
+    }
+    const malla = instanciados(construirProps([modeloConMallas(1)], props))[0]
+    const m = new Matrix4()
+    malla.getMatrixAt(0, m)
+    const eje = new Vector3(1, 0, 0).applyMatrix4(m)
+    expect(eje.x).toBeCloseTo(-1, 9)
+    expect(eje.z).toBeCloseTo(0, 9)
+  })
+
+  it('convierte los materiales PBR a MeshBasicMaterial (la escena no tiene luces)', () => {
+    const raiz = new Object3D()
+    raiz.add(new Mesh(new BufferGeometry(), new MeshStandardMaterial({ color: 0x336699 })))
+    const props = {
+      modelos: ['a.glb'],
+      instancias: [
+        { modelo: 0, pos: [0, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+      ],
+    }
+    const malla = instanciados(construirProps([raiz], props))[0]
+    // Un MeshStandardMaterial sin luces se dibuja NEGRO: el prop existe,
+    // está en su lugar, y es una silueta.
+    expect(malla.material).toBeInstanceOf(MeshBasicMaterial)
+    expect((malla.material as MeshBasicMaterial).color.getHex()).toBe(0x336699)
+  })
+
+  it('un modelo con varias mallas produce un InstancedMesh por malla', () => {
+    const props = {
+      modelos: ['a.glb'],
+      instancias: [
+        { modelo: 0, pos: [0, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+      ],
+    }
+    expect(instanciados(construirProps([modeloConMallas(3)], props))).toHaveLength(3)
+  })
+
+  it('compone la transformación INTERNA del GLB con la del prop', () => {
+    // Los GLB de props cuelgan la malla de un nodo con transformación
+    // propia (SourceIO deja ahí el centrado y la escala del modelo). Si se
+    // ignora, cada prop aparece desplazado respecto de su origen -- poco,
+    // lo justo para que las cercas floten o se hundan en el piso.
+    const raiz = new Object3D()
+    const nodo = new Object3D()
+    nodo.position.set(0, 10, 0)
+    nodo.updateMatrix()
+    nodo.add(new Mesh(new BufferGeometry(), new MeshBasicMaterial()))
+    raiz.add(nodo)
+
+    const props = {
+      modelos: ['a.glb'],
+      instancias: [
+        { modelo: 0, pos: [1, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+      ],
+    }
+    const malla = instanciados(construirProps([raiz], props))[0]
+    const m = new Matrix4()
+    malla.getMatrixAt(0, m)
+    const p = new Vector3().setFromMatrixPosition(m)
+    // 1 del prop en X, 10 del nodo interno en Y: las dos tienen que estar.
+    expect(p.x).toBeCloseTo(1, 9)
+    expect(p.y).toBeCloseTo(10, 9)
+  })
+
+  it('ignora una instancia cuyo modelo no se pudo cargar, sin romper el resto', () => {
+    const props = {
+      modelos: ['a.glb', 'falta.glb'],
+      instancias: [
+        { modelo: 1, pos: [0, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+        { modelo: 0, pos: [3, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+      ],
+    }
+    const malla = instanciados(construirProps([modeloConMallas(1)], props))
+    expect(malla).toHaveLength(1)
+    expect(malla[0].count).toBe(1)
   })
 })

@@ -457,6 +457,119 @@ export function yawSourceAThree(grados: number): number {
   return (grados * Math.PI) / 180 - Math.PI / 2
 }
 
+/**
+ * Orientación de un `prop_static` (los `angles` del lump de props, en
+ * GRADOS) como cuaternión `[x,y,z,w]` del motor.
+ *
+ * NO es lo mismo que `yawSourceAThree`, y confundirlos es fácil: aquella
+ * convierte el yaw de un SPAWN, o sea hacia dónde mira una cámara, cuya
+ * referencia (yaw 0 = mirando a -Z) tiene un cuarto de vuelta metido
+ * adentro. Un prop no "mira": se le aplica la rotación tal cual, y con
+ * `angles` en cero tiene que quedar SIN rotar. Pasarle el -π/2 de la cámara
+ * dejaría cada auto y cada cerca del mapa girados 90°.
+ *
+ * Se arma la matriz de Source y después se la lleva a nuestros ejes por
+ * SEMEJANZA (`M · R · M⁻¹`), no rotando sus columnas sueltas. La razón es
+ * que `R` es una transformación, no un vector: si el mundo se mira desde
+ * otra base, hay que cambiar de base la ENTRADA y la SALIDA de `R`, y por
+ * eso aparecen las dos, `M` y su inversa. Convertir sólo las columnas (que
+ * es el error natural, porque las columnas de `R` sí son vectores) da una
+ * rotación que acierta en los múltiplos de 90° y se va de a poco en
+ * cualquier ángulo intermedio -- justo el bug que un mapa como nuketown,
+ * casi todo a 0/90/180, casi no muestra.
+ *
+ * `M` es `ejesSourceAThree`, que es la rotación de -90° sobre X.
+ */
+export function rotacionPropSourceAThree(
+  pitch: number,
+  yaw: number,
+  roll: number,
+): [number, number, number, number] {
+  const rad = Math.PI / 180
+  const sp = Math.sin(pitch * rad)
+  const cp = Math.cos(pitch * rad)
+  const sy = Math.sin(yaw * rad)
+  const cy = Math.cos(yaw * rad)
+  const sr = Math.sin(roll * rad)
+  const cr = Math.cos(roll * rad)
+
+  // AngleMatrix de Source (mathlib): columnas = adelante, izquierda, arriba.
+  // r[fila][columna].
+  const r = [
+    [cp * cy, sr * sp * cy - cr * sy, cr * sp * cy + sr * sy],
+    [cp * sy, sr * sp * sy + cr * cy, cr * sp * sy - sr * cy],
+    [-sp, sr * cp, cr * cp],
+  ]
+
+  // M = ejesSourceAThree como matriz, y su inversa (que es su traspuesta:
+  // M es una rotación pura).
+  const M = [
+    [1, 0, 0],
+    [0, 0, 1],
+    [0, -1, 0],
+  ]
+  const Mi = [
+    [1, 0, 0],
+    [0, 0, -1],
+    [0, 1, 0],
+  ]
+
+  const mul = (a: number[][], b: number[][]): number[][] => {
+    const o = [
+      [0, 0, 0],
+      [0, 0, 0],
+      [0, 0, 0],
+    ]
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        let s = 0
+        for (let k = 0; k < 3; k++) s += a[i][k] * b[k][j]
+        o[i][j] = s
+      }
+    }
+    return o
+  }
+
+  const q = mul(mul(M, r), Mi)
+
+  // Matriz de rotación -> cuaternión (Shepperd: se arranca por la mayor de
+  // las cuatro componentes para no dividir por algo cercano a cero, que es
+  // lo que hace estallar la fórmula "directa" en rotaciones de 180°).
+  const traza = q[0][0] + q[1][1] + q[2][2]
+  let x: number
+  let y: number
+  let z: number
+  let w: number
+
+  if (traza > 0) {
+    const s = Math.sqrt(traza + 1) * 2
+    w = s / 4
+    x = (q[2][1] - q[1][2]) / s
+    y = (q[0][2] - q[2][0]) / s
+    z = (q[1][0] - q[0][1]) / s
+  } else if (q[0][0] > q[1][1] && q[0][0] > q[2][2]) {
+    const s = Math.sqrt(1 + q[0][0] - q[1][1] - q[2][2]) * 2
+    w = (q[2][1] - q[1][2]) / s
+    x = s / 4
+    y = (q[0][1] + q[1][0]) / s
+    z = (q[0][2] + q[2][0]) / s
+  } else if (q[1][1] > q[2][2]) {
+    const s = Math.sqrt(1 + q[1][1] - q[0][0] - q[2][2]) * 2
+    w = (q[0][2] - q[2][0]) / s
+    x = (q[0][1] + q[1][0]) / s
+    y = s / 4
+    z = (q[1][2] + q[2][1]) / s
+  } else {
+    const s = Math.sqrt(1 + q[2][2] - q[0][0] - q[1][1]) * 2
+    w = (q[1][0] - q[0][1]) / s
+    x = (q[0][2] + q[2][0]) / s
+    y = (q[1][2] + q[2][1]) / s
+    z = s / 4
+  }
+
+  return [x, y, z, w]
+}
+
 /** `ejesSourceAThree` + conversión de unidades de Source a metros. */
 export function puntoSourceAThreeMetros(v: readonly [number, number, number]): [number, number, number] {
   const [x, y, z] = ejesSourceAThree(v)

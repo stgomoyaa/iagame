@@ -33,6 +33,13 @@ export interface MapaExterno {
    * falte el archivo y no cargue nada.
    */
   lightmap?: string
+  /**
+   * Props estáticos (`<mapa>-props.json`, salida de scripts/bsp-props.ts) y
+   * el directorio con los GLB de sus modelos. Opcionales igual que el
+   * lightmap: sin ellos el mapa queda pelado de muebles pero jugable.
+   */
+  props?: string
+  propsDir?: string
 }
 
 /**
@@ -49,6 +56,8 @@ export const MAPAS_EXTERNOS: readonly MapaExterno[] = [
     json: '/assets/maps/dm_nuketown.json',
     glb: '/assets/maps/dm_nuketown.glb',
     lightmap: '/assets/maps/dm_nuketown-lightmap.png',
+    props: '/assets/maps/dm_nuketown-props.json',
+    propsDir: '/assets/maps/dm_nuketown-props',
   },
   {
     name: 'lasertag',
