@@ -252,6 +252,28 @@ export interface BotsTuning {
   /** Altura mínima, metros, para que una caja del mapa cuente como cobertura
    *  al evaluar un strafe (bots/cover.ts). */
   coverMinHeightM: number
+  /**
+   * Altura sobre el suelo local, metros, a la que se sondea si hay geometría
+   * sólida al hornear el campo de cobertura de un mapa importado
+   * (bots/cover-field.ts). Es la altura del TORSO: lo que decide si algo te
+   * tapa de un disparo no es que estorbe el paso sino que haya material
+   * entre la bala y tu pecho.
+   *
+   * 0.9 y no 1.5 (los ojos) a propósito: una cobertura media que te deja la
+   * cabeza afuera sigue siendo cobertura -- es la que usa cualquier jugador
+   * asomándose. Sondear a la altura de los ojos descartaría justo las más
+   * usadas.
+   */
+  coverProbeHeightM: number
+  /**
+   * Lado de la lattice del campo de cobertura, metros. Más fino que
+   * `navCellSize` a propósito: la sonda cae en el CENTRO de la celda, y con
+   * 1 m el centro de una celda pegada a un muro cae del lado del aire, así
+   * que muros y props delgados desaparecían del campo. MEDIDO en nuketown
+   * con 0.25: 5.664 sondas sólidas contra 3 (tres, no un typo) sondeando a
+   * 1 m. El costo es memoria de bake, que se paga una vez por mapa.
+   */
+  coverFieldCellSizeM: number
 
   /** Radianes/seg a los que decae el error de "atascado" (empuja al bot a
    *  saltar) -- no es visual, gobierna sólo la heurística de mantle. */
@@ -375,6 +397,8 @@ export const BOTS: BotsTuning = {
   personalSpaceRepositionWeight: 3.0,
   separationSteerWeight: 0.7,
   coverMinHeightM: 1.0,
+  coverProbeHeightM: 0.9,
+  coverFieldCellSizeM: 0.25,
 
   stuckSpeedThreshold: 0.6,
   stuckTimeS: 0.25,
