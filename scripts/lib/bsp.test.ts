@@ -6,6 +6,7 @@ import {
   ejesSourceAThree,
   planoSourceAThreeMetros,
   puntoSourceAThreeMetros,
+  rotacionPropSourceAThree,
   yawSourceAThree,
 } from './bsp.ts'
 
@@ -127,5 +128,124 @@ describe('yawSourceAThree', () => {
     const [x, z] = adelante(yawSourceAThree(270))
     expect(x).toBeCloseTo(0)
     expect(z).toBeCloseTo(1)
+  })
+})
+
+/**
+ * `rotacionPropSourceAThree` se verifica por su PROPIEDAD DEFINITORIA y no
+ * comparando contra números escritos a mano: si la rotación del prop es
+ * correcta, rotar un vector en el mundo de Source y después cambiarlo de
+ * ejes tiene que dar lo mismo que cambiarlo de ejes y después aplicarle el
+ * cuaternión. O sea:
+ *
+ *     M(R_source · v)  ==  q_three · (M v)
+ *
+ * Los dos lados se calculan por caminos distintos (uno con la matriz de
+ * Source y `ejesSourceAThree`, el otro con el cuaternión que devuelve la
+ * función), así que un error en la conjugación no se cancela solo.
+ *
+ * Los ángulos de prueba incluyen valores que NO son múltiplos de 90: con
+ * 0/90/180 -- que es casi todo lo que usa nuketown -- la versión
+ * equivocada (rotar las columnas en vez de conjugar) da el mismo resultado
+ * que la correcta y el test no vería nada.
+ */
+describe('rotacionPropSourceAThree', () => {
+  /** Matriz de Source (la misma convención que documenta la función). */
+  function matrizSource(pitch: number, yaw: number, roll: number): number[][] {
+    const r = Math.PI / 180
+    const sp = Math.sin(pitch * r)
+    const cp = Math.cos(pitch * r)
+    const sy = Math.sin(yaw * r)
+    const cy = Math.cos(yaw * r)
+    const sr = Math.sin(roll * r)
+    const cr = Math.cos(roll * r)
+    return [
+      [cp * cy, sr * sp * cy - cr * sy, cr * sp * cy + sr * sy],
+      [cp * sy, sr * sp * sy + cr * cy, cr * sp * sy - sr * cy],
+      [-sp, sr * cp, cr * cp],
+    ]
+  }
+
+  function aplicarQuat(q: [number, number, number, number], v: [number, number, number]): [number, number, number] {
+    const [x, y, z, w] = q
+    // v' = v + 2w(q x v) + 2(q x (q x v))
+    const cx = y * v[2] - z * v[1]
+    const cy = z * v[0] - x * v[2]
+    const cz = x * v[1] - y * v[0]
+    const ccx = y * cz - z * cy
+    const ccy = z * cx - x * cz
+    const ccz = x * cy - y * cx
+    return [v[0] + 2 * (w * cx + ccx), v[1] + 2 * (w * cy + ccy), v[2] + 2 * (w * cz + ccz)]
+  }
+
+  const casos: Array<[number, number, number]> = [
+    [0, 0, 0],
+    [0, 90, 0],
+    [0, 180, 0],
+    [0, -90, 0],
+    // Los que de verdad discriminan: ángulos oblicuos y los tres ejes a la vez.
+    [0, 37, 0],
+    [23, 0, 0],
+    [0, 0, 41],
+    [17, 53, 29],
+    [-12, 155, -74],
+  ]
+
+  // Vectores con las tres componentes distintas y de signo mixto, por el
+  // mismo motivo que el resto de este archivo.
+  const vectores: Array<[number, number, number]> = [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+    [2, -3, 5],
+    [-7, 11, -1],
+  ]
+
+  for (const [pitch, yaw, roll] of casos) {
+    it(`conmuta con el cambio de ejes en (pitch=${pitch}, yaw=${yaw}, roll=${roll})`, () => {
+      const q = rotacionPropSourceAThree(pitch, yaw, roll)
+      const R = matrizSource(pitch, yaw, roll)
+
+      for (const v of vectores) {
+        // Camino A: rotar en Source, después cambiar de ejes.
+        const rv: [number, number, number] = [
+          R[0][0] * v[0] + R[0][1] * v[1] + R[0][2] * v[2],
+          R[1][0] * v[0] + R[1][1] * v[1] + R[1][2] * v[2],
+          R[2][0] * v[0] + R[2][1] * v[1] + R[2][2] * v[2],
+        ]
+        const a = ejesSourceAThree(rv)
+
+        // Camino B: cambiar de ejes, después aplicar el cuaternión.
+        const b = aplicarQuat(q, ejesSourceAThree(v))
+
+        for (let i = 0; i < 3; i++) expect(b[i]).toBeCloseTo(a[i], 9)
+      }
+    })
+  }
+
+  it('con angles en cero devuelve la identidad (un prop sin rotar NO se toca)', () => {
+    const [x, y, z, w] = rotacionPropSourceAThree(0, 0, 0)
+    expect(x).toBeCloseTo(0, 12)
+    expect(y).toBeCloseTo(0, 12)
+    expect(z).toBeCloseTo(0, 12)
+    expect(Math.abs(w)).toBeCloseTo(1, 12)
+  })
+
+  it('devuelve un cuaternión unitario', () => {
+    for (const [p, y, r] of casos) {
+      const q = rotacionPropSourceAThree(p, y, r)
+      expect(Math.hypot(q[0], q[1], q[2], q[3])).toBeCloseTo(1, 10)
+    }
+  })
+
+  it('el yaw de un prop gira sobre el eje Y del motor, sin el cuarto de vuelta de la cámara', () => {
+    // yaw=90 en Source lleva el "adelante" (+X) a +Y de Source, que en
+    // three es -Z. Si alguien reusara yawSourceAThree acá, el prop saldría
+    // 90° corrido.
+    const q = rotacionPropSourceAThree(0, 90, 0)
+    const adelante = aplicarQuat(q, [1, 0, 0])
+    expect(adelante[0]).toBeCloseTo(0, 9)
+    expect(adelante[1]).toBeCloseTo(0, 9)
+    expect(adelante[2]).toBeCloseTo(-1, 9)
   })
 })

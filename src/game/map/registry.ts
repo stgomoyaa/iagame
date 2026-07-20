@@ -25,6 +25,21 @@ export interface MapaExterno {
   json: string
   /** Malla visual texturizada, salida de scripts/map-textures.ts. */
   glb: string
+  /**
+   * Atlas de lightmap horneado (`<mapa>-lightmap.png`, salida de
+   * scripts/bsp-convert.ts). Opcional: un mapa convertido con una versión
+   * anterior del script no lo tiene, y sin él la malla se dibuja a albedo
+   * pleno -- que es exactamente como se veía antes. Se prefiere eso a que
+   * falte el archivo y no cargue nada.
+   */
+  lightmap?: string
+  /**
+   * Props estáticos (`<mapa>-props.json`, salida de scripts/bsp-props.ts) y
+   * el directorio con los GLB de sus modelos. Opcionales igual que el
+   * lightmap: sin ellos el mapa queda pelado de muebles pero jugable.
+   */
+  props?: string
+  propsDir?: string
 }
 
 /**
@@ -40,11 +55,27 @@ export const MAPAS_EXTERNOS: readonly MapaExterno[] = [
     name: 'nuketown',
     json: '/assets/maps/dm_nuketown.json',
     glb: '/assets/maps/dm_nuketown.glb',
+    lightmap: '/assets/maps/dm_nuketown-lightmap.png',
+    props: '/assets/maps/dm_nuketown-props.json',
+    propsDir: '/assets/maps/dm_nuketown-props',
   },
   {
     name: 'lasertag',
     json: '/assets/maps/gm_lasertag_arena.json',
     glb: '/assets/maps/gm_lasertag_arena.glb',
+    // SIN lightmap a propósito, y no por olvido. `bsp-convert.ts` genera el
+    // atlas de este mapa igual que el de nuketown, pero engancharlo lo deja
+    // INJUGABLE: la arena se ve casi negra, no se distinguen ni las paredes
+    // ni el techo. No es un bug del importador -- es que la luz horneada de
+    // este mapa realmente es así de tenue (p50=0.478, p75=0.580, p90=0.670,
+    // contra 0.510/1.900/2.387 de nuketown: la misma mediana pero sin nada
+    // del rango alto que en nuketown ilumina el exterior). Con el divisor
+    // ya en su piso de 1.0 no queda margen de exposición para levantarla, y
+    // subirla más sería inventar luz que el autor del mapa no puso.
+    //
+    // Se prefiere dejarlo como estaba -- albedo pleno, plano pero legible --
+    // antes que shippear un mapa fiel e injugable. Verificado mirando las
+    // capturas de las dos versiones.
   },
 ]
 
