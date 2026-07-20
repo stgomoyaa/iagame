@@ -19,7 +19,7 @@ import {
   type WeaponArchetype,
   type WeaponClass,
 } from '@/game/weapons/archetypes'
-import { SOURCE_WEAPONS_BY_SLUG } from '@/game/weapons/source-catalog'
+import { SOURCE_WEAPONS_BY_SLUG, sourceWeaponDisplayName } from '@/game/weapons/source-catalog'
 import {
   seedWeaponOffsets,
   type Transform,
@@ -302,9 +302,16 @@ function parseLocalEntry(raw: unknown): WeaponIndexEntry | null {
   if (!Array.isArray(bounds?.min) || !Array.isArray(bounds?.max)) return null
   if (bounds.min.length < 3 || bounds.max.length < 3) return null
 
+  // El nombre mostrado lo manda el CATÁLOGO, no el índice en disco. El índice
+  // local lo escribe un script en la máquina de quien desarrolla y puede ser
+  // de una corrida vieja: si el nombre saliera de ahí, renombrar un arma en
+  // source-catalog.ts no se vería hasta reconvertir los 39 .glb. El índice
+  // aporta la geometría; el catálogo, cómo se llama.
+  const source = SOURCE_WEAPONS_BY_SLUG.get(e.slug)
+
   return {
     slug: e.slug,
-    name: e.name,
+    name: source ? sourceWeaponDisplayName(source) : e.name,
     triangles: typeof e.triangles === 'number' ? e.triangles : 0,
     bounds: { min: bounds.min as number[], max: bounds.max as number[] },
     muzzleConfidence: typeof e.muzzleConfidence === 'number' ? e.muzzleConfidence : 1,

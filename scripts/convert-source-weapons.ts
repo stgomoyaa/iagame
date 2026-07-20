@@ -85,7 +85,11 @@ import { mergeIndex, type IndexEntry } from './lib/merge-index.ts'
 import { decodePng, samplePngRgb, type DecodedPng } from './lib/png-reader.ts'
 import { detectSightLine, type SightType } from './lib/sight.ts'
 import { ARCHETYPES, type WeaponClass } from '../src/game/weapons/archetypes.ts'
-import { SOURCE_WEAPONS, type SourceWeaponEntry } from '../src/game/weapons/source-catalog.ts'
+import {
+  SOURCE_WEAPONS,
+  sourceWeaponDisplayName,
+  type SourceWeaponEntry,
+} from '../src/game/weapons/source-catalog.ts'
 
 /**
  * Convención de ejes de los modelos crudos, declarada (ver punto 2 del
@@ -361,7 +365,11 @@ async function convertOne(
   return {
     slug: entry.slug,
     hasMagazine,
-    name: entry.name,
+    // Nombre real + etiqueta de juego (`AK-47 (CS)`). El registry lo vuelve a
+    // resolver del catálogo al cargar el índice, así que esto es sólo para que
+    // un index.json recién generado ya se lea bien; la fuente de verdad del
+    // nombre es source-catalog.ts.
+    name: sourceWeaponDisplayName(entry),
     triangles: countTriangles(doc),
     bounds: {
       min: [b.min[0], b.min[1], b.min[2]],

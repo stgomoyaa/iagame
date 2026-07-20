@@ -39,6 +39,7 @@ import {
 import { applyMatchResult, careerDifficulty, type MatchProgress } from '@/game/progression/career'
 import { performanceFromStats } from '@/game/progression/combat-score'
 import { getWeaponVisual, weaponIndex } from '@/game/weapons/registry'
+import { resolveRecoilPattern } from '@/game/weapons/recoil-patterns'
 import { createRigWeapon, syncRigWeapon } from '@/game/weapons/viewmodel/adapt'
 import { createViewmodelRenderer } from '@/game/weapons/viewmodel/renderer'
 import { createMagTransform, magazinePose } from '@/game/weapons/viewmodel/reload'
@@ -841,6 +842,11 @@ export function createGame(
     // combate corren por delante de lo que se ve.
     const shownSlug = viewmodel.attachedSlug
     const archetype = shownSlug ? ARCHETYPES[getWeaponVisual(shownSlug).archetype] : null
+    // El patrón es POR ARMA, no por arquetipo: el AK-47 y la M4A4 comparten
+    // `ar-1` y aun así se disparan distinto (weapons/recoil-patterns.ts). Se
+    // resuelve acá, junto al arquetipo, y no adentro de stepCombat: es una
+    // búsqueda por slug que no tiene por qué repetirse por disparo.
+    const recoilPattern = archetype ? resolveRecoilPattern(shownSlug, archetype) : null
 
     if (archetype && archetype.id !== combatArchetypeId) {
       resetCombatState(combatState, archetype)
@@ -1032,7 +1038,15 @@ export function createGame(
       combatInput.pitch = input.pitch
       combatInput.yaw = input.player.yaw
       profiler.begin('combate')
-      shotsFired = stepCombat(combatState, archetype, combatInput, playerShotHitboxes, dt, shotResult)
+      shotsFired = stepCombat(
+        combatState,
+        archetype,
+        combatInput,
+        playerShotHitboxes,
+        dt,
+        shotResult,
+        recoilPattern ?? undefined,
+      )
       profiler.end('combate')
 
       // Culatazo del arma (weapons/viewmodel/rig.ts: fire(), sección "qué

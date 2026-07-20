@@ -8,6 +8,7 @@
 
 import type { Vec3 } from '@/game/math/vec3'
 import type { WeaponArchetype } from '@/game/weapons/archetypes'
+import type { RecoilPattern } from '@/game/weapons/recoil-patterns'
 import {
   createFireControlState,
   resetFireControl,
@@ -93,13 +94,19 @@ export function stepCombat(
   hitboxes: Hitbox[],
   dt: number,
   out: ShotResult,
+  /**
+   * Patrón de retroceso del ARMA (weapons/recoil-patterns.ts). Opcional y al
+   * final a propósito: quien no lo pasa (los bots, que eligen por arquetipo y
+   * no por modelo) sigue recibiendo el del arquetipo, sin cambiar su llamada.
+   */
+  recoilPattern?: RecoilPattern,
 ): number {
   const reloadJustCompleted = syncReloadState(state.fireControl, archetype, input.reloading)
   if (reloadJustCompleted) resetRecoilPattern(state.recoil)
   const shots = stepFireControl(state.fireControl, archetype, input.triggerHeld, input.reloading, dt)
 
   for (let i = 0; i < shots; i++) {
-    applyRecoilShot(state.recoil, archetype)
+    applyRecoilShot(state.recoil, archetype, recoilPattern)
     growSpread(state.spread, archetype.recoil.spread)
     sampleSpread(state.spread, scratchSpreadSample)
     fireShot(
