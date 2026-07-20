@@ -60,13 +60,15 @@ import {
   TAM_VERTEX,
   bboxDelBrush,
   bboxSourceAThreeMetros,
-  leerBrushesSolidos,
+  leerBrushesDeColision,
   leerLumps,
   leerPlanos,
   planoSourceAThreeMetros,
   puntoSourceAThreeMetros,
   yawSourceAThree,
 } from './lib/bsp.ts'
+import { type Atlas, construirAtlas, uvBlanco, uvLightmap } from './lib/lightmap.ts'
+import { encodePng } from './lib/png-writer.ts'
 
 // Bits de SURF_ relevantes de LUMP_TEXINFO (texinfo_t.flags). El resto del
 // bitfield (SURF_LIGHT, SURF_SKY, etc.) no importa para decidir si una cara
@@ -119,6 +121,8 @@ export interface ReporteConversion {
   triangulos: number
   materiales: number
   displacements: number
+  /** null si el mapa no trae muestras horneadas en LUMP_LIGHTING. */
+  lightmap: { lado: number; caras: number; exposicion: number; ocupacion: number } | null
 }
 
 /**
@@ -305,6 +309,8 @@ function esCaraDescartable(flags: number, nombreMaterial: string): boolean {
 interface PrimitivaAcumulada {
   posiciones: number[]
   uvs: number[]
+  /** Segundo juego de UV: dónde muestrear el atlas de lightmap. */
+  uvsLightmap: number[]
   indices: number[]
 }
 
@@ -316,7 +322,13 @@ interface PrimitivaAcumulada {
 function construirMalla(
   buf: Buffer,
   lumps: Lump[],
-): { porMaterial: Map<string, PrimitivaAcumulada>; triangulos: number; displacements: number } {
+  atlas: Atlas | null,
+): {
+  porMaterial: Map<string, PrimitivaAcumulada>
+  triangulos: number
+  displacements: number
+  carasSinLightmap: number
+} {
   const vertices = leerVertices(buf, lumps[LUMP_VERTEXES])
   const edges = leerEdges(buf, lumps[LUMP_EDGES])
   const surfedges = leerSurfedges(buf, lumps[LUMP_SURFEDGES])
@@ -330,10 +342,20 @@ function construirMalla(
   )
   const displacements = Math.floor(lumps[LUMP_DISPINFO].largo / TAM_DISPINFO)
 
+  // Índice de cara -> posición en la lista del atlas. El atlas sólo incluye
+  // las caras que TIENEN lightmap (en nuketown 5034 de 5400), así que no se
+  // puede indexar por número de cara directamente.
+  const enAtlas = new Map<number, number>()
+  if (atlas !== null) {
+    for (let i = 0; i < atlas.caras.length; i++) enAtlas.set(atlas.caras[i].cara, i)
+  }
+
   const porMaterial = new Map<string, PrimitivaAcumulada>()
   let triangulos = 0
+  let carasSinLightmap = 0
 
-  for (const face of faces) {
+  for (let indiceCara = 0; indiceCara < faces.length; indiceCara++) {
+    const face = faces[indiceCara]
     // Fuera de alcance: las caras de displacement son sólo el quad base, no
     // el terreno esculpido real (eso vive en LUMP_DISPVERTS, que no se lee
     // acá). Incluir el quad se vería peor que no incluir nada, así que se
@@ -363,13 +385,16 @@ function construirMalla(
 
     let acumulado = porMaterial.get(nombreMaterial)
     if (!acumulado) {
-      acumulado = { posiciones: [], uvs: [], indices: [] }
+      acumulado = { posiciones: [], uvs: [], uvsLightmap: [], indices: [] }
       porMaterial.set(nombreMaterial, acumulado)
     }
 
     const anchoTex = texdata && texdata.width > 0 ? texdata.width : 1
     const altoTex = texdata && texdata.height > 0 ? texdata.height : 1
     const base = acumulado.posiciones.length / 3
+
+    const idxAtlas = enAtlas.get(indiceCara)
+    if (idxAtlas === undefined) carasSinLightmap++
 
     for (const v of loop) {
       const p = puntoSourceAThreeMetros(v)
@@ -383,6 +408,20 @@ function construirMalla(
       const s = v[0] * texinfo.vecS[0] + v[1] * texinfo.vecS[1] + v[2] * texinfo.vecS[2] + texinfo.vecS[3]
       const t = v[0] * texinfo.vecT[0] + v[1] * texinfo.vecT[1] + v[2] * texinfo.vecT[2] + texinfo.vecT[3]
       acumulado.uvs.push(s / anchoTex, t / altoTex)
+
+      // Las caras sin lightmap van al texel BLANCO reservado del atlas: son
+      // 216 caras visibles de nuketown a las que vrad no les horneó nada, y
+      // multiplicar su albedo por blanco las deja como estaban en vez de
+      // apagarlas (ver `Atlas.blanco`).
+      if (atlas !== null && idxAtlas !== undefined) {
+        const [lu, lv] = uvLightmap(v, atlas.caras[idxAtlas], atlas.rects[idxAtlas], atlas.ancho)
+        acumulado.uvsLightmap.push(lu, lv)
+      } else if (atlas !== null) {
+        const [lu, lv] = uvBlanco(atlas)
+        acumulado.uvsLightmap.push(lu, lv)
+      } else {
+        acumulado.uvsLightmap.push(0, 0)
+      }
     }
 
     // Las caras de Source son siempre convexas: un abanico desde el primer
@@ -403,7 +442,7 @@ function construirMalla(
     }
   }
 
-  return { porMaterial, triangulos, displacements }
+  return { porMaterial, triangulos, displacements, carasSinLightmap }
 }
 
 async function construirGlb(porMaterial: Map<string, PrimitivaAcumulada>): Promise<Document> {
@@ -427,6 +466,16 @@ async function construirGlb(porMaterial: Map<string, PrimitivaAcumulada>): Promi
       .setType('VEC3')
       .setArray(new Float32Array(acumulado.posiciones))
     const uvAccessor = doc.createAccessor(undefined, buffer).setType('VEC2').setArray(new Float32Array(acumulado.uvs))
+    // TEXCOORD_1 = UV de lightmap. three lo expone como `geometry.uv1`, que
+    // es el canal que MeshBasicMaterial lee para `lightMap` cuando se le
+    // pone `texture.channel = 1` (ver map/external-map.ts). Va como
+    // atributo aparte y no reusando TEXCOORD_0 porque las dos
+    // parametrizaciones no tienen nada que ver: el albedo repite decenas de
+    // veces sobre una pared y el lightmap la cubre exactamente una vez.
+    const uvLmAccessor = doc
+      .createAccessor(undefined, buffer)
+      .setType('VEC2')
+      .setArray(new Float32Array(acumulado.uvsLightmap))
     const idxAccessor = doc
       .createAccessor(undefined, buffer)
       .setType('SCALAR')
@@ -436,6 +485,7 @@ async function construirGlb(porMaterial: Map<string, PrimitivaAcumulada>): Promi
       .createPrimitive()
       .setAttribute('POSITION', posAccessor)
       .setAttribute('TEXCOORD_0', uvAccessor)
+      .setAttribute('TEXCOORD_1', uvLmAccessor)
       .setIndices(idxAccessor)
       .setMaterial(material)
     mesh.addPrimitive(prim)
@@ -456,7 +506,13 @@ async function construirGlb(porMaterial: Map<string, PrimitivaAcumulada>): Promi
 export async function convertir(
   buf: Buffer,
   nombre: string,
-): Promise<{ colision: MapaColision; doc: Document; reporte: ReporteConversion }> {
+): Promise<{
+  colision: MapaColision
+  doc: Document
+  reporte: ReporteConversion
+  /** PNG del atlas de lightmap, o null si el mapa no trae LUMP_LIGHTING. */
+  lightmapPng: Buffer | null
+}> {
   const { lumps } = leerLumps(buf)
   const { nx, ny, nz, dist } = leerPlanos(buf, lumps[LUMP_PLANES])
 
@@ -465,7 +521,7 @@ export async function convertir(
     console.error(`[${nombre}] ADVERTENCIA: no se encontró ningún info_player_*. Este mapa no es jugable.`)
   }
 
-  const brushesSolidos = leerBrushesSolidos(buf, lumps)
+  const brushesSolidos = leerBrushesDeColision(buf, lumps)
   const brushes: BrushColision[] = []
   const boundsMin: [number, number, number] = [Infinity, Infinity, Infinity]
   const boundsMax: [number, number, number] = [-Infinity, -Infinity, -Infinity]
@@ -492,9 +548,15 @@ export async function convertir(
     }
   }
 
-  const { porMaterial, triangulos, displacements } = construirMalla(buf, lumps)
+  const atlas = construirAtlas(buf, lumps)
+  const { porMaterial, triangulos, displacements, carasSinLightmap } = construirMalla(buf, lumps, atlas)
   if (displacements > 0) {
     console.log(`[${nombre}] ${displacements} displacement(s): fuera de alcance, no se generó terreno para ellos`)
+  }
+  if (carasSinLightmap > 0) {
+    console.log(
+      `[${nombre}] ${carasSinLightmap} cara(s) visibles sin lightmap: van al texel blanco (se dibujan a albedo pleno)`,
+    )
   }
 
   const doc = await construirGlb(porMaterial)
@@ -517,9 +579,20 @@ export async function convertir(
     triangulos,
     materiales: [...porMaterial.values()].filter((p) => p.indices.length > 0).length,
     displacements,
+    lightmap:
+      atlas === null
+        ? null
+        : {
+            lado: atlas.ancho,
+            caras: atlas.caras.length,
+            exposicion: atlas.exposicion,
+            ocupacion: atlas.ocupacion,
+          },
   }
 
-  return { colision, doc, reporte }
+  const lightmapPng = atlas === null ? null : encodePng(atlas.ancho, atlas.alto, atlas.rgba)
+
+  return { colision, doc, reporte, lightmapPng }
 }
 
 async function main(): Promise<void> {
@@ -535,24 +608,36 @@ async function main(): Promise<void> {
 
   const nombre = basename(rutaBsp, extname(rutaBsp))
   const buf = readFileSync(rutaBsp)
-  const { colision, doc, reporte } = await convertir(buf, nombre)
+  const { colision, doc, reporte, lightmapPng } = await convertir(buf, nombre)
 
   mkdirSync(dirSalida, { recursive: true })
   const rutaJson = join(dirSalida, `${nombre}.json`)
   const rutaGlb = join(dirSalida, `${nombre}.glb`)
+  const rutaLightmap = join(dirSalida, `${nombre}-lightmap.png`)
 
   writeFileSync(rutaJson, `${JSON.stringify(colision)}\n`)
   const io = new NodeIO()
   await io.write(rutaGlb, doc)
+  if (lightmapPng !== null) writeFileSync(rutaLightmap, lightmapPng)
 
-  console.log(`brushes sólidos:  ${reporte.brushesSolidos}`)
-  console.log(`spawns:           ${reporte.spawns}`)
-  console.log(`triángulos:       ${reporte.triangulos}`)
-  console.log(`materiales:       ${reporte.materiales}`)
-  console.log(`displacements:    ${reporte.displacements}`)
+  console.log(`brushes de colisión: ${reporte.brushesSolidos}`)
+  console.log(`spawns:              ${reporte.spawns}`)
+  console.log(`triángulos:          ${reporte.triangulos}`)
+  console.log(`materiales:          ${reporte.materiales}`)
+  console.log(`displacements:       ${reporte.displacements}`)
+  if (reporte.lightmap !== null) {
+    const lm = reporte.lightmap
+    console.log(
+      `lightmap:            atlas ${lm.lado}x${lm.lado}, ${lm.caras} caras, ` +
+        `exposición /${lm.exposicion.toFixed(2)}, ocupación ${(lm.ocupacion * 100).toFixed(1)}%`,
+    )
+  } else {
+    console.log('lightmap:            (el mapa no trae LUMP_LIGHTING)')
+  }
   console.log('')
   console.log(`escrito: ${rutaJson}`)
   console.log(`escrito: ${rutaGlb}`)
+  if (lightmapPng !== null) console.log(`escrito: ${rutaLightmap} (${(lightmapPng.byteLength / 1e6).toFixed(2)} MB)`)
 }
 
 if (process.argv[1]?.endsWith('bsp-convert.ts')) {

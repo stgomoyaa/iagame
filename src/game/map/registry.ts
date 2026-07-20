@@ -25,6 +25,14 @@ export interface MapaExterno {
   json: string
   /** Malla visual texturizada, salida de scripts/map-textures.ts. */
   glb: string
+  /**
+   * Atlas de lightmap horneado (`<mapa>-lightmap.png`, salida de
+   * scripts/bsp-convert.ts). Opcional: un mapa convertido con una versión
+   * anterior del script no lo tiene, y sin él la malla se dibuja a albedo
+   * pleno -- que es exactamente como se veía antes. Se prefiere eso a que
+   * falte el archivo y no cargue nada.
+   */
+  lightmap?: string
 }
 
 /**
@@ -40,11 +48,13 @@ export const MAPAS_EXTERNOS: readonly MapaExterno[] = [
     name: 'nuketown',
     json: '/assets/maps/dm_nuketown.json',
     glb: '/assets/maps/dm_nuketown.glb',
+    lightmap: '/assets/maps/dm_nuketown-lightmap.png',
   },
   {
     name: 'lasertag',
     json: '/assets/maps/gm_lasertag_arena.json',
     glb: '/assets/maps/gm_lasertag_arena.glb',
+    lightmap: '/assets/maps/gm_lasertag_arena-lightmap.png',
   },
 ]
 

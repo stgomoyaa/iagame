@@ -27,11 +27,13 @@ export const LUMP_TEXDATA = 2
 export const LUMP_VERTEXES = 3
 export const LUMP_TEXINFO = 6
 export const LUMP_FACES = 7
+export const LUMP_LIGHTING = 8
 export const LUMP_EDGES = 12
 export const LUMP_SURFEDGES = 13
 export const LUMP_BRUSHES = 18
 export const LUMP_BRUSHSIDES = 19
 export const LUMP_DISPINFO = 26
+export const LUMP_GAME_LUMP = 35
 export const LUMP_PAKFILE = 40
 export const LUMP_TEXDATA_STRING_DATA = 43
 export const LUMP_TEXDATA_STRING_TABLE = 44
@@ -52,6 +54,34 @@ export const TAM_TEXINFO = 72 // texinfo_t
 export const TAM_TEXDATA = 32 // dtexdata_t
 
 export const CONTENTS_SOLID = 0x1
+
+/**
+ * Muros invisibles de Source (`tools/toolsplayerclip`): frenan al jugador
+ * pero no se dibujan y no paran balas.
+ *
+ * El valor sale de `public/bspflags.h` del SDK. Ojo con confundirlo: en ese
+ * header `0x4000` es CONTENTS_MOVEABLE y `0x2000000` es CONTENTS_ORIGIN;
+ * usar cualquiera de esos dos "porque suena parecido" da un conteo que
+ * PARECE plausible en nuketown (hay 38 brushes con un bit u otro) y deja
+ * los muros reales afuera. Se verificó leyendo los contents de los 1610
+ * brushes del mapa: los 38 que llevan 0x10000 NO llevan CONTENTS_SOLID.
+ */
+export const CONTENTS_PLAYERCLIP = 0x10000
+
+/**
+ * Contents que frenan al jugador. Es SOLID **o** PLAYERCLIP porque son
+ * excluyentes en la práctica: vbsp compila los brushes clip SIN el bit
+ * SOLID (verificado: los 38 de nuketown), así que filtrar sólo por SOLID
+ * -- que es lo que hacía este módulo -- los descarta a todos y deja el mapa
+ * más permisivo que el original.
+ *
+ * Que no tengan geometría visible sale gratis y NO hay que forzarlo acá:
+ * sus caras llevan el material `TOOLS/TOOLSPLAYERCLIP`, que `bsp-convert.ts`
+ * ya descarta de la malla por nombre. Por el mismo motivo tampoco paran
+ * balas: el hitscan traza contra los triángulos de la malla visible
+ * (`map.triangles`), no contra estos convexos.
+ */
+export const CONTENTS_BLOQUEA_JUGADOR = CONTENTS_SOLID | CONTENTS_PLAYERCLIP
 
 /** Tolerancia para considerar que una componente de una normal es 0 o ±1. */
 export const EPS = 1e-4
@@ -178,7 +208,18 @@ function esVolumenDeTrigger(nombreDeLado: string[], primerLado: number, numLados
   return true
 }
 
-export function leerBrushesSolidos(buf: Buffer, lumps: Lump[]): number[][] {
+/**
+ * Brushes cuyo `contents` cruza `mascara`, cada uno como lista de índices de
+ * plano de sus lados reales.
+ *
+ * La máscara es un parámetro EXPLÍCITO y no un default escondido porque los
+ * dos llamadores quieren cosas distintas y el bug de tener uno solo ya
+ * pasó: `bsp-analyze.ts` mide qué tan "caja" es la geometría maciza y le
+ * sirve sólo CONTENTS_SOLID, mientras que `bsp-convert.ts` necesita además
+ * los PLAYERCLIP para que la colisión del mapa importado sea tan restrictiva
+ * como la del original.
+ */
+export function leerBrushesPorContents(buf: Buffer, lumps: Lump[], mascara: number): number[][] {
   const lBrushes = lumps[LUMP_BRUSHES]
   const lSides = lumps[LUMP_BRUSHSIDES]
   const numBrushes = Math.floor(lBrushes.largo / TAM_BRUSH)
@@ -190,7 +231,7 @@ export function leerBrushesSolidos(buf: Buffer, lumps: Lump[]): number[][] {
     const primerLado = buf.readInt32LE(o)
     const numLados = buf.readInt32LE(o + 4)
     const contents = buf.readInt32LE(o + 8)
-    if ((contents & CONTENTS_SOLID) === 0) continue
+    if ((contents & mascara) === 0) continue
     if (esVolumenDeTrigger(nombreDeLado, primerLado, numLados)) continue
 
     const planos: number[] = []
@@ -203,6 +244,19 @@ export function leerBrushesSolidos(buf: Buffer, lumps: Lump[]): number[][] {
     resultado.push(planos)
   }
   return resultado
+}
+
+/** Sólo los brushes macizos. Lo que quiere `bsp-analyze.ts`. */
+export function leerBrushesSolidos(buf: Buffer, lumps: Lump[]): number[][] {
+  return leerBrushesPorContents(buf, lumps, CONTENTS_SOLID)
+}
+
+/**
+ * Todo lo que frena al jugador: macizos + muros invisibles. Lo que quiere la
+ * colisión de `bsp-convert.ts` (ver `CONTENTS_BLOQUEA_JUGADOR`).
+ */
+export function leerBrushesDeColision(buf: Buffer, lumps: Lump[]): number[][] {
+  return leerBrushesPorContents(buf, lumps, CONTENTS_BLOQUEA_JUGADOR)
 }
 
 /** True si la normal apunta exactamente sobre un eje. */
