@@ -8,6 +8,7 @@ import {
   detectMuzzle,
   detectUpAxis,
   displayName,
+  muzzleFromGeometry,
   slugify,
   targetLengthFor,
 } from './geometry'
@@ -316,6 +317,47 @@ describe('boundsOf', () => {
     const { min, max } = boundsOf(cloud)
     expect(min).toEqual([-5, -9, -5])
     expect(max).toEqual([-1, -5, -2])
+  })
+})
+
+// ---------- muzzleFromGeometry ----------
+
+describe('muzzleFromGeometry', () => {
+  it('la boca sale del cañón, no del centro vertical de la caja', () => {
+    // Arma normalizada (cañón a -Z). El cañón vive ARRIBA del centro: la caja
+    // va de y=-0.15 a y=+0.15 (centro 0), pero el ánima está en y=+0.08. Un
+    // cargador cuelga hacia abajo (y=-0.15) y baja el centro de la caja. La
+    // boca tiene que dar +0.08 (el cañón), NO 0 (el centro), que es el bug de
+    // "el fogonazo sale desde abajo".
+    const puntos: Vec3[] = [
+      // Boca del cañón, en el frente (z=-0.5), a la altura del ánima:
+      [0, 0.08, -0.5],
+      [0.01, 0.08, -0.5],
+      [-0.01, 0.08, -0.5],
+      // Culata y cargador, atrás y abajo, que estiran la caja hacia y=-0.15:
+      [0, -0.15, 0.5],
+      [0, 0.15, 0.4],
+    ]
+    const boca = muzzleFromGeometry(flattenPoints(puntos))
+    expect(boca.z).toBeCloseTo(-0.5, 5) // el frente del arma
+    expect(boca.y).toBeCloseTo(0.08, 2) // el cañón, no el centro (0)
+    expect(boca.x).toBeCloseTo(0, 2)
+  })
+
+  it('la Y de la boca NO es el centro de la caja cuando el cañón está descentrado', () => {
+    // Falsación directa del bug: si la implementación devolviera el centro de
+    // la caja (getCenter), esta aserción fallaría. El centro en Y es 0; la boca
+    // real está bien por encima.
+    const puntos: Vec3[] = [
+      [0, 0.09, -0.5],
+      [0, 0.09, -0.49],
+      [0, -0.15, 0.5],
+      [0, 0.15, 0.5],
+    ]
+    const boca = muzzleFromGeometry(flattenPoints(puntos))
+    const centroY = 0 // (-0.15 + 0.15) / 2
+    expect(Math.abs(boca.y - centroY)).toBeGreaterThan(0.05)
+    expect(boca.y).toBeGreaterThan(0.05)
   })
 })
 

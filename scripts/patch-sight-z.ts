@@ -25,6 +25,7 @@ import { join } from 'node:path'
 import { NodeIO, type Document } from '@gltf-transform/core'
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions'
 import { detectSightLine, type SightType } from './lib/sight.ts'
+import { muzzleFromGeometry } from './lib/geometry.ts'
 
 const LOCAL_DIR = join(process.cwd(), 'public/assets/weapons-local')
 const INDEX_PATH = join(LOCAL_DIR, 'index.json')
@@ -36,6 +37,9 @@ interface Entry {
   sightType?: SightType
   sightRearZ?: number
   sightFrontZ?: number
+  muzzleX?: number
+  muzzleY?: number
+  muzzleZ?: number
   [k: string]: unknown
 }
 
@@ -96,6 +100,14 @@ async function main(): Promise<void> {
 
     entry.sightRearZ = Number(sight.rearZ.toFixed(5))
     entry.sightFrontZ = Number(sight.frontZ.toFixed(5))
+
+    // Boca de cañón para el fogonazo (mismo cálculo que el pipeline). El
+    // renderer del fulgor la usa en vez del centro de la caja, que ponía el
+    // fogonazo por debajo del cañón real.
+    const muzzle = muzzleFromGeometry(positions)
+    entry.muzzleX = Number(muzzle.x.toFixed(5))
+    entry.muzzleY = Number(muzzle.y.toFixed(5))
+    entry.muzzleZ = Number(muzzle.z.toFixed(5))
     patched++
   }
 
@@ -106,7 +118,7 @@ async function main(): Promise<void> {
   }
 
   writeFileSync(INDEX_PATH, JSON.stringify(index, null, 1) + '\n')
-  console.log(`índice actualizado: ${patched} armas COD con sightRearZ/sightFrontZ, ${skipped} salteadas (no COD)`)
+  console.log(`índice actualizado: ${patched} armas COD con sightRearZ/sightFrontZ/muzzle, ${skipped} salteadas (no COD)`)
 }
 
 main().catch((e) => { console.error(e); process.exit(1) })

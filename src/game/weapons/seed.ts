@@ -63,6 +63,19 @@ export interface WeaponIndexEntry {
    *  Mismo origen. La usa `vfx.ts` como boca de cañón cuando no hay tag_flash. */
   sightFrontZ?: number
   /**
+   * Boca de cañón en el espacio del modelo: de dónde nace el fogonazo. La mide
+   * el pipeline (`muzzleFromGeometry`, centroide del frente del arma) y SÓLO
+   * existe en los modelos de mundo del pack de COD. Su ausencia (CS y CC0) hace
+   * que el renderer caiga a su heurístico de caja, que en esos casos —CS son
+   * viewmodels con brazos, donde el centroide del frente no es confiable— es lo
+   * correcto. Ver `feedback/vfx-renderer.ts`. El fogonazo salía "desde abajo"
+   * porque el heurístico ponía la boca en el CENTRO vertical de la caja, y el
+   * cañón no vive ahí.
+   */
+  muzzleX?: number
+  muzzleY?: number
+  muzzleZ?: number
+  /**
    * El `.glb` es un VIEWMODEL de Source (`v_`): trae esqueleto, brazos
    * modelados y las secuencias originales del juego.
    *

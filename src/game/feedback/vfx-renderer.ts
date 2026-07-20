@@ -49,6 +49,7 @@ import {
 } from 'three'
 import { VFX } from '@/game/feedback/tuning'
 import type { VfxRing, VfxState } from '@/game/feedback/vfx'
+import { muzzleOffsetForSlug } from '@/game/weapons/registry'
 
 export interface VfxRenderer {
   /** Escribe los anillos que hayan cambiado y actualiza el reloj de los
@@ -596,6 +597,10 @@ export function createVfxRenderer(escena: Scene): VfxRenderer {
   const cajaAux = new Box3()
   const inversaArma = new Matrix4()
   const matrizAux = new Matrix4()
+  // Matriz modelo -> local del pivote de la malla del cuerpo. Se usa para
+  // llevar la boca MEDIDA (que vive en espacio del modelo) al espacio del
+  // fulgor, respetando cualquier rotationOffset/scaleAdjust del modelo.
+  const matrizBoca = new Matrix4()
   const puntoBoca = new Vector3()
 
   /**
@@ -620,12 +625,24 @@ export function createVfxRenderer(escena: Scene): VfxRenderer {
    *    frente siempre es -Z, y el rotationOffset del registry existe
    *    justamente para dejar cada modelo mirando ahí, así que min.z es el
    *    criterio correcto.
+   *
+   * PERO el centro de la caja en X/Y es una MENTIRA para la altura del cañón:
+   * el ánima no vive en el centro vertical del arma (el cargador y la
+   * empuñadura cuelgan hacia abajo y bajan el centro), así que el fulgor salía
+   * "desde abajo" del cañón. Cuando el índice trae la boca medida
+   * (`muzzleOffsetForSlug`, sólo el pack de COD), se usa ésa: es el centroide
+   * del frente del arma, que cae sobre el eje del ánima —donde el autor puso
+   * `tag_flash`. Para CS (viewmodels con brazos, donde ese centroide no es
+   * confiable) y CC0 no hay boca medida y se sigue con la caja: es lo correcto
+   * para esos casos y por eso no regresiona.
    */
   function recalcularBoca(weapon: Object3D): void {
     weapon.updateWorldMatrix(true, true)
     inversaArma.copy(weapon.matrixWorld).invert()
 
     cajaLocal.makeEmpty()
+    matrizBoca.identity()
+    let hayMalla = false
     weapon.traverse((o) => {
       const malla = o as Mesh
       if (!malla.isMesh || !malla.geometry) return
@@ -636,12 +653,28 @@ export function createVfxRenderer(escena: Scene): VfxRenderer {
       matrizAux.multiplyMatrices(inversaArma, malla.matrixWorld)
       cajaAux.applyMatrix4(matrizAux)
       cajaLocal.union(cajaAux)
+      // Matriz modelo -> local para la boca medida. Se queda con la del cuerpo
+      // del arma (`weapon_body`); si no encuentra ese nombre, con la de
+      // cualquier malla, que en un modelo de mundo es la única que hay.
+      if (!hayMalla || malla.name === 'weapon_body') {
+        matrizBoca.copy(matrizAux)
+        hayMalla = true
+      }
     })
 
     if (cajaLocal.isEmpty()) {
       // Todavía no hay modelo colgado: un valor de relleno razonable delante
       // del pivote, que se corrige en cuanto el GLB se adjunte.
       puntoBoca.set(0, 0, -0.35)
+      return
+    }
+
+    // Boca medida (pack de COD): el centroide del cañón, llevado del espacio del
+    // modelo al del fulgor con la misma matriz que usa la caja de arriba.
+    const boca = slugActual !== null ? muzzleOffsetForSlug(slugActual) : null
+    if (boca !== null) {
+      puntoBoca.set(boca.x, boca.y, boca.z)
+      puntoBoca.applyMatrix4(matrizBoca)
       return
     }
 

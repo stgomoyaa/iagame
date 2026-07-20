@@ -84,6 +84,7 @@ import {
   assertDeclaredAxes,
   boundsOf,
   buildNormalizeMatrix,
+  muzzleFromGeometry,
   WEAPON_CLASS_LENGTHS_M,
 } from './lib/geometry.ts'
 import { mergeIndex, type IndexEntry } from './lib/merge-index.ts'
@@ -284,6 +285,15 @@ export interface SourceIndexEntry extends IndexEntry {
    */
   sightRearZ: number
   sightFrontZ: number
+  /**
+   * Boca de cañón en el espacio del modelo normalizado: de dónde nace el
+   * fogonazo. La mide `muzzleFromGeometry` (centroide del frente del arma, que
+   * cae sobre el eje del ánima). Reemplaza el heurístico de "centro de la caja"
+   * del renderer, que ponía el fogonazo por debajo del cañón real. Ver vfx.
+   */
+  muzzleX: number
+  muzzleY: number
+  muzzleZ: number
   /**
    * El `.glb` conserva el cargador como nodo `weapon_mag` aparte del cuerpo.
    * El renderer no lee este campo —descubre el nodo al cargar el GLB, que es
@@ -491,6 +501,10 @@ async function convertOne(
   // el adsOffset. Medirla antes daría centímetros de otro sistema de
   // coordenadas y otra escala.
   const sight = detectSightLine(finalPositions, entry.sight)
+  // Boca de cañón para el fogonazo: el centroide del frente del arma, que cae
+  // sobre el eje del ánima (ahí puso el autor el hueso tag_flash). Ver
+  // muzzleFromGeometry: arregla el fogonazo que salía "desde abajo".
+  const muzzle = muzzleFromGeometry(finalPositions)
 
   // Se mide sobre el documento final, después de prune(): lo que importa no es
   // que Blender haya escrito el nodo, sino que haya SOBREVIVIDO todo el
@@ -537,6 +551,10 @@ async function convertOne(
     // seed.ts ancla el alza cerca del ojo con esto. Ver el comentario del campo.
     sightRearZ: Number(sight.rearZ.toFixed(5)),
     sightFrontZ: Number(sight.frontZ.toFixed(5)),
+    // Boca de cañón en espacio del modelo: el fogonazo nace acá. Ver muzzle.
+    muzzleX: Number(muzzle.x.toFixed(5)),
+    muzzleY: Number(muzzle.y.toFixed(5)),
+    muzzleZ: Number(muzzle.z.toFixed(5)),
   }
 }
 

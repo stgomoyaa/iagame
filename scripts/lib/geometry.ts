@@ -88,6 +88,68 @@ export function boundsOf(positions: Float32Array): { min: number[]; max: number[
   return { min, max }
 }
 
+/** Punto de boca de cañón: dónde nace el fogonazo. */
+export interface MuzzlePoint {
+  x: number
+  y: number
+  z: number
+}
+
+/**
+ * Boca de cañón de un modelo YA NORMALIZADO (cañón a -Z, arriba +Y). Es el
+ * punto del que tiene que salir el fogonazo.
+ *
+ * El renderer de VFX venía poniendo la boca en (centroX, centroY, minZ) de la
+ * caja envolvente. La Z está bien —el frente del arma es -Z—, pero la X/Y en
+ * el CENTRO de la caja es el bug de "el fogonazo sale desde abajo": el cañón no
+ * vive en el centro vertical del arma. En los `c_` de COD, que salen con la
+ * caja simétrica (centro en 0,0), el cañón está bien por encima del centro
+ * —cargador y empuñadura cuelgan hacia abajo y bajan el centro—, así que un
+ * fogonazo en Y=0 aparece ~7-10 cm por DEBAJO de la boca real.
+ *
+ * Acá la boca se mide donde de verdad está: el CENTROIDE de los vértices del
+ * frente del arma (la rebanada más adelantada en Z). Esa nube es el aro de la
+ * boca —o el apagafogueos—, y su centro cae sobre el eje del ánima, que es
+ * exactamente donde el autor del pack de COD puso el hueso `tag_flash`. Medirlo
+ * de la geometría ya normalizada (en vez de transformar `tag_flash` desde el
+ * `.mdl`, que vive en otra escala de Source y no sobrevive al exportador) da el
+ * mismo punto sin depender de una conversión de unidades frágil.
+ *
+ * `frac` es qué fracción del largo (desde la boca hacia atrás) entra en la
+ * rebanada del frente. 5% es angosto para no arrastrar el guardamanos, con un
+ * piso absoluto para que un arma corta o de pocos vértices no quede sin nada.
+ *
+ * NO robusto para viewmodels con brazos modelados (las 39 de CS): ahí una mano
+ * adelantada puede caer en la rebanada del frente y correr el centroide. Por
+ * eso esto sólo alimenta a las armas de mundo del pack de COD; CS y CC0 siguen
+ * con el heurístico de caja del renderer. Ver `seedAdsOffset`/`vfx-renderer`.
+ */
+export function muzzleFromGeometry(
+  positions: Float32Array,
+  frac = 0.05,
+  minDepthM = 0.02,
+): MuzzlePoint {
+  const { min, max } = boundsOf(positions)
+  const spanZ = max[2] - min[2]
+  const banda = min[2] + Math.max(spanZ * frac, minDepthM)
+  let sx = 0
+  let sy = 0
+  let n = 0
+  for (let i = 0; i < positions.length; i += 3) {
+    if (positions[i + 2] > banda) continue
+    sx += positions[i]
+    sy += positions[i + 1]
+    n++
+  }
+  // Sin vértices en la banda (no debería pasar con minDepthM > 0), se cae al
+  // centro de la caja: el mismo valor que daba el heurístico viejo, sin mejora
+  // pero sin romper.
+  if (n === 0) {
+    return { x: (min[0] + max[0]) / 2, y: (min[1] + max[1]) / 2, z: min[2] }
+  }
+  return { x: sx / n, y: sy / n, z: min[2] }
+}
+
 /**
  * Cantidad de rebanadas en que se corta el arma a lo largo del eje del cañón
  * para medir su perfil de grosor. Doce alcanza para separar cañón de culata

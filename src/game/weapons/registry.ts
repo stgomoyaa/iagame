@@ -250,6 +250,23 @@ export function weaponOrigin(slug: string): WeaponOrigin | null {
 }
 
 /**
+ * Boca de cañón MEDIDA de un arma, en el espacio del modelo, o `null` si el
+ * índice no la trae. Sólo la traen las armas de mundo del pack de COD (ver
+ * `WeaponIndexEntry.muzzleX`): para CS (viewmodels con brazos) y CC0 devuelve
+ * `null` y el renderer del fogonazo se queda con su heurístico de caja, que en
+ * esos casos es lo correcto. La consume `feedback/vfx-renderer.ts` al cambiar
+ * de arma para que el fogonazo nazca del cañón y no del centro de la caja
+ * (síntoma: "sale como desde abajo").
+ */
+export function muzzleOffsetForSlug(slug: string): Transform | null {
+  const e = WEAPON_INDEX.find((entry) => entry.slug === slug)
+  if (!e || e.muzzleX === undefined || e.muzzleY === undefined || e.muzzleZ === undefined) {
+    return null
+  }
+  return { x: e.muzzleX, y: e.muzzleY, z: e.muzzleZ, rx: 0, ry: 0, rz: 0 }
+}
+
+/**
  * URL del .glb de un arma. Es la ÚNICA función que arma esa ruta: el
  * viewmodel (viewmodel/renderer.ts) y la vitrina de la armería
  * (skins/preview.ts) la usan los dos. Antes cada uno concatenaba
@@ -326,6 +343,11 @@ function parseLocalEntry(raw: unknown): WeaponIndexEntry | null {
     // reenvío el campo se perdía acá y el ADS caía al heurístico viejo.
     ...(typeof e.sightRearZ === 'number' ? { sightRearZ: e.sightRearZ } : {}),
     ...(typeof e.sightFrontZ === 'number' ? { sightFrontZ: e.sightFrontZ } : {}),
+    // Boca de cañón medida: el renderer del fogonazo la usa en vez del centro
+    // de la caja. Los tres o ninguno: se reenvían sólo si están los tres.
+    ...(typeof e.muzzleX === 'number' && typeof e.muzzleY === 'number' && typeof e.muzzleZ === 'number'
+      ? { muzzleX: e.muzzleX, muzzleY: e.muzzleY, muzzleZ: e.muzzleZ }
+      : {}),
     // Sólo el `true` explícito cuenta. Un índice viejo (sin el campo) describe
     // modelos de mundo, y tratarlo como viewmodel les daría pose neutra a las
     // 39 armas: todas amontonadas en el ojo del jugador.
