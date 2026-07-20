@@ -967,10 +967,47 @@ function steerAlongPath(bot: BotState, world: BotWorld): SteerResult {
     return STEER_STOPPED
   }
 
-  const worldX = (wx - bot.player.position.x) / dist
-  const worldZ = (wz - bot.player.position.z) / dist
+  let worldX = (wx - bot.player.position.x) / dist
+  let worldZ = (wz - bot.player.position.z) / dist
+
+  // Separación mientras se camina. El espacio personal de Enfrentar
+  // (updateEngageStrafe) no alcanza: Enfrentar es sólo la mitad del tiempo
+  // de bot, y los OTROS estados navegan. Medido en nuketown, con el arreglo
+  // de Enfrentar solo, los pares de bots a menos de 3 m seguían apareciendo
+  // como `reposition+reposition`, `rotate+rotate` y `reposition+rotate`:
+  // varios bots convergiendo al mismo disparo oído o a la misma esquina que
+  // rompe la línea de vista llegan pegados aunque ninguno esté en combate.
+  //
+  // La mezcla es la separación clásica de bandada: al rumbo hacia el
+  // waypoint se le suma un vector que se aleja del vecino, con peso que
+  // crece de 0 en el borde del espacio personal a 1 cuando están encima. Se
+  // MEZCLA, no reemplaza: el bot sigue yendo a su destino, apenas lo
+  // rodea. Eso importa para no romper el otro lado del equilibrio -- un bot
+  // que abandona su destino para huir de un compañero deja de encontrarse
+  // con nadie, y el mayor silencio se dispara (ya pasó en este proyecto:
+  // una partida de 6 min con 1 kill).
+  if (world.neighbourDistM < BOTS.personalSpaceM) {
+    const ax = bot.player.position.x - world.neighbourPos.x
+    const az = bot.player.position.z - world.neighbourPos.z
+    const alejamiento = Math.hypot(ax, az)
+    if (alejamiento > 1e-4) {
+      const peso = (1 - world.neighbourDistM / BOTS.personalSpaceM) * BOTS.separationSteerWeight
+      const mx = worldX + (ax / alejamiento) * peso
+      const mz = worldZ + (az / alejamiento) * peso
+      const largo = Math.hypot(mx, mz)
+      // Vectores opuestos que se cancelan: se deja el rumbo original. Huir
+      // exactamente hacia atrás sería abandonar el destino, que es justo lo
+      // que esta mezcla no puede hacer.
+      if (largo > 1e-4) {
+        worldX = mx / largo
+        worldZ = mz / largo
+      }
+    }
+  }
+
   // Rumbo en mundo hacia el waypoint, misma fórmula que aim.ts lookAt (yaw
-  // 0 mira hacia -Z).
+  // 0 mira hacia -Z). Se calcula DESPUÉS de la separación para que el bot
+  // mire hacia donde de verdad camina.
   const desiredYaw = Math.atan2(-worldX, -worldZ)
 
   const currentHeight = grid.heights[cellIdx]

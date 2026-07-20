@@ -206,6 +206,18 @@ export interface BotsTuning {
    * que bajarlo midiendo.
    */
   personalSpaceRepositionWeight: number
+  /**
+   * Cuánto pesa la separación al CAMINAR (bots/bot.ts steerAlongPath), como
+   * fracción del rumbo hacia el waypoint. 1 = alejarse del vecino pesa tanto
+   * como llegar al destino; 0 = apaga la separación al caminar.
+   *
+   * Por debajo de 1 a propósito: la mezcla tiene que RODEAR al vecino, no
+   * abandonar el destino. Con peso >= 1 un bot con alguien justo enfrente
+   * puede terminar caminando hacia atrás, y un bot que no llega nunca a
+   * ningún lado es un bot que no se encuentra con nadie -- el mayor silencio
+   * se dispara, que es el otro lado del equilibrio de esta tarea.
+   */
+  separationSteerWeight: number
   /** Altura mínima, metros, para que una caja del mapa cuente como cobertura
    *  al evaluar un strafe (bots/cover.ts). */
   coverMinHeightM: number
@@ -323,8 +335,9 @@ export const BOTS: BotsTuning = {
   engageStrafeCoverSlackM: 1.0,
   // 1.0m = la cobertura BAJA de la arena (map/arena.ts LOW). Por debajo de
   // eso no tapa a nadie ni agachado.
-  personalSpaceM: 4.0,
+  personalSpaceM: 5.0,
   personalSpaceRepositionWeight: 3.0,
+  separationSteerWeight: 0.7,
   coverMinHeightM: 1.0,
 
   stuckSpeedThreshold: 0.6,
