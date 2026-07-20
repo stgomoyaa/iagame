@@ -57,24 +57,49 @@ export interface ProgressData {
 }
 
 /**
- * Inventario inicial. Ocho seeds fijas que cubren los cinco tiers, de común
- * a exótico, elegidas ejecutando el generador sobre `inicial:N`.
+ * Inventario inicial. Ocho seeds fijas elegidas ejecutando el generador
+ * sobre `inicial:N`, que cubren las cinco rarezas, **las seis familias de
+ * camuflaje y las cuatro animaciones**.
  *
  * Es contenido de arranque, no el sistema de drops: los drops por partida
  * son fase 4 (sección 9 del spec). Hasta que existan, esto es lo que hace
  * que la armería tenga algo que mostrar y que las cinco rarezas se puedan
  * comparar de un vistazo, que es la única forma de saber si el generador
  * está haciendo bien su trabajo.
+ *
+ *
+ * POR QUÉ SE CAMBIARON LAS SEEDS, Y POR QUÉ ES UN ARREGLO DE REPARTO
+ *
+ * El set anterior se eligió antes de que existieran las seis familias de
+ * camuflaje, así que las ignoraba: de sus ocho seeds, **siete caían en
+ * `clasico`** y una sola (`inicial:8`) mostraba una familia. Con eso, un
+ * jugador nuevo tenía las seis familias construidas y compiladas en el
+ * shader y podía ver exactamente UNA. Es la explicación de "veo siempre los
+ * mismos camos": no era que los camuflajes fueran malos, era que el
+ * inventario de arranque no los mostraba.
+ *
+ * Lo mismo con las animaciones: seis de las ocho anteriores eran
+ * `ninguna`, así que `pulso`, `flujo` y `espectro` casi no se veían.
+ *
+ * Las seis familias no son alcanzables desde cualquier rareza (ver
+ * camo-families.ts): multicam y follaje viven en los tiers sin emisivo, y
+ * gema, filigrana, damasco y cebra en los altos. Común no puede tener
+ * familia —su lista de patrones no incluye `camo`—, así que las dos comunes
+ * son necesariamente clásicas y las otras seis cubren una familia cada una.
+ *
+ * NO se tocó el generador. Cambiar una seed no cambia lo que devuelve
+ * ninguna otra, así que las skins ya guardadas en localStorage siguen
+ * siendo exactamente las mismas: esto sólo afecta a un jugador nuevo.
  */
 export const SKINS_INICIALES: readonly string[] = [
-  'inicial:2', // Grafito Liso — Común
-  'inicial:5', // Ventisca Rayado — Común
-  'inicial:0', // Ciruela Rayado — Raro
-  'inicial:16', // Turquesa Liso — Raro
-  'inicial:4', // Tóxico Fracturado — Épico
-  'inicial:26', // Solar Degradado — Épico
-  'inicial:8', // Oro Negro Hidrográfico — Legendario
-  'inicial:24', // Antimateria Fracturado — Exótico
+  'inicial:2', // Grafito Liso — Común · clásico
+  'inicial:3', // Nocturno Liso — Común · clásico
+  'inicial:52', // Turquesa Mimético — Raro · multicam
+  'inicial:6', // Cobalto Mimético — Raro · follaje
+  'inicial:136', // Cian Fracturado — Épico · gema · pulso
+  'inicial:116', // Coral Hidrográfico — Épico · filigrana · pulso
+  'inicial:29', // Sangre Real Hidrográfico — Legendario · damasco · flujo
+  'inicial:397', // Antimateria Degradado — Exótico · cebra · espectro
 ]
 
 export function createDefaultProgress(): ProgressData {

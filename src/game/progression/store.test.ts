@@ -110,6 +110,26 @@ describe('ProgressStore', () => {
     expect(rarezas).toEqual(new Set(['comun', 'raro', 'epico', 'legendario', 'exotico']))
   })
 
+  it('el inventario inicial muestra las seis familias de camuflaje', () => {
+    // El guard que faltaba. Las seis familias se portaron a GLSL y quedaron
+    // compiladas en el shader, pero el set de arranque anterior era anterior
+    // a ellas y caía siete de ocho veces en `clasico`: un jugador nuevo tenía
+    // las seis construidas y podía ver UNA. No fallaba ningún test porque
+    // ninguno miraba la intersección entre el inventario y las familias.
+    const familias = new Set(SKINS_INICIALES.map((s) => generateSkin(s).family))
+    for (const fam of ['multicam', 'follaje', 'filigrana', 'gema', 'damasco', 'cebra']) {
+      expect(familias, `el arranque no muestra ninguna skin de la familia ${fam}`).toContain(fam)
+    }
+  })
+
+  it('el inventario inicial muestra las cuatro animaciones', () => {
+    // Mismo motivo: `pulso`, `flujo` y `espectro` estaban implementadas y el
+    // arranque traía seis de ocho skins sin animación, así que el movimiento
+    // —que es la mitad de lo que hace cara a una skin— casi no se veía.
+    const animaciones = new Set(SKINS_INICIALES.map((s) => generateSkin(s).animation))
+    expect(animaciones).toEqual(new Set(['ninguna', 'pulso', 'flujo', 'espectro']))
+  })
+
   it('guarda y devuelve lo guardado', () => {
     const store = createMemoryProgressStore()
     const data = createDefaultProgress()

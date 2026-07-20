@@ -653,6 +653,131 @@ vec3 skinFamilyColor( int fam, vec3 p, float scale, vec3 base, vec3 accent, floa
 
   return base;
 }
+
+/**
+ * Respuesta de superficie por familia: qué tan pulida, qué tan metálica y
+ * cuánto barniz tiene cada camuflaje.
+ *
+ * POR QUÉ ESTO EXISTE. Hasta acá el brillo del arma salía de UN solo número
+ * (uSkinMetal) con un exponente especular fijo de 42 para todo. Con eso el
+ * oro de la filigrana, la resina de la gema y la tela del multicam
+ * reflejaban exactamente igual, y ése es el motivo real de que los camos se
+ * leyeran como calcomanías: lo que distingue un oro de una tela en una foto
+ * NO es el dibujo, es el tamaño y la dureza del reflejo. Un multicam de
+ * dotación tiene un reflejo ancho y apagado; el oro tiene uno chico y
+ * durísimo; la gema tiene dos (el del barniz y el del interior).
+ *
+ * Devuelve (rugosidad, metalicidad, barniz), los tres en 0..1:
+ *
+ * - rugosidad decide el TAMAÑO del brillo. 0 = espejo (brillo chico y
+ *   duro), 1 = mate (brillo ancho y difuso).
+ * - metalicidad decide de qué COLOR es el brillo. Un metal tiñe su reflejo
+ *   con su propio color (el oro refleja dorado); un dieléctrico lo refleja
+ *   blanco. Es la diferencia entre "arma dorada" y "arma blanca con pintura
+ *   amarilla".
+ * - barniz es una segunda capa pulida ENCIMA del dibujo, siempre blanca.
+ *   Es la que produce la profundidad tipo resina de las referencias: el
+ *   patrón se ve por debajo y el reflejo corre por arriba sin teñirse.
+ *
+ * Los valores no son un catálogo de materiales reales: son lo que hace que
+ * cada familia se lea como lo que quiere ser cuando el arma gira.
+ */
+vec4 skinSuperficie( int fam, float metalSkin ) {
+  // Multicam y follaje son camuflaje de tela: mate, nada de metal y apenas
+  // un velo de barniz. Si brillaran dejarían de leerse como ropa de
+  // dotación, que es justo lo que camo-families.ts declara que son.
+  if ( fam == 1 || fam == 2 ) return vec4( 0.88, 0.02, 0.06, 0.10 );
+  // Filigrana es oro sobre negro: el reflejo tiene que ser chico, duro y
+  // DORADO, no blanco. Metalicidad casi 1 es lo que lo consigue.
+  if ( fam == 3 ) return vec4( 0.26, 0.92, 0.30, 0.85 );
+  // Gema: poco metal y barniz al máximo. Las dos capas separadas son lo que
+  // da la lectura de piedra tallada dentro de resina — el interior mate y
+  // coloreado, la cáscara pulida y blanca.
+  if ( fam == 4 ) return vec4( 0.16, 0.28, 1.00, 1.35 );
+  // Damasco es acero: metal casi puro, algo más rugoso que el oro porque el
+  // acero damasquinado tiene grano y no espeja como una joya.
+  if ( fam == 5 ) return vec4( 0.34, 0.95, 0.22, 1.00 );
+  // Cebra arcoíris: laca de color. Ni metal ni tela, con barniz alto para
+  // que el barrido de tono se vea a través de una capa brillante.
+  if ( fam == 6 ) return vec4( 0.22, 0.45, 0.75, 0.55 );
+  // Clásico: sigue gobernado por el metalness de la skin, que es lo que ese
+  // camino venía usando. Se mapea a rugosidad de forma inversa para que una
+  // skin de metalness alto siga saliendo más pulida que una común gastada.
+  return vec4( clamp( 0.92 - 0.62 * metalSkin, 0.10, 0.95 ), metalSkin, 0.10 + 0.35 * metalSkin, 0.45 );
+}
+
+/**
+ * Fresnel de Schlick. Todo material refleja MUCHO más en los ángulos
+ * rasantes: es la razón física por la que en las referencias el brillo
+ * blanco corre justo por el canto del riel y del cañón y no por el centro de
+ * la cara plana. Sin este término el arma se ve como plástico pintado por
+ * más brillo especular que se le agregue.
+ */
+vec3 skinFresnel( vec3 f0, float cosTheta ) {
+  return f0 + ( vec3( 1.0 ) - f0 ) * pow( clamp( 1.0 - cosTheta, 0.0, 1.0 ), 5.0 );
+}
+
+/**
+ * RELIEVE: perturba la normal usando el propio dibujo del camuflaje como
+ * mapa de altura.
+ *
+ * POR QUÉ ES LA PIEZA QUE FALTABA. El costado de un fusil es esencialmente
+ * UN SOLO PLANO: una única normal geométrica para toda la cara. Y como el
+ * reflejo, el especular y el fresnel son todos función de la normal, sobre
+ * esa cara valen todos lo MISMO en cada píxel. Por eso subir el brillo no
+ * arreglaba nada: se puede iluminar un plano cuanto se quiera, va a seguir
+ * siendo un plano de color liso. Medido: después de dos rondas de ajustar
+ * constantes, el damasco seguía con MENOS variación de luz que antes de
+ * empezar (desviación 22.3 contra 24.8).
+ *
+ * Las armas de las referencias no son planas: el patrón tiene relieve, y por
+ * eso el brillo lo RECORRE en vez de bañarlo. Acá el relieve sale gratis del
+ * dibujo que ya se calculó — donde el camuflaje es claro la superficie sube,
+ * donde es oscuro baja—, así que las celdas de la gema se leen como piedras
+ * talladas y las líneas del damasco como grano de acero, sin un byte de
+ * normal map y sin tocar la geometría.
+ *
+ * Es el gradiente de altura en espacio de pantalla llevado a espacio de
+ * vista (el mismo método que usa three en perturbNormalArb): con las
+ * derivadas de la posición se arma la base del plano y se proyecta el
+ * gradiente de la altura sobre ella.
+ */
+vec3 skinRelieve( vec3 N, float altura, float escala ) {
+  vec3 dpx = dFdx( vSkinView );
+  vec3 dpy = dFdy( vSkinView );
+  float dhx = dFdx( altura );
+  float dhy = dFdy( altura );
+  vec3 r1 = cross( dpy, N );
+  vec3 r2 = cross( N, dpx );
+  float det = dot( dpx, r1 );
+  // det ~ 0 en triángulos degenerados o de canto: sin este corte la normal
+  // sale NaN y el píxel se dibuja negro.
+  if ( abs( det ) < 1e-12 ) return N;
+  vec3 grad = ( r1 * dhx + r2 * dhy ) / det;
+  return normalize( N - escala * grad );
+}
+
+/**
+ * Entorno de estudio, procedural y baratísimo: cielo arriba, horizonte
+ * cálido, piso oscuro. Cero bytes de textura y ningún cubemap que cargar.
+ *
+ * Se evalúa en ESPACIO DE VISTA, igual que la luz key que ya existía. Eso
+ * significa que el "rig" de iluminación viaja pegado a la cámara en vez de
+ * estar fijo al mundo, que es exactamente como se ilumina un viewmodel en
+ * cualquier shooter: el arma tiene que verse bien en la mano siempre, no
+ * apagarse porque el jugador miró al norte. La alternativa (pasar la
+ * orientación del mundo como uniform) haría que el arma se apague sola en
+ * media escena, que no es lo que muestran las referencias.
+ */
+vec3 skinEntorno( vec3 R ) {
+  float h = R.y * 0.5 + 0.5;
+  vec3 piso = vec3( 0.05, 0.05, 0.06 );
+  vec3 horizonte = vec3( 0.34, 0.31, 0.29 );
+  vec3 cielo = vec3( 0.52, 0.60, 0.78 );
+  return h < 0.5
+    ? mix( piso, horizonte, smoothstep( 0.0, 0.5, h ) )
+    : mix( horizonte, cielo, smoothstep( 0.5, 1.0, h ) );
+}
 `
 
 const FRAGMENT_BODY = /* glsl */ `
@@ -767,18 +892,167 @@ if ( uSkinEnabled < 0.5 ) {
   vec3 V = normalize( -vSkinView );
   if ( dot( N, V ) < 0.0 ) N = -N;
 
+  // Parámetros de superficie de esta familia. uSkinMetal sigue mandando en
+  // el camino clásico y además modula a las familias: dos skins de la misma
+  // familia con metalness distinto no salen idénticas.
+  vec4 sup = skinSuperficie( uSkinFamily, uSkinMetal );
+  float rugosidad = sup.x;
+  float metalico = sup.y;
+  float barniz = sup.z;
+
+  // La altura del relieve es la luminancia del propio camuflaje: lo claro
+  // del dibujo sobresale y lo oscuro se hunde.
+  //
+  // Va ACÁ, antes de la luz, y no después: si se perturbara la normal
+  // después de calcular el key, el relieve no entraría en el difuso y sólo
+  // se vería en el especular. El grueso de la sensación de talla viene del
+  // difuso —es el que dibuja el lado iluminado y el lado en sombra de cada
+  // celda—, así que perturbar tarde deja el efecto a medias.
+  float altura = dot( color, vec3( 0.2126, 0.7152, 0.0722 ) );
+  // El 0.55 está medido, no elegido a ojo: con 0.90 el relieve se ve MÁS
+  // marcado pero el detalle fino medido no sube (gradiente local 20.3 contra
+  // 20.7) y la saturación baja, porque a esa escala el gradiente da vuelta la
+  // normal en los bordes del dibujo y el sombreado empieza a cancelarse solo.
+  N = skinRelieve( N, altura, sup.w * 0.55 );
+
   // Key arriba y adelante, relleno flojo del lado opuesto para que la
   // silueta no se vaya a negro. Dos direcciones fijas en espacio de vista:
   // no son luces de la escena, es sombreado dentro del mismo shader unlit.
   vec3 L = normalize( vec3( 0.40, 0.75, 0.52 ) );
   float key = max( dot( N, L ), 0.0 );
   float relleno2 = max( dot( N, normalize( vec3( -0.55, -0.25, 0.45 ) ) ), 0.0 );
-  float rim = pow( 1.0 - max( dot( N, V ), 0.0 ), 3.5 );
 
-  color *= 0.38 + 0.62 * key + 0.18 * relleno2;
+  float NdotV = max( dot( N, V ), 0.0 );
+  float NdotL = key;
+  // Exposición de canto. No es un término de luz: la usa el desgaste, más
+  // abajo, porque el canto de un arma se pela antes que la cara plana.
+  float rim = pow( 1.0 - NdotV, 3.5 );
 
-  float spec = pow( max( dot( reflect( -L, N ), V ), 0.0 ), 42.0 );
-  color += uSkinMetal * ( spec * 0.85 + rim * 0.14 ) * mix( vec3( 1.0 ), accentColor, 0.3 );
+  /**
+   * COMPUERTA DE LO OSCURO, y por qué sin ella todo lo de abajo empeora el
+   * arma en vez de mejorarla.
+   *
+   * Todo reflejo es luz que se SUMA, y sumar luz blanca desatura: al medir
+   * la primera versión con reflejos, la saturación del damasco y de la gema
+   * cayó un 36% y la fracción de píxeles oscuros bajó de 0.34 a 0.26. O sea:
+   * el arma brillaba más y se leía peor, que es exactamente contra lo que
+   * advierte la cabecera de camo-families.ts —el fondo oscuro (el campo del
+   * damasco, el negro de la filigrana, el borde entre gemas) es lo que hace
+   * legible el dibujo y la silueta, y encenderlo lava el arma—.
+   *
+   * dark ya marca las zonas que el horneado quiere oscuras (miras, interior
+   * del cañón) y unas líneas más arriba se las multiplica por 0.25. Sin esta
+   * compuerta, los reflejos de abajo se las devolvían a encender.
+   */
+  float noOscuro = 1.0 - dark;
+
+  // El difuso baja donde el material es metálico (un metal casi no tiene
+  // difuso: lo que se ve de él es reflejo), pero SÓLO hasta cierto punto.
+  //
+  // El primer intento aplicaba la extinción física completa (difuso * 0.35)
+  // y el resultado, mirado, fue un arma MÁS OSCURA y más plana que antes: el
+  // dibujo del camuflaje se apagaba y el reflejo que tenía que reemplazarlo
+  // no alcanzaba a compensarlo. Acá el objetivo no es un render físico, es
+  // que el camuflaje se lea Y brille, que es lo que muestran las
+  // referencias: en ellas el patrón sigue siendo vívido y los reflejos van
+  // ENCIMA, no en lugar de él.
+  float difuso = 0.38 + 0.62 * NdotL + 0.18 * relleno2;
+  // El 0.88 y no 0.78: multiplicar el difuso comprime también su RANGO, y
+  // con 0.78 el metal perdía parte del modelado que traía el difuso justo
+  // donde el reflejo todavía no lo compensa.
+  color *= mix( difuso, difuso * 0.88 + 0.10, metalico );
+
+  // Reflejo especular direccional. El exponente sale de la rugosidad con el
+  // mapeo de Blinn-Phong (exp = 2/a^2 - 2, con a = rugosidad^2): es la
+  // conversión estándar entre "qué tan áspera es la superficie" y "qué tan
+  // concentrado es el brillo", y es lo que hace que la tela del multicam y
+  // el oro de la filigrana ya no compartan el mismo destello.
+  vec3 H = normalize( L + V );
+  // PISO DE RUGOSIDAD, y por qué no es cosmético. La malla no tiene normales
+  // propias: la normal se reconstruye por derivadas y sale FACETADA, una por
+  // triángulo. Sobre facetas, un lóbulo muy cerrado (rugosidad 0.16 da
+  // exponente ~600) no se ve nunca: o la faceta está alineada con el reflejo
+  // y se enciende entera, o no lo está y no pasa nada. Se probó sin piso y el
+  // arma quedó igual de muerta que antes con el brillo "más físico".
+  // Con 0.30 el lóbulo cubre varias facetas y el brillo CORRE por el cañón al
+  // girar, que es el efecto de las referencias.
+  float a = max( max( rugosidad, 0.30 ), 0.002 );
+  a = a * a;
+  float expo = 2.0 / ( a * a ) - 2.0;
+  float NdotH = max( dot( N, H ), 0.0 );
+  // La normalización 1/(a^2) mantiene la ENERGÍA constante al cerrar el
+  // lóbulo: sin ella, bajar la rugosidad achica el brillo hasta hacerlo
+  // desaparecer en vez de concentrarlo, que fue el primer intento y dejaba
+  // la gema más apagada que el multicam.
+  float lobulo = pow( NdotH, expo ) / ( 3.14159 * a * a );
+  lobulo = min( lobulo, 24.0 );
+
+  // El color del reflejo: blanco en un dieléctrico, teñido con el propio
+  // color de la superficie en un metal. Ésta es la línea que separa "arma
+  // dorada" de "arma blanca con pintura amarilla".
+  //
+  // El aclarado hacia blanco no es un error de física, es deliberado: en un
+  // metal F0 = albedo, y acá el albedo es el camuflaje, que suele ser
+  // OSCURO (el campo teal del damasco, el negro de la filigrana). Con F0
+  // literal, un damasco oscuro reflejaba oscuro y el "acero" se veía como
+  // plástico sucio. Subir el piso conserva el TINTE del metal —que es lo que
+  // distingue el oro del acero— sin heredar lo oscuro del dibujo.
+  // El 0.18 salió de mirar: con 0.40 el reflejo salía casi blanco y, sumado
+  // sobre toda la superficie, LAVABA el camuflaje —el damasco perdía el
+  // campo teal y quedaba gris pálido—. Las referencias hacen lo contrario:
+  // el morado sigue morado y saturado, y el brillo va encima. Un piso bajo
+  // levanta lo justo para que un dibujo oscuro refleje, sin blanquearlo.
+  vec3 f0 = mix( vec3( 0.04 ), mix( max( color, vec3( 0.04 ) ), vec3( 1.0 ), 0.18 ), metalico );
+  vec3 F = skinFresnel( f0, max( dot( H, V ), 0.0 ) );
+  color += F * lobulo * NdotL * 1.15 * noOscuro;
+
+  // Reflejo del entorno, y ACÁ ESTÁ EL GRUESO DEL EFECTO.
+  //
+  // En una malla facetada el reflejo del entorno es mejor señal que el
+  // lóbulo direccional: cada faceta mira a un lado distinto y por lo tanto
+  // toma un color distinto del entorno, así que la pieza se llena sola de
+  // variación y las caras planas —donde el brillo direccional no llega
+  // nunca— dejan de ser manchas de color plano. Es lo que hace que un arma
+  // low-poly se lea como metal pulido en vez de como plástico pintado.
+  vec3 R = reflect( -V, N );
+  vec3 env = skinEntorno( R );
+  vec3 Fenv = skinFresnel( f0, NdotV );
+
+  // El reflejo se TIÑE con el tono de la superficie antes de sumarse. El
+  // color se normaliza a máximo 1 para quedarse con el TONO y tirar el
+  // brillo: así un damasco teal oscuro refleja teal brillante en vez de
+  // blanco. Sumar blanco era lo que desaturaba —un reflejo blanco sobre un
+  // campo teal da gris—, y es la diferencia entre el arma lavada de la
+  // segunda versión y el morado saturado de las referencias.
+  // El teñido llega hasta 0.70, NUNCA hasta 1. Con teñido total (el intento
+  // anterior, 0.98 para un metal) el reflejo sale exactamente del mismo tono
+  // que lo que hay debajo, así que sube el brillo sin crear CONTRASTE: medido,
+  // el damasco quedó con menos variación de luz que antes de tocar nada
+  // (desviación 20.6 contra 24.8 del original) aunque se viera más saturado.
+  // Dejar algo de blanco es lo que hace que el reflejo se despegue del fondo.
+  float pico = max( max( color.r, color.g ), max( color.b, 0.001 ) );
+  vec3 tono = color / pico;
+  vec3 envTenido = env * mix( vec3( 1.0 ), tono, 0.35 + 0.35 * metalico );
+
+  color += envTenido * Fenv * mix( 0.95, 0.22, rugosidad ) * ( 0.55 + 0.45 * metalico ) * noOscuro;
+
+  // Barniz: segunda capa pulida y SIEMPRE BLANCA encima del dibujo. El
+  // patrón queda por debajo y el reflejo corre por arriba sin teñirse, que
+  // es exactamente la profundidad tipo resina de las referencias de camos
+  // mastery. Su fresnel es el que enciende el canto del riel y del cañón.
+  // El exponente 60 —y no 220, que fue el primer intento— por el mismo
+  // motivo que el piso de rugosidad: sobre facetas un lóbulo de 220 se
+  // enciende en una cara y desaparece en la de al lado, y no llega a leerse
+  // como una capa continua de barniz.
+  // El barniz SÍ suma blanco —es una capa transparente encima, no tiene
+  // color propio—, pero concentrado: el lóbulo sólo donde la faceta apunta a
+  // la luz, y el fresnel sólo en el canto. Es el brillo que corre por el
+  // riel y el cañón en las referencias, y por ser selectivo no lava el
+  // campo entero como lo hacía cuando se sumaba parejo.
+  float fresnelBarniz = pow( 1.0 - NdotV, 3.0 );
+  float loboBarniz = pow( NdotH, 60.0 );
+  color += barniz * noOscuro * ( loboBarniz * 1.25 * NdotL + fresnelBarniz * 0.30
+    + env.b * fresnelBarniz * 0.45 );
 
   // Desgaste: rayones finos más erosión de canto, que descubren metal
   // desnudo. El canto se desgasta antes que la cara plana, igual que en un
