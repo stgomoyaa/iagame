@@ -111,7 +111,27 @@ SECUENCIAS = {
     "reload": [r"^start_reload$", r"^(\w+_)?reload$", r"reload"],
     "draw": [r"^(\w+_)?draw$", r"draw"],
     "idle": [r"^(\w+_)?idle$", r"idle$"],
-    "fire": [r"^(\w+_)?fire1$", r"^(\w+_)?fire$", r"^shoot1$", r"fire"],
+    # Los tres últimos son de CUERPO A CUERPO y van AL FINAL a propósito: un
+    # arma de fuego nunca los engancha (ningún `.mdl` de los 42 tiene "slash"
+    # ni "stab" en el nombre de una secuencia), así que agregarlos no puede
+    # cambiar qué clip elige ninguna de las 39 que ya funcionan.
+    #
+    # `midslash1` va antes que `stab` porque en el `v_knife_*` de Source el
+    # ataque PRIMARIO (click izquierdo) es el tajo y el secundario (click
+    # derecho) es la puñalada. `fire` es el clip que el runtime dispara al
+    # atacar, así que le corresponde el tajo. Los `@stab_miss` y `@stab_miss2`
+    # (el mismo gesto sin impacto) quedan afuera por el ANCLA `$` de estos
+    # patrones, no por PATRON_EXCLUIDO: si acá se aflojara el ancla, el laxo
+    # engancharía el "miss" y el cuchillo atacaría con la animación de fallar.
+    "fire": [
+        r"^(\w+_)?fire1$",
+        r"^(\w+_)?fire$",
+        r"^shoot1$",
+        r"fire",
+        r"^midslash1$",
+        r"^(\w+_)?slash1?$",
+        r"^stab$",
+    ],
 }
 
 # Secuencias que nunca entran, pase lo que pase. `lookat*` son las más caras
@@ -446,7 +466,7 @@ def unir_por_parte() -> dict:
     }
 
 
-def convertir(mdl_path: str, out: str) -> dict:
+def convertir(mdl_path: str, out: str, melee: bool = False) -> dict:
     from SourceIO.library.models.mdl.v49.mdl_file import MdlV49
     from SourceIO.library.utils import FileBuffer
 
@@ -482,11 +502,27 @@ def convertir(mdl_path: str, out: str) -> dict:
     rescatados = rescatar_materiales_sin_textura(os.path.join(raiz_pack, "materials"))
 
     clips = importar_animaciones(arm, mdl)
-    if not any(c["clip"] == "reload" for c in clips):
+    if not melee and not any(c["clip"] == "reload" for c in clips):
         # Falla fuerte: un viewmodel sin recarga no cumple el único motivo por
         # el que se trae. Mejor enterarse acá que en pantalla.
+        #
+        # La excepción es el CUERPO A CUERPO, y es una excepción real, no una
+        # forma de apagar el guard cuando molesta: un cuchillo no recarga, así
+        # que exigirle recarga es pedirle un clip que el archivo no puede
+        # tener. `v_knife_t.mdl` trae `@idle @draw @stab @midslash1 @midslash2`
+        # y ninguna recarga, y eso es correcto, no un modelo incompleto.
+        #
+        # Sigue siendo opt-in POR TRABAJO (`"melee": true`) y no un `try`
+        # alrededor: para las 39 armas de fuego el guard queda igual de duro, y
+        # un `v_` de fusil al que se le perdió la recarga sigue fallando acá.
         raise RuntimeError(
             f"no se encontró recarga entre {[a.name for a in mdl.anim_descs]}"
+        )
+    if melee and not any(c["clip"] == "fire" for c in clips):
+        # El equivalente melee del guard de arriba: si un cuchillo entra sin
+        # clip de ataque, queda un arma que no hace nada al hacer click.
+        raise RuntimeError(
+            f"melee sin clip de ataque entre {[a.name for a in mdl.anim_descs]}"
         )
 
     piezas = unir_por_parte()
@@ -543,7 +579,9 @@ def main() -> None:
     resultados = []
     for trabajo in trabajos:
         try:
-            resultados.append(convertir(trabajo["mdl"], trabajo["out"]))
+            resultados.append(
+                convertir(trabajo["mdl"], trabajo["out"], trabajo.get("melee", False))
+            )
         except Exception as e:
             traceback.print_exc()
             resultados.append({"mdl": trabajo["mdl"], "ok": False, "error": str(e)})
