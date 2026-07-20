@@ -69,6 +69,10 @@
 
 import type { ArchetypeId, TacticalStyle } from '@/game/weapons/archetypes'
 
+// Este catálogo es SÓLO armas de fuego (cada fila exige un `ArchetypeId`). El
+// cuchillo y lo melee NO van acá: son una rama separada, sin arquetipo de
+// fuego — ver weapons/melee-catalog.ts (dato) y combat/melee.ts (mecánica).
+
 /**
  * Tipo de mira. Duplicado estructural (mismo union que `SightType` en
  * scripts/lib/sight.ts) y no un import: `scripts/` corre con Node crudo
