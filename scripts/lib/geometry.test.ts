@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_TARGET_LENGTH_M,
   WEAPON_CLASS_LENGTHS_M,
+  assertDeclaredAxes,
   boundsOf,
   buildNormalizeMatrix,
   detectMuzzle,
@@ -639,5 +640,87 @@ describe('buildNormalizeMatrix usa el largo objetivo recibido, no un valor fijo'
 
     expect(maxDimension(pistolLength)).toBeCloseTo(pistolLength, 4)
     expect(maxDimension(rifleLength)).toBeCloseTo(rifleLength, 4)
+  })
+})
+
+// ---------- assertDeclaredAxes: el guard contra la confusión de 90° ----------
+
+describe('assertDeclaredAxes', () => {
+  /**
+   * Caja de un arma con extensiones dadas por eje. No hace falta una nube
+   * realista: el guard sólo mira la caja envolvente, así que ocho vértices
+   * dicen exactamente lo mismo que dos mil y el test se lee de una.
+   */
+  function boxCloud(sizeX: number, sizeY: number, sizeZ: number): Float32Array {
+    const hx = sizeX / 2
+    const hy = sizeY / 2
+    const hz = sizeZ / 2
+    const pts: number[] = []
+    for (const x of [-hx, hx]) {
+      for (const y of [-hy, hy]) {
+        for (const z of [-hz, hz]) pts.push(x, y, z)
+      }
+    }
+    return Float32Array.from(pts)
+  }
+
+  // Extensiones medidas de verdad sobre los .glb que consume el pipeline.
+  const COD_AK = boxCloud(0.71, 0.209, 0.043)
+  const CS_AK = boxCloud(0.063, 0.213, 0.8)
+
+  it('acepta los ejes declarados de los dos packs reales', () => {
+    expect(() => assertDeclaredAxes(COD_AK, 0, 1, 'cod4_ak47')).not.toThrow()
+    expect(() => assertDeclaredAxes(CS_AK, 2, 1, 'ak47')).not.toThrow()
+  })
+
+  it('rechaza el vertical rolado 90° que dejó las 69 de COD acostadas', () => {
+    // Éste es EL bug: eje largo bien (X), vertical declarado en Z cuando la
+    // silueta es alta en Y. Si este test pasara, el guard no serviría de nada.
+    expect(() => assertDeclaredAxes(COD_AK, 0, 2, 'cod4_ak47')).toThrow(/vertical/)
+  })
+
+  it('rechaza un eje de cañón que no es el más largo de la malla', () => {
+    expect(() => assertDeclaredAxes(COD_AK, 1, 0, 'cod4_ak47')).toThrow(/cañón/)
+    expect(() => assertDeclaredAxes(CS_AK, 1, 2, 'ak47')).toThrow(/cañón/)
+  })
+
+  it('rechaza declarar el mismo eje como cañón y como vertical', () => {
+    expect(() => assertDeclaredAxes(COD_AK, 0, 0, 'cod4_ak47')).toThrow(/no pueden ser el mismo/)
+  })
+
+  it('rechaza una sección casi cuadrada, donde "más alta que gruesa" no decide', () => {
+    // 0.209 contra 0.200 es un 4,5% de separación: por debajo del margen, así
+    // que el guard no se la juega. Es el caso en que declarar a mano es
+    // legítimo pero la malla no puede confirmarlo, y callarse sería peor.
+    const casiCuadrada = boxCloud(0.71, 0.209, 0.2)
+    expect(() => assertDeclaredAxes(casiCuadrada, 0, 1, 'raro')).toThrow(/vertical/)
+  })
+})
+
+describe('assertDeclaredAxes con la silueta lateral ancha exenta', () => {
+  /** Extensiones reales de mw3e_pkp: una LMG con la caja de cinta al costado. */
+  const PKP = (() => {
+    const pts: number[] = []
+    for (const x of [-0.4739, 0.4739]) {
+      for (const y of [-0.1107, 0.1107]) {
+        for (const z of [-0.143, 0.143]) pts.push(x, y, z)
+      }
+    }
+    return Float32Array.from(pts)
+  })()
+
+  it('sin la exención, la PKP falla el invariante de silueta', () => {
+    expect(() => assertDeclaredAxes(PKP, 0, 1, 'mw3e_pkp')).toThrow(/vertical/)
+  })
+
+  it('con la exención pasa, pero SIGUE chequeando el eje del cañón', () => {
+    expect(() =>
+      assertDeclaredAxes(PKP, 0, 1, 'mw3e_pkp', { verificarVertical: false }),
+    ).not.toThrow()
+    // La exención apaga el invariante 2, no el 1: un cañón declarado en el eje
+    // equivocado tiene que seguir explotando aunque el arma esté exenta.
+    expect(() =>
+      assertDeclaredAxes(PKP, 1, 0, 'mw3e_pkp', { verificarVertical: false }),
+    ).toThrow(/cañón/)
   })
 })

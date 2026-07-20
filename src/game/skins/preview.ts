@@ -20,13 +20,19 @@ import {
   Group,
   Mesh,
   MeshBasicMaterial,
+  MeshStandardMaterial,
   PerspectiveCamera,
   Scene,
   WebGLRenderer,
 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { Skin } from '@/game/skins/generator'
-import { createSkinHandle, type SkinHandle } from '@/game/skins/material'
+import {
+  createSkinHandle,
+  type SkinHandle,
+  type SkinnableMaterial,
+} from '@/game/skins/material'
+import { instalarRigDeLuz } from '@/game/weapons/viewmodel/lighting'
 import { weaponAssetUrl } from '@/game/weapons/registry'
 
 export interface PreviewItem {
@@ -66,20 +72,68 @@ interface Slot {
 }
 
 /**
- * Geometría por slug, compartida entre instancias. Se comparte la geometría
- * y NO el material: cada arma del atril necesita su propio juego de uniforms
- * de skin, y clonar un material ya parchado copiaría la función
- * `onBeforeCompile` apuntando a los uniforms del original (las dos armas
- * quedarían con la misma skin). Por eso cada instancia estrena material.
+ * Geometría Y material de origen por slug, compartidos entre instancias.
+ *
+ * El material que se guarda acá es el que trae el GLB, SIN parchar, y cada
+ * instancia del atril usa un `.clone()` suyo. La distinción importa: cada arma
+ * necesita su propio juego de uniforms de skin, y clonar un material YA
+ * parchado copiaría la función `onBeforeCompile` apuntando a los uniforms del
+ * original, con lo que las dos armas del atril compartirían skin. Clonar el
+ * material virgen y parchar el clon no tiene ese problema.
+ *
+ * Antes acá se fabricaba un `MeshBasicMaterial({ vertexColors: true })` nuevo y
+ * se tiraba el del GLB. Eso funcionaba mientras TODAS las armas vinieran con
+ * color por vértice horneado, que dejó de ser cierto: las 69 de COD van por el
+ * camino PBR (ver `convert-source-weapons.ts`), traen textura y normales y NO
+ * traen `COLOR_0`. Pedirle color por vértice a una malla que no lo tiene las
+ * dejaba **negras** en la armería. Usar el material del propio GLB es además
+ * lo que el encabezado de este archivo ya prometía: que la vitrina muestre
+ * exactamente lo mismo que se ve equipado.
  */
-type GeometryCache = Map<string, BufferGeometry>
+interface FuenteArma {
+  geometry: BufferGeometry
+  material: SkinnableMaterial
+}
+type GeometryCache = Map<string, FuenteArma>
 
-function firstMesh(root: { traverse(cb: (o: unknown) => void): void }): Mesh | null {
-  let found: Mesh | null = null
+/**
+ * La malla del ARMA dentro del GLB, no la primera que aparezca.
+ *
+ * `traverse` devuelve las mallas en orden de escena, y en los viewmodels `v_`
+ * de CS la primera es `weapon_arms`: la vitrina venía mostrando los brazos con
+ * guante en vez del arma en esas 39. El pipeline nombra el cuerpo del arma
+ * `weapon_body` (contrato con `scripts/blender/mdl-to-glb.py`), así que se lo
+ * busca por nombre y sólo se cae a "la primera malla" cuando no hay ninguna
+ * con ese nombre — que es el caso de las 40 CC0, modelos de una pieza sin
+ * nombres de parte.
+ */
+const NODO_CUERPO = 'weapon_body'
+
+/**
+ * El material de la malla, si es uno solo y de un tipo que `createSkinHandle`
+ * sepa parchar.
+ *
+ * Un array acá significaría una malla con varias primitivas de materiales
+ * distintos, que el pipeline no produce para el cuerpo del arma (lo colapsa a
+ * uno). Se contempla igual para no romper en silencio si algún día cambia:
+ * devolver `null` deja el mensaje en `lastError`, que es visible, en vez de
+ * pintar el arma de negro, que es lo que hacía el camino anterior.
+ */
+function materialUnico(mesh: Mesh): SkinnableMaterial | null {
+  const m = mesh.material
+  if (Array.isArray(m)) return null
+  return m instanceof MeshBasicMaterial || m instanceof MeshStandardMaterial ? m : null
+}
+
+function weaponMesh(root: { traverse(cb: (o: unknown) => void): void }): Mesh | null {
+  let primera: Mesh | null = null
+  let cuerpo: Mesh | null = null
   root.traverse((child) => {
-    if (found === null && child instanceof Mesh) found = child
+    if (!(child instanceof Mesh)) return
+    if (primera === null) primera = child
+    if (cuerpo === null && child.name === NODO_CUERPO) cuerpo = child
   })
-  return found
+  return cuerpo ?? primera
 }
 
 export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
@@ -90,6 +144,15 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
   const scene = new Scene()
   const camera = new PerspectiveCamera(CAMERA_FOV, 1, 0.05, 20)
   camera.position.set(0, 0, 1.65)
+  // La cámara entra a la escena porque de ella cuelgan las luces: una luz
+  // fuera del grafo de la escena no ilumina nada.
+  scene.add(camera)
+  // El MISMO rig de luz del viewmodel, no uno propio. Las armas de COD usan
+  // `MeshStandardMaterial`, que sin luces se dibuja NEGRO — o sea que la
+  // vitrina necesita iluminación sí o sí desde que existe el camino PBR. Y si
+  // hay que elegir una, la del viewmodel es la que hace verdadera la promesa
+  // del encabezado: que el arma se vea acá igual que equipada.
+  const rigDeLuz = instalarRigDeLuz(scene, camera, renderer)
 
   const loader = new GLTFLoader()
   const geometries: GeometryCache = new Map()
@@ -120,9 +183,9 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
     }
   }
 
-  function addWeapon(geometry: BufferGeometry, item: PreviewItem, index: number): void {
-    const material = new MeshBasicMaterial({ vertexColors: true })
-    const mesh = new Mesh(geometry, material)
+  function addWeapon(fuente: FuenteArma, item: PreviewItem, index: number): void {
+    // Clon del material virgen del GLB: ver el comentario de `GeometryCache`.
+    const mesh = new Mesh(fuente.geometry, fuente.material.clone())
     // Los GLB salen del pipeline con el cañón hacia -Z (sección 6.3): un
     // cuarto de vuelta los pone de perfil, que es como se mira un arma en
     // una vitrina.
@@ -149,13 +212,19 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
       .loadAsync(weaponAssetUrl(item.slug))
       .then((gltf) => {
         if (token !== generation) return
-        const mesh = firstMesh(gltf.scene)
+        const mesh = weaponMesh(gltf.scene)
         if (!mesh) {
           lastError = `"${item.slug}.glb" no tiene ninguna malla`
           return
         }
-        geometries.set(item.slug, mesh.geometry)
-        addWeapon(mesh.geometry, item, Math.min(index, slots.length))
+        const material = materialUnico(mesh)
+        if (!material) {
+          lastError = `"${item.slug}.glb" no trae un material que la vitrina sepa pintar`
+          return
+        }
+        const fuente: FuenteArma = { geometry: mesh.geometry, material }
+        geometries.set(item.slug, fuente)
+        addWeapon(fuente, item, Math.min(index, slots.length))
         lastError = null
       })
       .catch(() => {
@@ -208,8 +277,12 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
       running = false
       cancelAnimationFrame(rafId)
       clearSlots()
-      for (const geometry of geometries.values()) geometry.dispose()
+      for (const fuente of geometries.values()) {
+        fuente.geometry.dispose()
+        fuente.material.dispose()
+      }
       geometries.clear()
+      rigDeLuz.dispose()
       renderer.dispose()
     },
 

@@ -245,6 +245,97 @@ export function detectUpAxis(
 }
 
 /**
+ * Chequea que unos ejes DECLARADOS a mano sean compatibles con la silueta
+ * real de la malla, y explota si no lo son.
+ *
+ * Existe por un bug que costó 69 armas: los `c_` de COD se declararon con el
+ * eje largo en +X y el vertical en +Z, midiendo los huesos `tag_*` del `.mdl`
+ * — donde Source efectivamente es Z-up. Pero lo que consume este pipeline no
+ * es el `.mdl`, es el `.glb` que exporta Blender, y ESE exportador convierte
+ * Z-up a Y-up por spec de glTF. La conclusión "arriba es Z" era correcta en el
+ * espacio donde se midió y falsa en el espacio donde se usa. El resultado:
+ * `buildNormalizeMatrix` mandaba el eje del GROSOR del arma a la vertical de
+ * pantalla y las 69 entraban roladas 90°, acostadas de lado.
+ *
+ * Declarar la orientación sigue siendo lo correcto (ver el encabezado de
+ * `convert-source-weapons.ts`): adivinarla con heurísticas metía ~8 armas
+ * dadas vuelta. Lo que faltaba no era detectar, era **contrastar** lo
+ * declarado contra algo que la malla ya sabe.
+ *
+ * Los dos invariantes que se chequean son los más baratos que atrapan este
+ * error, y los dos valen para cualquier arma de fuego:
+ *
+ * 1. El eje del cañón es el de MAYOR extensión. Un arma es más larga que
+ *    alta y que ancha; no hay contraejemplo en un arsenal de armas de fuego.
+ * 2. De los otros dos, el vertical es el de MAYOR extensión. La silueta de
+ *    un arma es más alta (mira, cargador, culata, empuñadura) que gruesa
+ *    (el ancho del cajón de mecanismos). Es la misma premisa que usa
+ *    `detectUpAxis`, sólo que acá se usa para VERIFICAR en vez de para
+ *    adivinar — que es donde una heurística de silueta es confiable: no
+ *    tiene que acertar el eje, sólo tiene que delatar una confusión de 90°.
+ *
+ * Ninguno de los dos chequea el SIGNO: para eso están `tag_flash` (boca) y
+ * `tag_clip` (cargador debajo), que sí son datos del archivo. Este guard
+ * atrapa la confusión de EJE, que es la que nadie tenía forma de ver.
+ *
+ * **Dónde deja de valer el invariante 2, medido y no supuesto.** Una
+ * ametralladora con bípode desplegado y caja de cinta al costado puede ser
+ * tan ancha como alta: de las 69 de COD, `mw3e_pkp` mide 0,221 de alto contra
+ * 0,286 de ancho y `mw3e_mk46` 0,198 contra 0,235 — las dos con la masa
+ * corrida a UN lado (la caja de munición: la Z de la PKP va de -0,189 a
+ * +0,097). No es ruido que se pueda promediar: probado con percentiles 2-98 y
+ * 5-95, la caja de cinta no son cuatro vértices sueltos y el orden se
+ * mantiene invertido. Para esos casos existe `verificarVertical: false`, que
+ * apaga SÓLO el invariante 2 y deja el 1 en pie. La exención se declara por
+ * arma y con el número medido al lado (ver `SILUETA_LATERAL_ANCHA` en
+ * `convert-source-weapons.ts`), no se infiere: una exención silenciosa
+ * devolvería justo el agujero que este guard vino a tapar.
+ *
+ * `margen` es la separación relativa mínima entre las dos extensiones que se
+ * comparan. Con 0 un arma de sección cuadrada pasaría por casualidad; el
+ * default (0,15) exige que el eje declarado sea al menos un 15% más extenso
+ * que su competidor, que es holgado contra los datos reales (las 39 de CS
+ * separan 0,213 de 0,063 y las 69 de COD 0,209 de 0,043 en el AK) y sigue
+ * siendo estricto contra una rotación de 90°, que INVIERTE la comparación en
+ * vez de acercarla.
+ */
+export function assertDeclaredAxes(
+  positions: Float32Array,
+  barrelAxis: 0 | 1 | 2,
+  upAxis: 0 | 1 | 2,
+  etiqueta: string,
+  opciones: { margen?: number; verificarVertical?: boolean } = {},
+): void {
+  const { margen = 0.15, verificarVertical = true } = opciones
+  if (barrelAxis === upAxis) {
+    throw new Error(`${etiqueta}: el eje del cañón y el vertical no pueden ser el mismo (${barrelAxis})`)
+  }
+  const { min, max } = boundsOf(positions)
+  const size = [max[0] - min[0], max[1] - min[1], max[2] - min[2]]
+  const nombre = ['X', 'Y', 'Z']
+  const fmt = size.map((s) => s.toFixed(4)).join(', ')
+
+  for (const otro of [0, 1, 2] as const) {
+    if (otro === barrelAxis) continue
+    if (size[barrelAxis] < size[otro] * (1 + margen)) {
+      throw new Error(
+        `${etiqueta}: se declaró el cañón en ${nombre[barrelAxis]} pero la malla no es más larga en ese eje que en ${nombre[otro]} (extensiones [${fmt}])`,
+      )
+    }
+  }
+
+  if (!verificarVertical) return
+
+  const tercero = ([0, 1, 2] as const).find((a) => a !== barrelAxis && a !== upAxis)
+  if (tercero === undefined) throw new Error(`${etiqueta}: ejes declarados inconsistentes`)
+  if (size[upAxis] < size[tercero] * (1 + margen)) {
+    throw new Error(
+      `${etiqueta}: se declaró el vertical en ${nombre[upAxis]} pero la silueta no es más alta en ese eje que en ${nombre[tercero]} (extensiones [${fmt}]). Un arma es más alta que gruesa: revisá si el eje declarado sobrevivió la conversión Z-up -> Y-up del exportador.`,
+    )
+  }
+}
+
+/**
  * Matriz que lleva el eje del cañón a -Z conservando el eje "arriba" como
  * +Y, escala al largo objetivo y centra en el origen. Column-major, como
  * espera glTF.

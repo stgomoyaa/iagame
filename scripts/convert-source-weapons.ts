@@ -80,7 +80,12 @@ import {
 // exige (mismo motivo que en convert-weapons.ts). Los imports a src/ son
 // relativos y no con el alias `@/` porque ese alias sólo existe para el
 // bundler y para vitest, no para Node crudo.
-import { boundsOf, buildNormalizeMatrix, WEAPON_CLASS_LENGTHS_M } from './lib/geometry.ts'
+import {
+  assertDeclaredAxes,
+  boundsOf,
+  buildNormalizeMatrix,
+  WEAPON_CLASS_LENGTHS_M,
+} from './lib/geometry.ts'
 import { mergeIndex, type IndexEntry } from './lib/merge-index.ts'
 import {
   MAX_LADO_CUERPO,
@@ -118,17 +123,32 @@ import {
  * - **COD**: no hizo falta ninguna heurística. Estos modelos traen un hueso
  *   `tag_flash` puesto por el autor en la BOCA DE FUEGO, así que el sentido
  *   del cañón es un dato del archivo y no una inferencia: medido sobre AK-47,
- *   MP7, ACR, Barrett y M1911, `tag_flash` cae siempre en el extremo de MAYOR
- *   X (p.ej. Barrett 0.7711 contra un máximo de caja de 0.7709; MP7 0.2377
- *   contra 0.2377). Que el vertical sea +Z sale del mismo lado: `tag_clip`
- *   (el cargador) queda por DEBAJO de `tag_flash` en Z en todos.
+ *   MP5, Barrett y M1911, `tag_flash` cae siempre en el extremo de MAYOR X
+ *   (p.ej. Barrett 0.7711 contra un máximo de caja de 0.7709; AK-47 0.3704
+ *   contra 0.3707). Que el cargador quede por debajo de la boca sale del mismo
+ *   lado: `tag_clip` está siempre a menos altura que `tag_flash`.
  *
- * OJO con `tag_ads`: NO sirve como punto de alineación de ADS del arma, aunque
- * el nombre lo sugiera. Medido, es la posición de la CÁMARA del jugador
- * (0,-0.10,1.17 en los modelos de MW3, y el origen en los de COD4: el mismo
- * valor para todas las armas del pack). La línea de puntería se sigue midiendo
- * con `detectSightLine()` sobre la malla ya normalizada, que es lo que mira la
- * geometría real de cada mira.
+ * OJO CON EL ESPACIO EN QUE SE MIDEN LOS HUESOS. Los `tag_*` viven en el
+ * `.mdl` de Source, que es **Z-up**; lo que consume este pipeline es el `.glb`
+ * que exporta Blender, que es **Y-up por spec de glTF**. El exportador rota:
+ * `X_glb = X_source`, `Y_glb = Z_source`, `Z_glb = -Y_source`. Por eso el eje
+ * del cañón (X) sobrevive igual pero el vertical NO: en el `.glb` es +Y, no
+ * +Z. Declarar `upAxis: 2` leyendo los huesos en crudo —que es lo que estaba
+ * hasta acá— mandaba el eje del GROSOR del arma a la vertical de pantalla y
+ * las 69 salían roladas 90°, acostadas de lado, con la mira apuntando al
+ * costado en vez de al techo. Se confirma en la caja envolvente del `.glb`:
+ * el AK de COD mide [0.710, 0.209, 0.043] — 0.209 de alto contra 0.043 de
+ * grueso, o sea que el vertical es Y y por bastante. `assertDeclaredAxes()`
+ * chequea exactamente eso en cada conversión para que no pueda volver.
+ *
+ * OJO también con `tag_ads`: NO sirve como punto de alineación de ADS del
+ * arma, aunque el nombre lo sugiera. Medido sobre los `.mdl`, es la posición
+ * de la CÁMARA del jugador: el origen en los de COD4 (`tag_ads` cuelga de
+ * `tag_view` con traslación nula) y [-0.068, -5.336, 61.621] en los de MW3 —
+ * el MISMO valor para todas las armas del pack, o sea que no aporta ni un dato
+ * por arma. La línea de puntería se sigue midiendo con `detectSightLine()`
+ * sobre la malla ya normalizada, que es lo que mira la geometría real de cada
+ * mira.
  */
 interface RawAxes {
   readonly barrelAxis: 0 | 1 | 2
@@ -138,8 +158,46 @@ interface RawAxes {
 
 const RAW_AXES_BY_GAME: Record<SourceGame, RawAxes> = {
   CS: { barrelAxis: 2, barrelSign: 1, upAxis: 1 },
-  COD: { barrelAxis: 0, barrelSign: 1, upAxis: 2 },
+  // upAxis 1 (Y) y no 2 (Z): los dos packs pasan por el mismo exportador de
+  // Blender, así que los dos llegan acá Y-up. Ver el encabezado.
+  COD: { barrelAxis: 0, barrelSign: 1, upAxis: 1 },
 }
+
+/**
+ * Las 5 armas cuya silueta NO puede confirmar el eje vertical declarado, con
+ * el número medido que lo justifica. Todas cargan algo montado al COSTADO —
+ * caja de cinta de una ametralladora, o bípode desplegado— que las deja tan
+ * anchas como altas, así que el invariante "un arma es más alta que gruesa"
+ * de `assertDeclaredAxes` no las decide:
+ *
+ *   mw3e_pkp      alto 0,2213  ancho 0,2859   caja de cinta (Z de -0,189 a +0,097)
+ *   mw3e_mk46     alto 0,1981  ancho 0,2348   caja de cinta (Z de -0,184 a +0,051)
+ *   mw2e_cheytac  alto 0,2194  ancho 0,2797   bípode desplegado
+ *   cod4_m60      alto 0,1761  ancho 0,1686   bípode: queda casi cuadrada (4%)
+ *   cod4_rpd      alto 0,1314  ancho 0,1409   bípode: queda casi cuadrada
+ *
+ * Para éstas el eje vertical se apoya en dos cosas que el guard no puede
+ * medir: que el exportador de Blender es UNO SOLO para las 69 —así que si las
+ * otras 64 salen Y-up, éstas también— y en haberlas mirado en el navegador.
+ * Lo segundo es lo que esta lista NO reemplaza: exentar del chequeo
+ * automático obliga al chequeo visual, no lo perdona.
+ *
+ * Se sigue chequeando el eje del CAÑÓN en las cinco, que es inequívoco en
+ * todas (la más ajustada, cod4_rpd, mide 0,698 de largo contra 0,141).
+ *
+ * Es una lista corta y con nombre a propósito. Bajarle el margen al guard para
+ * que estas cinco pasaran lo habría apagado para las 64 restantes; exentar por
+ * clase ("las lmg no se chequean") habría apagado 8 y además no cubre a la
+ * cheytac, que es un sniper. Nombrarlas deja el agujero exactamente del tamaño
+ * del problema.
+ */
+const SILUETA_LATERAL_ANCHA: ReadonlySet<string> = new Set([
+  'mw3e_pkp',
+  'mw3e_mk46',
+  'mw2e_cheytac',
+  'cod4_m60',
+  'cod4_rpd',
+])
 
 /**
  * Nombres de las dos partes que produce `scripts/blender/mdl-to-glb.py`. Son
@@ -381,6 +439,13 @@ async function convertOne(
   // el de CS 0.80 no es una discrepancia a corregir a mano — los dos salen del
   // pipeline midiendo `CLASS_TARGET_LENGTH_M.ar`.
   const axes = RAW_AXES_BY_GAME[entry.game]
+  // Contrastar lo DECLARADO contra la silueta real antes de rotar nada. Una
+  // orientación declarada mal no falla ruidosamente —el arma sale, pesa lo
+  // mismo y tiene el color bien, sólo que acostada— así que sin este chequeo
+  // el único detector es mirar 69 capturas. Ver `assertDeclaredAxes`.
+  assertDeclaredAxes(positions, axes.barrelAxis, axes.upAxis, `${entry.slug} (${entry.game})`, {
+    verificarVertical: !SILUETA_LATERAL_ANCHA.has(entry.slug),
+  })
   const matrix = buildNormalizeMatrix(
     positions,
     axes.barrelAxis,
