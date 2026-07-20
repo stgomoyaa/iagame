@@ -136,6 +136,22 @@ export interface WeaponArchetype {
  * cargador completo, porque su "cargador" a efectos de retroceso es la
  * ráfaga de 3 balas, no las 30 del arma. Ver los tests de banda física en
  * archetypes.test.ts.
+ *
+ * OJO, esta banda es una ESTIMACIÓN y el dato real la desmiente. Cuando se
+ * reprodujo el generador de retroceso de CS:GO (recoil-patterns.ts: atributos
+ * de items_game.txt + GenerateRecoilTable + el RNG ran1 de Valve + KickBack
+ * tick a tick), el AK-47 real subió **11.77°**, no 15-20. La banda se escribió
+ * a ojo antes de tener el dato.
+ *
+ * No se corrigió a 11.77 a propósito: esta constante calibra los patrones
+ * GENERADOS de los 10 arquetipos, que son los que usan las 40 armas CC0 y las
+ * 9 de Source sin patrón real. Ese arsenal está balanceado contra sí mismo con
+ * esta escala, y moverla lo rebalancearía entero para hacerlo coincidir con un
+ * número que sus armas no usan. Las armas con patrón real no pasan por acá.
+ *
+ * O sea: convive un arsenal generado calibrado a 15-20° con uno real a ~11.8°.
+ * Es una diferencia de sensación conocida y aceptada, no un descuido. Si algún
+ * día se unifica, el número a adoptar es el real.
  */
 export const AR_REFERENCE_CLIMB_DEG_MIN = 15
 export const AR_REFERENCE_CLIMB_DEG_MAX = 20
