@@ -198,7 +198,19 @@ export interface GraftResult {
  * sin brazos se ve peor que antes pero se ve; una excepción adentro del `.then`
  * del loader la haría desaparecer entera.
  */
-export function graftArms(donorScene: Object3D, codBody: Mesh): GraftResult | null {
+export function graftArms(
+  donorScene: Object3D,
+  codBody: Mesh,
+  /**
+   * Piezas sueltas que hay que llevar junto con el cuerpo (hoy sólo el
+   * cargador de `cod4_m14`, la única de las 69 que trae `weapon_mag` aparte).
+   * Van al mismo hueso y con la MISMA matriz que el cuerpo, así que quedan
+   * pegadas en su asiento. No se desprenden en la recarga —eso lo haría el
+   * hueso de cargador del donante, que el arma de COD no tiene— pero un
+   * cargador quieto en su lugar se ve infinitamente mejor que ninguno.
+   */
+  extras: readonly Mesh[] = [],
+): GraftResult | null {
   const donorBody = findBody(donorScene)
   if (donorBody === null || !(donorBody instanceof SkinnedMesh)) return null
 
@@ -232,10 +244,12 @@ export function graftArms(donorScene: Object3D, codBody: Mesh): GraftResult | nu
   // sigue al hueso en cada frame de la animación sin más trabajo.
   const local = new Matrix4().multiplyMatrices(boneInverse, align)
 
-  codBody.matrixAutoUpdate = false
-  codBody.matrix.copy(local)
-  codBody.matrix.decompose(codBody.position, codBody.quaternion, codBody.scale)
-  bone.add(codBody)
+  for (const mesh of [codBody, ...extras]) {
+    mesh.matrixAutoUpdate = false
+    mesh.matrix.copy(local)
+    mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale)
+    bone.add(mesh)
+  }
 
   // El arma del donante se esconde en vez de borrarse: es una SkinnedMesh y su
   // esqueleto es el mismo objeto que mueve los brazos. Sacarla del grafo es lo

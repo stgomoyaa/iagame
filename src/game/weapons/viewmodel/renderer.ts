@@ -34,10 +34,12 @@ import {
 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js'
+import { graftArms, selectDonor } from '@/game/weapons/viewmodel/graft'
 import { instalarRigDeLuz } from '@/game/weapons/viewmodel/lighting'
 import { createSkinHandle, type SkinHandle } from '@/game/skins/material'
 import type { Skin } from '@/game/skins/generator'
-import { getWeaponVisual, weaponAssetUrl } from '@/game/weapons/registry'
+import { getWeaponVisual, weaponAssetUrl, weaponOrigin } from '@/game/weapons/registry'
 
 /** FOV propio del viewmodel, independiente del de mundo (90° en
  *  engine/renderer.ts): así el ADS puede animar uno sin tocar el otro,
@@ -593,6 +595,67 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
     requestedSlug = attachedSlug
   }
 
+  /**
+   * Escena y clips de un donante de brazos, cacheados por slug.
+   *
+   * Se guarda la escena ORIGINAL y nunca se adjunta: cada arma injertada se
+   * lleva un `SkeletonUtils.clone` propio. Hace falta una copia por arma
+   * porque el injerto le mete el arma adentro del esqueleto y esconde la del
+   * donante — dos armas compartiendo una sola jerarquía se pisarían. El clone
+   * duplica el grafo de nodos y el esqueleto pero REUSA geometrías y
+   * materiales, así que la malla de brazos existe una sola vez en GPU por
+   * donante, no una por arma.
+   */
+  const donorCache = new Map<string, { scene: Object3D; clips: AnimationClip[] }>()
+
+  async function loadDonor(donorSlug: string): Promise<{
+    scene: Object3D
+    clips: AnimationClip[]
+  }> {
+    const hit = donorCache.get(donorSlug)
+    if (hit) return hit
+    const gltf = await loader.loadAsync(weaponAssetUrl(donorSlug))
+    const entry = { scene: gltf.scene, clips: gltf.animations ?? [] }
+    donorCache.set(donorSlug, entry)
+    return entry
+  }
+
+  /**
+   * Arma el modelo animado de un arma sin brazos, o null si no corresponde
+   * injertar o el injerto no se pudo hacer.
+   *
+   * El filtro por PROCEDENCIA no es cosmético: los donantes son viewmodels de
+   * CS y viven en `weapons-local/`, que está gitignoreada y no existe en un
+   * build publicado. Injertarle brazos a un arma CC0 —las que SÍ se publican—
+   * la dejaría pidiendo un archivo que en producción da 404, y encima ataría
+   * un asset publicable a uno que no lo es. Las CC0 se quedan como estaban.
+   *
+   * No lanza nunca: si el donante no carga, el arma sigue por el camino
+   * estático. Perder los brazos se ve peor que antes; perder el arma entera
+   * por una excepción adentro de un `.then` sería mucho peor.
+   */
+  async function graftedModel(slug: string, parts: WeaponParts): Promise<AnimatedModel | null> {
+    if (weaponOrigin(slug) !== 'local') return null
+
+    try {
+      const donor = await loadDonor(selectDonor(getWeaponVisual(slug).archetype))
+      const scene = cloneSkinned(donor.scene)
+      const model = buildAnimatedModel(scene, donor.clips)
+      if (!model) return null
+
+      const result = graftArms(scene, parts.body, parts.mag ? [parts.mag] : [])
+      if (!result) return null
+
+      // El camo se engancha al arma injertada, no a la del donante (que quedó
+      // escondida) ni a los brazos: pintar los brazos con el camo del arma es
+      // el error que documenta BODY_NODE_NAME más arriba.
+      model.body = result.body
+      return model
+    } catch {
+      return null
+    }
+  }
+
   function load(slug: string): void {
     const token = ++loadToken
     loader
@@ -622,18 +685,38 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
           return
         }
         ensureVertexColors(parts.body)
-        const handle = createSkinHandle(parts.body)
-        if (handle) skinHandles.set(slug, handle)
-        cache.set(slug, parts.body)
+        if (parts.mag) ensureVertexColors(parts.mag)
 
-        if (parts.mag) {
-          ensureVertexColors(parts.mag)
-          const magHandle = createSkinHandle(parts.mag)
-          if (magHandle) magSkinHandles.set(slug, magHandle)
-          magCache.set(slug, parts.mag)
-        }
+        // Las de COD no traen brazos (0 de 69) y sin ellos el arma se ve
+        // flotando. Se les injertan los de un donante de CS antes de decidir
+        // por qué camino van: si el injerto sale, el arma pasa a ser un modelo
+        // ANIMADO como cualquier `v_` y hereda gratis el reposo, la recarga y
+        // el draw. Si no sale, sigue el camino estático de siempre.
+        void graftedModel(slug, parts).then((grafted) => {
+          if (token !== loadToken) return
 
-        if (requestedSlug === slug) attach(slug, parts.body)
+          if (grafted) {
+            if (grafted.body) {
+              const handle = createSkinHandle(grafted.body)
+              if (handle) skinHandles.set(slug, handle)
+            }
+            animCache.set(slug, grafted)
+            if (requestedSlug === slug) attachAnimated(slug, grafted)
+            return
+          }
+
+          const handle = createSkinHandle(parts.body)
+          if (handle) skinHandles.set(slug, handle)
+          cache.set(slug, parts.body)
+
+          if (parts.mag) {
+            const magHandle = createSkinHandle(parts.mag)
+            if (magHandle) magSkinHandles.set(slug, magHandle)
+            magCache.set(slug, parts.mag)
+          }
+
+          if (requestedSlug === slug) attach(slug, parts.body)
+        })
       })
       .catch((err: unknown) => {
         if (token !== loadToken) return
