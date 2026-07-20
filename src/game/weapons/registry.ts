@@ -320,6 +320,12 @@ function parseLocalEntry(raw: unknown): WeaponIndexEntry | null {
     origin: 'local',
     ...(typeof e.sightHeight === 'number' ? { sightHeight: e.sightHeight } : {}),
     ...(typeof e.sightLateral === 'number' ? { sightLateral: e.sightLateral } : {}),
+    // Profundidad del alza y del punto de mira: `seedAdsOffset` ancla el alza
+    // cerca del ojo con `sightRearZ` (arregla el ADS del pack de COD) y
+    // `vfx.ts` usa `sightFrontZ` como boca cuando no hay tag_flash. Sin este
+    // reenvío el campo se perdía acá y el ADS caía al heurístico viejo.
+    ...(typeof e.sightRearZ === 'number' ? { sightRearZ: e.sightRearZ } : {}),
+    ...(typeof e.sightFrontZ === 'number' ? { sightFrontZ: e.sightFrontZ } : {}),
     // Sólo el `true` explícito cuenta. Un índice viejo (sin el campo) describe
     // modelos de mundo, y tratarlo como viewmodel les daría pose neutra a las
     // 39 armas: todas amontonadas en el ojo del jugador.

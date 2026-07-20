@@ -269,6 +269,22 @@ export interface SourceIndexEntry extends IndexEntry {
   sightType: SightType
   sightConfidence: number
   /**
+   * Profundidad (Z, espacio del modelo normalizado) del elemento TRASERO de la
+   * mira —el alza, por donde entra el ojo— y del DELANTERO —el punto de mira.
+   * Las mide `detectSightLine` (`SightLine.rearZ` / `.frontZ`) en el mismo
+   * espacio que `bounds`. El modelo apunta a -Z, así que el alza queda hacia
+   * +Z (lado del jugador) y el punto de mira hacia -Z (boca).
+   *
+   * `seed.ts` las necesita para el ADS: en una caja simétrica (todos los `c_`
+   * de COD salen centrados de `buildNormalizeMatrix`) el `bounds` no dice DÓNDE
+   * está el alza, así que sin este dato el arma se posa a una distancia fija y
+   * enorme del ojo. Con `sightRearZ` el alza se ancla a pocos centímetros del
+   * ojo y el sight picture queda como el de Call of Duty. `sightFrontZ` le da a
+   * `vfx.ts` la profundidad de la boca cuando no hay `tag_flash`.
+   */
+  sightRearZ: number
+  sightFrontZ: number
+  /**
    * El `.glb` conserva el cargador como nodo `weapon_mag` aparte del cuerpo.
    * El renderer no lee este campo —descubre el nodo al cargar el GLB, que es
    * la fuente de verdad— pero el índice lo registra igual para poder contestar
@@ -517,6 +533,10 @@ async function convertOne(
     sightLateral: Number(sight.lateral.toFixed(5)),
     sightType: entry.sight,
     sightConfidence: Number(sight.confidence.toFixed(3)),
+    // Profundidad del alza (trasero) y del punto de mira (delantero): el ADS de
+    // seed.ts ancla el alza cerca del ojo con esto. Ver el comentario del campo.
+    sightRearZ: Number(sight.rearZ.toFixed(5)),
+    sightFrontZ: Number(sight.frontZ.toFixed(5)),
   }
 }
 
