@@ -32,9 +32,11 @@ import {
   type Texture,
 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { cajasDeSopaDeTriangulos, convexDeCaja } from '@/game/map/colision-props'
 import type { MapaExterno } from '@/game/map/registry'
 import { esMapaFuenteJson, mapDefDesdeJson } from '@/game/map/source-map'
-import type { MapDef } from '@/game/map/types'
+import type { Convex, MapDef } from '@/game/map/types'
+import { PLAYER_CAPSULE, capsuleOverlapsConvex } from '@/game/physics/capsule'
 
 export interface MapaExternoCargado {
   def: MapDef
@@ -341,6 +343,196 @@ export function construirProps(
   return raiz
 }
 
+/** Lo que sale de hornear los props: triángulos de mundo para el BVH de
+ *  hitscan y cuerpos sólidos para la cápsula y el navgrid. */
+export interface ColisionDeProps {
+  /** 9 floats por triángulo, en espacio de MUNDO. */
+  triangulos: Float32Array
+  /** Cajas envolventes por prop, como convexos de 6 planos. */
+  convexes: Convex[]
+}
+
+/**
+ * Convierte el árbol de `InstancedMesh` que devolvió `construirProps` en
+ * geometría de colisión de mundo.
+ *
+ * EL OBSTÁCULO, Y POR QUÉ SE RESUELVE ACÁ Y NO ANTES
+ * --------------------------------------------------
+ * Un `InstancedMesh` no expone sus instancias como triángulos de mundo:
+ * las 50 comparten una geometría en coordenadas del MODELO y se
+ * diferencian sólo por su matriz. Pasárselo a `hornearTriangulos` deja las
+ * 50 apiladas en el origen del modelo -- balas pegando contra props
+ * fantasma en el medio del mapa, que es peor que no tener colisión.
+ *
+ * Entonces se expande a mano: por cada instancia se aplica su matriz a los
+ * vértices y se emite una copia propia de los triángulos. Se leen las
+ * matrices del `InstancedMesh` YA CONSTRUIDO, no se recomponen desde el
+ * JSON: la colisión sale, literalmente, de los mismos números que usa la
+ * GPU para dibujar. Recomponerlas por separado abriría la puerta a que la
+ * malla y su cuerpo sólido se separen ante cualquier cambio en
+ * `construirProps` -- el prop se vería en un lado y frenaría en otro.
+ *
+ * LAS DOS MITADES SON DISTINTAS A PROPÓSITO
+ * -----------------------------------------
+ * - BALAS: triángulos exactos. Una calcomanía tiene que quedar pegada
+ *   donde se ve la reja; una que flota a 20 cm en el aire delata el truco
+ *   al instante. Precio: las cercas de nuketown son tablas de 10 cm con
+ *   ranuras de 5 cm entre medio, así que un tiro puede colarse por una
+ *   ranura. Es lo que se ve, así que es lo que corresponde.
+ * - CUERPOS: cajas. Un sillón no necesita colisión exacta, y sí la
+ *   necesitaría el presupuesto: resolver una cápsula contra los 141k
+ *   triángulos de los props pediría un camino de colisión que el motor no
+ *   tiene (hoy es cápsula contra AABB y contra convexos) y un recorrido
+ *   por tick que no cabe en 2,5 ms. Ver map/colision-props.ts para por qué
+ *   la caja se saca voxelizando y no envolviendo el prop entero.
+ */
+export function hornearColisionDeProps(raiz: Object3D, ladoCelda?: number): ColisionDeProps {
+  raiz.updateMatrixWorld(true)
+
+  const partes: Float32Array[] = []
+  let totalFloats = 0
+  const convexes: Convex[] = []
+
+  const matriz = new Matrix4()
+  const mundo = new Matrix4()
+
+  raiz.traverse((obj) => {
+    if (!(obj instanceof InstancedMesh)) return
+    const geo = obj.geometry
+    const pos = geo.getAttribute('position')
+    if (pos === undefined) return
+    const index = geo.getIndex()
+    const cuenta = index !== null ? index.count : pos.count
+    if (cuenta < 3) return
+
+    for (let inst = 0; inst < obj.count; inst++) {
+      obj.getMatrixAt(inst, matriz)
+      // La instancia se compone con la matriz de mundo del propio
+      // InstancedMesh: hoy la raíz de props es identidad, pero si mañana
+      // colgara de un nodo transformado, la colisión seguiría el dibujo.
+      mundo.multiplyMatrices(obj.matrixWorld, matriz)
+      const m = mundo.elements
+
+      const salida = new Float32Array(cuenta * 3)
+      for (let i = 0; i < cuenta; i++) {
+        const v = index !== null ? index.getX(i) : i
+        const x = pos.getX(v)
+        const y = pos.getY(v)
+        const z = pos.getZ(v)
+        // Mismo producto matriz-vector a mano que hornearTriangulos: evita
+        // un Vector3 por vértice sobre ~141k triángulos de props.
+        salida[i * 3] = m[0] * x + m[4] * y + m[8] * z + m[12]
+        salida[i * 3 + 1] = m[1] * x + m[5] * y + m[9] * z + m[13]
+        salida[i * 3 + 2] = m[2] * x + m[6] * y + m[10] * z + m[14]
+      }
+
+      partes.push(salida)
+      totalFloats += salida.length
+
+      // La forma sólida se saca de ESTOS triángulos, ya en mundo: así la
+      // caja hereda la rotación del prop sin que este archivo tenga que
+      // saber nada de cuaterniones.
+      for (const caja of cajasDeSopaDeTriangulos({ posiciones: salida, largo: salida.length }, ladoCelda)) {
+        convexes.push(convexDeCaja(caja))
+      }
+    }
+  })
+
+  const triangulos = new Float32Array(totalFloats)
+  let offset = 0
+  for (const p of partes) {
+    triangulos.set(p, offset)
+    offset += p.length
+  }
+
+  return { triangulos, convexes }
+}
+
+/**
+ * Conecta la colisión horneada de los props al `MapDef` del mapa.
+ *
+ * POR QUÉ ESTO ES UNA FUNCIÓN Y NO CUATRO LÍNEAS ADENTRO DE
+ * `cargarMapaExterno`
+ * -------------------------------------------------------------------
+ * Porque es la COSTURA, y en este proyecto las costuras son donde viven
+ * los bugs que ningún test ve. Con el pegado escrito inline, se puede
+ * borrar entero -- los props se hornean, se calculan sus cuerpos, y no se
+ * conectan a nada -- y la suite completa sigue en verde: los tests de
+ * `hornearColisionDeProps` y `filtrarSpawnsPorProps` prueban las piezas,
+ * no que estén enchufadas. Eso se verificó rompiéndolo a propósito: 1526
+ * tests pasaban con la colisión de props efectivamente apagada, que es el
+ * mismo modo de falla que el guard de tunneling que pasaba con la
+ * colisión desactivada.
+ *
+ * Acá adentro, en cambio, el pegado tiene nombre, tipo y test propio.
+ *
+ * `triangulosMapa` se pasa aparte en vez de leer `def.triangles` para que
+ * la función sea idempotente: llamarla dos veces no apila los props dos
+ * veces sobre sí mismos.
+ */
+export function aplicarColisionDeProps(
+  def: MapDef,
+  triangulosMapa: Float32Array,
+  colision: ColisionDeProps,
+): { triangulosProps: number; cuerpos: number; spawnsDescartados: number } {
+  // BALAS: los triángulos de los props se concatenan a los del mapa.
+  // `setRaycastMap` construye UN BVH sobre `def.triangles`, así que
+  // sumarlos acá es todo lo que hace falta para que el hitscan los vea --
+  // no hay un segundo BVH ni un segundo raycast por disparo.
+  const juntos = new Float32Array(triangulosMapa.length + colision.triangulos.length)
+  juntos.set(triangulosMapa, 0)
+  juntos.set(colision.triangulos, triangulosMapa.length)
+  def.triangles = juntos
+
+  // CUERPOS: las cajas entran a la MISMA lista de convexos que los brushes
+  // del mapa, así que heredan la grilla espacial de physics/convex-grid.ts
+  // y el horneado del navgrid sin tocar ninguno de los dos.
+  def.convexes = [...(def.convexes ?? []), ...colision.convexes]
+
+  return {
+    triangulosProps: colision.triangulos.length / 9,
+    cuerpos: colision.convexes.length,
+    spawnsDescartados: filtrarSpawnsPorProps(def, colision.convexes),
+  }
+}
+
+/**
+ * Saca los spawns que quedaron adentro de un prop.
+ *
+ * `mapDefDesdeJson` ya filtró los spawns contra los brushes del mapa, pero
+ * eso pasó ANTES de que existieran los props: si el mapper puso un
+ * `info_player_*` donde después colocó un sillón, ese spawn ahora es un
+ * jugador atascado desde el primer frame -- y ningún test de carga lo ve,
+ * porque para el motor el mapa cargó bien. Se filtra contra los convexos
+ * NUEVOS solamente (los del mapa ya se aplicaron) y se reindexan los yaws
+ * por el mismo criterio que source-map.ts.
+ *
+ * Si NINGUNO sobrevive se dejan todos como estaban, por la misma razón que
+ * allá: una lista de spawns vacía es una pantalla negra, y un jugador
+ * atascado se destraba respawneando.
+ */
+export function filtrarSpawnsPorProps(def: MapDef, convexesProps: readonly Convex[]): number {
+  if (convexesProps.length === 0) return 0
+
+  const buenos: number[] = []
+  for (let i = 0; i < def.spawns.length; i++) {
+    const p = def.spawns[i]
+    let choca = false
+    for (let c = 0; c < convexesProps.length && !choca; c++) {
+      if (capsuleOverlapsConvex(p, PLAYER_CAPSULE, convexesProps[c])) choca = true
+    }
+    if (!choca) buenos.push(i)
+  }
+
+  const descartados = def.spawns.length - buenos.length
+  if (descartados === 0 || buenos.length === 0) return descartados
+
+  const yaws = def.spawnYaws
+  def.spawns = buenos.map((i) => def.spawns[i])
+  if (yaws !== undefined) def.spawnYaws = buenos.map((i) => yaws[i])
+  return descartados
+}
+
 /**
  * Baja los dos archivos del mapa y arma su `MapDef`. Tira con un mensaje
  * legible si algo no está o no tiene la forma esperada: el llamador
@@ -386,19 +578,16 @@ export async function cargarMapaExterno(mapa: MapaExterno): Promise<MapaExternoC
     }
   }
 
+  // Triángulos de la malla del mapa. Los props se suman aparte más abajo:
+  // `hornearTriangulos` recorre Mesh, y un InstancedMesh guarda su
+  // geometría en coordenadas del MODELO -- pasando por acá, las 50
+  // instancias entrarían al BVH apiladas en el origen. Ver
+  // `hornearColisionDeProps`, que es donde se expanden bien.
+  const triangulosMapa = hornearTriangulos(objeto)
+  def.triangles = triangulosMapa
+
   // Props estáticos (muebles, autos, cercas). Opcionales por el mismo
   // criterio que el lightmap: sin ellos el mapa es más pelado pero jugable.
-  //
-  // Se cuelgan del objeto del mapa DESPUÉS de hornear los triángulos del
-  // BVH a propósito: `hornearTriangulos` alimenta el hitscan, y un
-  // InstancedMesh no expone sus instancias como triángulos de mundo (todas
-  // comparten una geometría y se diferencian por matriz). Metidos antes,
-  // las 50 instancias entrarían al BVH apiladas en el origen del modelo y
-  // las balas pegarían contra props fantasma en el medio del mapa. Que los
-  // props no frenen balas es una limitación conocida; que las frenen donde
-  // no están sería un bug.
-  def.triangles = hornearTriangulos(objeto)
-
   if (mapa.props !== undefined && mapa.propsDir !== undefined) {
     try {
       const respuestaProps = await fetch(mapa.props)
@@ -409,7 +598,18 @@ export async function cargarMapaExterno(mapa: MapaExterno): Promise<MapaExternoC
           const modelos = await Promise.all(
             crudoProps.modelos.map(async (m) => (await loader.loadAsync(`${mapa.propsDir}/${m}`)).scene),
           )
-          objeto.add(construirProps(modelos, crudoProps, lightmapAplicado))
+          const raizProps = construirProps(modelos, crudoProps, lightmapAplicado)
+          objeto.add(raizProps)
+
+          const colision = hornearColisionDeProps(raizProps)
+          const sumados = aplicarColisionDeProps(def, triangulosMapa, colision)
+          console.info(
+            `[${mapa.name}] props: ${colision.convexes.length} cuerpos sólidos, ` +
+              `${colision.triangulos.length / 9} triángulos al BVH` +
+              (sumados.spawnsDescartados > 0
+                ? `, ${sumados.spawnsDescartados} spawns descartados por quedar adentro de un prop`
+                : ''),
+          )
         } else {
           console.warn(`[${mapa.name}] ${mapa.props} no tiene la forma que produce scripts/bsp-props.ts`)
         }
