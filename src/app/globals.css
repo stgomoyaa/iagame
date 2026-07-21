@@ -205,6 +205,18 @@ body {
   background: var(--arm-rareza, var(--arm-linea-tenue));
 }
 
+/* Chip bloqueado (una mira que el nivel del arma todavía no habilita): atenuado
+   y sin cursor, mismo criterio que una fila de arma bloqueada del arsenal. */
+.arm-chip:disabled {
+  cursor: not-allowed;
+  color: var(--arm-apagado);
+  opacity: 0.55;
+}
+
+.arm-chip:disabled:hover {
+  background: transparent;
+}
+
 .arm-tab {
   padding: var(--arm-space-xs) var(--arm-space-md);
   border: 1px solid var(--arm-linea-tenue);
