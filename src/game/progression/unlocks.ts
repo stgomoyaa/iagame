@@ -22,6 +22,7 @@
 
 import type { WeaponClass } from '@/game/weapons/archetypes'
 import { catalogVersion, resolveArchetype, weaponIndex } from '@/game/weapons/registry'
+import { isMeleeSlug } from '@/game/weapons/melee-catalog'
 
 /** Nivel mínimo de cuenta. Una cuenta nueva arranca acá. */
 export const NIVEL_INICIAL = 1
@@ -80,6 +81,17 @@ function buildUnlockLevels(): Record<string, number> {
   // ejecuciones asignan los mismos niveles a los mismos modelos, que es lo
   // que evita que un jugador "pierda" un arma que ya tenía desbloqueada.
   for (const entry of weaponIndex()) {
+    // El cuchillo (y cualquier melee) vive en el índice de armas para que el
+    // renderer cargue su viewmodel y la armería lo liste, pero NO es un arma de
+    // fuego: `resolveArchetype` lo cae en la clase de reserva ('ar') y la
+    // escalera de arriba lo mandaría a un nivel alto, inalcanzable para una
+    // cuenta nueva. Un cuchillo es el arma que SIEMPRE está a mano, así que
+    // sale al nivel inicial y se saltea la contabilidad por clase: no ocupa un
+    // escalón de fusil ni corre a las de fuego que vengan detrás.
+    if (isMeleeSlug(entry.slug)) {
+      levels[entry.slug] = NIVEL_INICIAL
+      continue
+    }
     const clase = resolveArchetype(entry.slug).class
     const indice = seenPerClass.get(clase) ?? 0
     seenPerClass.set(clase, indice + 1)

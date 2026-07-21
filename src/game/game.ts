@@ -86,6 +86,16 @@ import {
   type CombatInput,
 } from '@/game/combat/combat'
 import { createShotResult, type ShotResult } from '@/game/combat/shot'
+import {
+  createMeleeResult,
+  createMeleeState,
+  resetMeleeState,
+  stepMelee,
+  type MeleeInput,
+  type MeleeResult,
+  type MeleeState,
+} from '@/game/combat/melee'
+import { getMeleeArchetype, isMeleeSlug, KNIFE_ARCHETYPE } from '@/game/weapons/melee-catalog'
 import { vec3, type Vec3 } from '@/game/math/vec3'
 import type { ScreenPoint } from '@/game/engine/renderer'
 import { applyHit, createDefaultTargetDefs, createTargets, stepTargets } from '@/game/targets/targets'
@@ -785,6 +795,16 @@ export function createGame(
   // fase 1) -- no participan del puntaje, sólo están para plinkear.
   const playerShotHitboxes: Hitbox[] = [...targetsState.hitboxes, ...enemyHitboxesFor[PLAYER_ID]]
 
+  // Orientación 2D (forward derivado del yaw) de cada participante, indexada por
+  // Hitbox.owner IGUAL que playerShotHitboxes, para que stepMelee decida el
+  // backstab del cuchillo. Se preasigna una vez (un Vec3 por ranura de owner) y
+  // se reescribe in place cada frame con cuchillo equipado -- cero asignaciones
+  // por frame. Las ranuras de diana (owner < targetCount) quedan en (0,0,0): una
+  // diana sin orientación nunca recibe backstab (ver resolveMeleeHit). El largo
+  // cubre hasta el owner más alto: targetCount + (bots.length) para el último bot.
+  const ownerForward: Vec3[] = []
+  for (let i = 0; i < targetCount + bots.length + 1; i++) ownerForward.push(vec3())
+
   // ---- Bots que entran y salen a mitad de partida ----
   //
   // La lógica vive en match/roster-vivo.ts, no acá: `createGame` necesita un
@@ -907,6 +927,57 @@ export function createGame(
     yaw: 0,
   }
   const shotResult = createShotResult()
+
+  // Estado de la rama MELEE (cuchillo): preasignado UNA vez igual que el
+  // combate de fuego, porque comparte la misma regla de "cero asignaciones por
+  // golpe/frame" (combat/melee.ts). El arquetipo inicial es un valor de arranque
+  // -- `meleeArchetypeId` empieza en null, así que el primer frame con un
+  // cuchillo realmente equipado resetea el estado a los datos de esa arma.
+  const meleeState: MeleeState = createMeleeState(KNIFE_ARCHETYPE)
+  let meleeArchetypeId: string | null = null
+  const meleeResult = createMeleeResult()
+  const meleeInput: MeleeInput = {
+    slashHeld: false,
+    stabHeld: false,
+    // Misma referencia viva a la cámara del mundo que combatInput.origin: el
+    // golpe sale del ojo del jugador, no de la hoja (igual que el disparo).
+    origin: gfx.camera.position,
+    pitch: 0,
+    yaw: 0,
+  }
+
+  /** Duración a la que se estira el clip 'fire' del cuchillo en cada golpe. El
+   *  clip original dura ~1.3 s; comprimirlo así hace que el tajo/estocada se
+   *  vea y termine antes del próximo golpe, y que una ráfaga de tajos (cadencia
+   *  0.4 s) reinicie la animación en cada swing en vez de arrastrar el anterior. */
+  const SWING_CLIP_S = 0.35
+
+  /** Vuelca un MeleeResult en un ShotResult para reusar el pipeline de daño,
+   *  hitmarker y número de daño de un disparo. MeleeResult es un superconjunto
+   *  de ShotResult, así que es copia de campos, sin asignar. */
+  function copiarMeleeAShot(m: MeleeResult, s: ShotResult): void {
+    s.hit = m.hit
+    s.distance = m.distance
+    s.damage = m.damage
+    s.part = m.part
+    s.pointX = m.pointX
+    s.pointY = m.pointY
+    s.pointZ = m.pointZ
+    s.normalX = m.normalX
+    s.normalY = m.normalY
+    s.normalZ = m.normalZ
+    s.surface = m.surface
+    s.owner = m.owner
+  }
+
+  /** Forward 2D desde un yaw, con la MISMA convención que computeForward
+   *  (combat/shot.ts): (x,z) = (-sin yaw, -cos yaw). El backstab es un cálculo
+   *  2D (resolveMeleeHit proyecta a XZ), así que la componente Y va en 0. */
+  function setForward2D(v: Vec3, yaw: number): void {
+    v.x = -Math.sin(yaw)
+    v.y = 0
+    v.z = -Math.cos(yaw)
+  }
 
   // Loadout del jugador (fase 3, sección 6 del spec: un arma primaria y una
   // secundaria). Se lee UNA vez al crear la partida y la ranura arranca en
@@ -1062,7 +1133,11 @@ export function createGame(
    * cachea al equipar en vez de resolver el arquetipo por frame.
    */
   function cargadorDe(slug: string | null): number {
-    return slug === null ? 0 : ARCHETYPES[resolveArchetypeId(slug)].magazine
+    if (slug === null) return 0
+    // El cuchillo no tiene cargador: el HUD no debe mostrar munición de fuego
+    // (si no, saldría la del arquetipo de reserva 'ar', 30 balas falsas).
+    if (isMeleeSlug(slug)) return 0
+    return ARCHETYPES[resolveArchetypeId(slug)].magazine
   }
 
   // Datos derivados del loadout que el HUD lee cada frame. Se recalculan
@@ -1300,6 +1375,13 @@ export function createGame(
     // sigue apuntando al último arma real, así que ni el viewmodel ni el
     // combate corren por delante de lo que se ve.
     const shownSlug = viewmodel.attachedSlug
+    // ¿El arma en pantalla es MELEE (cuchillo)? Es el discriminante de la rama:
+    // si lo es, el combate corre por stepMelee (combat/melee.ts) y NO por el
+    // camino de arma de fuego (arquetipo de fuego / recoil / dispersión / ADS /
+    // recarga). `archetype` de fuego se sigue resolviendo igual más abajo -- el
+    // cuchillo cae en la clase de reserva 'ar' -- porque el bloque de VIEWMODEL
+    // lo usa para dibujar el modelo; lo único que se saltea es el de COMBATE.
+    const melee = shownSlug !== null && isMeleeSlug(shownSlug)
     // Eje táctico CS/COD: el arquetipo EFECTIVO ya resuelto por el estilo del
     // arma (su procedencia, no su arquetipo base). Cambia daño por bala y
     // penalización de dispersión al moverse; el id/clase/ads son los mismos, y
@@ -1510,7 +1592,7 @@ export function createGame(
     // `if` en vez de quedar atrapado en un `const` de bloque.
     let shotsFired = 0
 
-    if (shownSlug && archetype) {
+    if (shownSlug && archetype && !melee) {
       profiler.begin('viewmodel')
       syncRigWeapon(rigWeapon, getWeaponVisual(shownSlug))
       profiler.end('viewmodel')
@@ -1666,6 +1748,82 @@ export function createGame(
       // que no sea precisión CON óptica esto es null y nada más abajo se
       // activa: el ADS de hierros no cambia ni un píxel.
       scopeReticleNow = scopeReticleForWeapon(archetype.id, sightForSlug(shownSlug))
+    } else if (shownSlug && melee) {
+      // ── Rama MELEE (cuchillo) ────────────────────────────────────────────
+      // No pasa por stepCombat: un cuchillo no tiene cargador, recoil,
+      // dispersión ni ADS. Corre stepMelee (combat/melee.ts) con su propio
+      // estado de cooldown, y el resultado se vuelca en `shotResult` para reusar
+      // EXACTAMENTE el mismo pipeline de daño / hitmarker / número de daño de
+      // más abajo -- MeleeResult es un superconjunto de ShotResult a propósito.
+      profiler.begin('viewmodel')
+      syncRigWeapon(rigWeapon, getWeaponVisual(shownSlug))
+      profiler.end('viewmodel')
+
+      const meleeArch = getMeleeArchetype(shownSlug)
+      if (meleeArch) {
+        // Reinicio del estado melee al cambiar de arma (mismo criterio que
+        // combatArchetypeId con las de fuego): listo para golpear, sin cadena de
+        // tajos consecutivos heredada del arma anterior.
+        if (meleeArchetypeId !== meleeArch.id) {
+          resetMeleeState(meleeState, meleeArch)
+          meleeArchetypeId = meleeArch.id
+        }
+
+        // Orientación 2D de cada participante para el backstab, derivada del yaw
+        // que ya tenemos: el del jugador (mouse) y el de cada bot (su aimMotor).
+        // For indexado y no for-of: corre por bot y por frame (bots/allocations).
+        setForward2D(ownerForward[targetCount + PLAYER_ID], input.player.yaw)
+        for (let b = 0; b < bots.length; b++) {
+          setForward2D(ownerForward[targetCount + (b + 1)], bots[b].aimMotor.yaw)
+        }
+
+        // Clic izquierdo = tajo; clic derecho = estocada. El cuchillo NO apunta,
+        // así que el botón derecho -- que en las de fuego es ADS -- acá estoca (y
+        // el ADS queda suprimido más abajo, en el bloque de viewmodel). Muerto no
+        // ataca, mismo criterio que el trigger de fuego.
+        meleeInput.slashHeld = (input.fireHeld || debugFireHeld) && playerHealth.alive
+        meleeInput.stabHeld = (input.adsHeld || debugAdsHeld) && playerHealth.alive
+        meleeInput.pitch = input.pitch
+        meleeInput.yaw = input.player.yaw
+
+        profiler.begin('combate')
+        const golpeo = stepMelee(
+          meleeState,
+          meleeArch,
+          meleeInput,
+          playerShotHitboxes,
+          ownerForward,
+          dt,
+          meleeResult,
+        )
+        profiler.end('combate')
+
+        if (golpeo) {
+          // Salió un golpe este frame (haya o no conectado con carne): kick
+          // procedural del viewmodel + clip 'fire' con la animación de tajo /
+          // estocada. El clip es LoopOnce y vuelve solo a idle al terminar
+          // (renderer.advanceAnimation), así que spamear no lo deja pegado.
+          profiler.begin('feedback')
+          fire(vmState, rigWeapon)
+          viewmodel.playClip('fire', SWING_CLIP_S)
+          profiler.end('feedback')
+
+          // Vuelca el golpe en shotResult y enciende shotsFired: el bloque de
+          // daño de abajo lo aplica igual que un disparo (applyHit / damageBot +
+          // hitmarker). Si el golpe fue al aire o a una pared, meleeResult.hit es
+          // false y ese bloque no aplica nada -- el guard es el mismo.
+          copiarMeleeAShot(meleeResult, shotResult)
+          shotsFired = 1
+        }
+      }
+
+      // Draw del cuchillo al equiparlo (espejo del disparo de 'draw' del bloque
+      // de fuego, que acá quedó fuera del alcance de ese `if`).
+      if (vmState.drawing && !dibujando) viewmodel.playClip('draw', vmState.drawTime)
+      dibujando = vmState.drawing
+
+      // Sin recoil ni ADS: la cámara final es la del mouse tal cual (finalPitch
+      // y finalYaw ya arrancan en input.pitch / input.player.yaw más arriba).
     }
 
     // Resincroniza las hitboxes de torso y cabeza del jugador (ver
@@ -1838,7 +1996,7 @@ export function createGame(
         recordDamage(matchState, PLAYER_ID, shotResult.damage)
         const headshot = shotResult.part === 'head'
         if (killed) {
-          recordKill(matchState, PLAYER_ID, victimId, weaponLabel(combatArchetypeId ?? 'ar-1'), headshot)
+          recordKill(matchState, PLAYER_ID, victimId, (melee ? 'CUCHILLO' : weaponLabel(combatArchetypeId ?? 'ar-1')), headshot)
         }
 
         // XP del ARMA EN MANO (progression/weapon-xp.ts). Se atribuye acá y
@@ -1859,7 +2017,7 @@ export function createGame(
         // cualquier caso donde el slug todavía no esté resuelto.
         registrarDanoMedallas(medalTracker, PLAYER_ID, victimId, matchState.elapsedS)
         if (killed) {
-          recordKill(matchState, PLAYER_ID, victimId, weaponLabel(combatArchetypeId ?? 'ar-1'), shotResult.part === 'head')
+          recordKill(matchState, PLAYER_ID, victimId, (melee ? 'CUCHILLO' : weaponLabel(combatArchetypeId ?? 'ar-1')), shotResult.part === 'head')
           // La distancia y el cargador salen del disparo REAL que remató
           // (combat/shot.ts y el control de fuego), no de una reconstrucción:
           // "tiro largo", "a quemarropa" y "última bala" se calibran contra
@@ -1969,7 +2127,10 @@ export function createGame(
       // para ellas. Como adsT nunca sube, FOV/sensibilidad/velocidad/pose se
       // quedan en base solos, sin tocar combat/ads.ts ni el rig. Las CS con
       // óptica (AWP, SSG08, SCAR-20, G3SG1), las de COD y las CC0 apuntan normal.
-      vmInput.ads = (input.adsHeld || debugAdsHeld) && weaponAllowsAds(shownSlug)
+      // El cuchillo NO apunta: el clic derecho es su estocada, no un ADS. Con
+      // `!melee` el botón derecho no sube adsT y el arma no entra en mira (el
+      // resto del bloque queda en base solo, sin tocar combat/ads.ts ni el rig).
+      vmInput.ads = !melee && (input.adsHeld || debugAdsHeld) && weaponAllowsAds(shownSlug)
       vmInput.mouseDeltaX = mouseDeltaX
       vmInput.mouseDeltaY = mouseDeltaY
       // La fuente de verdad es el renderer, no el índice: lo decide por lo que
@@ -2420,7 +2581,11 @@ export function createGame(
       // Sólo copias de primitivos y de referencias a cadenas ya existentes.
       // Cero asignaciones, cero recorridos, cero cadenas nuevas: esta
       // función corre una vez por frame desde el rAF del HUD.
-      out.ammo = combatState.fireControl.ammo
+      // Con cuchillo la munición del control de fuego es la que dejó la última
+      // arma de fuego (stale): se muestra 0 para no mentir. `hudMagazine` ya es
+      // 0 (cargadorDe), así que el HUD queda en "0 / 0" en vez de balas falsas.
+      out.ammo =
+        currentSlug !== null && isMeleeSlug(currentSlug) ? 0 : combatState.fireControl.ammo
       out.magazine = hudMagazine
       out.reloading = vmState.reloading
       out.health = playerHealth.health
