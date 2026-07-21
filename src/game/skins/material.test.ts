@@ -14,6 +14,7 @@ import { CAMO_FAMILY_INDEX, ESCALA_FAMILIA } from '@/game/skins/camo-families'
 import { generateSkin } from '@/game/skins/generator'
 import { createSkinHandle } from '@/game/skins/material'
 import { PATTERN_INDEX } from '@/game/skins/patterns'
+import { rarityRank } from '@/game/skins/rarity'
 import { CATALOGO_CAMOS, type CamoTextura } from '@/game/skins/texturas'
 
 /** Malla mínima con el mismo perfil que sale del pipeline: una primitiva,
@@ -391,6 +392,11 @@ describe('material de skin', () => {
       // La superficie viaja como (rugosidad, metalicidad, barniz).
       const sup = shader.uniforms.uSkinSurface.value as Vector3
       expect(sup.toArray()).toEqual([camo.rugosidad, camo.metal, camo.barniz])
+      // Rareza normalizada 0..1 y niveles del heightmap: los dos uniforms nuevos
+      // que hacen el escalado de brillo por rareza y el neón sobre negro.
+      expect(shader.uniforms.uSkinRarity.value).toBe(rarityRank(camo.rarity) / 4)
+      const niveles = shader.uniforms.uSkinLevels.value as { toArray(): number[] }
+      expect(niveles.toArray()).toEqual([camo.nivelBajo, camo.nivelAlto])
     })
 
     it('sin la textura cargada NO enciende: cae al horneado, no a un color plano', () => {
@@ -432,13 +438,14 @@ describe('material de skin', () => {
       expect(material.version).toBe(version)
     })
 
-    it('la clave de caché de programa subió a v4 con la nueva rama', () => {
-      // Sin bumpear la clave, un material parchado con v3 reusaría su programa
-      // viejo y la rama de textura no existiría en él.
+    it('la clave de caché de programa subió a v5 con el neón por rareza', () => {
+      // Sin bumpear la clave, un material parchado con una versión previa
+      // reusaría su programa viejo y el código nuevo (niveles, rareza, la rama
+      // de textura neón) no existiría en él.
       const mesh = mallaDeArma()
       createSkinHandle(mesh)
       const material = mesh.material as MeshBasicMaterial
-      expect(material.customProgramCacheKey?.()).toBe('skin-v4')
+      expect(material.customProgramCacheKey?.()).toBe('skin-v5')
     })
   })
 })

@@ -42,7 +42,34 @@ describe('catálogo de camos por textura', () => {
       }
       expect(c.escala, `escala de ${c.id} no positiva`).toBeGreaterThan(0)
       expect(['ninguna', 'pulso', 'flujo', 'espectro']).toContain(c.animation)
+      // Rareza válida: el shader la usa para escalar el brillo, un valor fuera
+      // del enum rompería el rarityRank y saldría un brillo cualquiera.
+      expect(
+        ['comun', 'raro', 'epico', 'legendario', 'exotico'],
+        `rareza inválida en ${c.id}`,
+      ).toContain(c.rarity)
+      // Niveles del heightmap: dentro de 0..1 y con el piso por DEBAJO del techo,
+      // o el remapeo del shader dividiría por ~0 y el patrón saldría plano.
+      expect(c.nivelBajo, `nivelBajo de ${c.id} fuera de 0..1`).toBeGreaterThanOrEqual(0)
+      expect(c.nivelAlto, `nivelAlto de ${c.id} fuera de 0..1`).toBeLessThanOrEqual(1)
+      expect(c.nivelBajo, `niveles invertidos en ${c.id}`).toBeLessThan(c.nivelAlto)
     }
+  })
+
+  it('la rareza escala: hay camos comunes Y exóticos, y los flashy son los raros', () => {
+    // El punto nuevo: más legendario = más brillante. Debe haber spread de
+    // rareza (un piso común mate y un techo exótico encendido), y los emisivos
+    // más fuertes tienen que caer en las rarezas altas, no al revés.
+    const rarezas = new Set(CATALOGO_CAMOS.map((c) => c.rarity))
+    expect(rarezas.has('comun'), 'falta un común (el piso)').toBe(true)
+    expect(rarezas.has('exotico'), 'falta un exótico (el techo)').toBe(true)
+    // El emisivo promedio de los exóticos supera al de los comunes: el brillo
+    // sube con la rareza, que es justo lo que se quiere demostrar.
+    const promedio = (r: string): number => {
+      const grupo = CATALOGO_CAMOS.filter((c) => c.rarity === r)
+      return grupo.reduce((s, c) => s + c.emissive, 0) / grupo.length
+    }
+    expect(promedio('exotico')).toBeGreaterThan(promedio('comun'))
   })
 
   it('los ids son únicos: se persiste por id', () => {

@@ -33,6 +33,19 @@ Si generás la imagen con el brillo y el reflejo ya pintados, en el motor se ve 
 - Lo **oscuro** = el fondo, que se queda apagado y sostiene la legibilidad.
 - Bordes que **cierran con el lado opuesto** (seamless / tileable en los cuatro lados).
 
+### ⚠️ El fondo tiene que ser NEGRO DE VERDAD (esto se aprendió mirando el arma)
+
+El neón de los mastery camos (referencia: el swatch de lava, Weaponized 115) es **cresta brillante sobre negro profundo**: binario, o negro o luz, sin tonos medios. El error que sale caro es un patrón cuyo fondo es **gris medio** en vez de negro: en pantalla el arma sale **gris apagada**, no neón, porque el gris del fondo se tiñe con el acento y lava todo. El verificador de teselado NO atrapa esto (mide costura, croma y contraste, pero no *dónde* cae el histograma), así que un patrón gris-sobre-gris pasa el chequeo y igual se ve mal.
+
+Reglas prácticas para que un patrón neón funcione de una:
+
+- El **fondo** (la mayor parte de los píxeles) tiene que estar **casi en 0** (negro), no en gris medio. Mirá el histograma: si la masa está en el medio, el patrón es para un camo mate/reflectante, no para uno neón.
+- Las **crestas** (vetas/grietas) tienen que llegar **casi a blanco** (255), finas y con buen contraste contra el fondo negro.
+- Concretamente: **`vetas` salió perfecto** (vetas casi blancas sobre negro puro → da Elemento 115, Otromundo y Magma sin esfuerzo). **`lava` salió flojo** (piedra gris agrietada, banda de gris estrecha, sin negro ni blanco): NO sirve para lava neón, sólo para un camo de roca apagada (Ceniza). Si querés lava neón, **generá con el prompt de VETAS teñido de rojo**, no con el de "cracked molten rock".
+- Para lava/fuego/energía, preferí el prompt **#1 (vetas de energía)** antes que el **#4 (lava agrietada)**: las vetas finas sobre negro son lo que las referencias muestran; las placas de roca gris no.
+
+El motor tiene un rescate (niveles por camo: `nivelBajo`/`nivelAlto` en `texturas.ts` estiran el rango útil del gris a negro→blanco), pero es un parche: un patrón que ya nace con fondo negro se ve mejor y no necesita calibración fina. Generá con fondo negro y ahorrás el problema.
+
 ### Qué NO debe contener (esto arruina el resultado)
 
 - **Color.** Nada de tintes, ni siquiera sutiles.

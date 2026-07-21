@@ -16,6 +16,7 @@
  */
 
 import {
+  ACESFilmicToneMapping,
   type BufferGeometry,
   Group,
   Mesh,
@@ -149,6 +150,15 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
   const renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   renderer.setClearAlpha(0)
+  // EL MISMO tonemapping que el renderer del juego (engine/renderer.ts:
+  // ACESFilmic, exposición 2.5). Sin esto la vitrina usa NoToneMapping y MIENTE:
+  // los emisivos que en partida ruedan suave hacia el blanco acá recortan duro,
+  // así que un camo calibrado en la vitrina saldría distinto equipado. Con ACES
+  // el fondo negro se queda negro y las crestas neón ruedan a núcleos casi
+  // blancos —exactamente el look de los mastery camos de las referencias—, y lo
+  // que se ve acá es lo que se ve en partida (la promesa de la cabecera).
+  renderer.toneMapping = ACESFilmicToneMapping
+  renderer.toneMappingExposure = 2.5
 
   const scene = new Scene()
   const camera = new PerspectiveCamera(CAMERA_FOV, 1, 0.05, 20)
