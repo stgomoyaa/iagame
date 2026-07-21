@@ -36,6 +36,11 @@ export interface StatsTracker {
   ): void
   mount(parent: HTMLElement): void
   unmount(): void
+  /** Muestra u oculta la línea de diagnóstico. Arranca OCULTA: es una
+   *  herramienta de medición, no parte del HUD de combate, así que no tiene
+   *  que estar siempre en pantalla robándole jerarquía a la vida y la
+   *  munición. game.ts la engancha a una tecla (F3). */
+  setVisible(visible: boolean): void
 }
 
 /** El HUD se refresca 4 veces por segundo: escribir texto a 240Hz cuesta más que el juego. */
@@ -73,6 +78,9 @@ export function createStatsTracker(): StatsTracker {
   let hudWindowStarted = false
   let framesSinceHud = 0
   let hud: HTMLDivElement | null = null
+  // Arranca oculta: la línea de diagnóstico es una herramienta de medición,
+  // no HUD de combate. Se enciende con F3 (game.ts).
+  let visible = false
 
   return {
     stats,
@@ -125,7 +133,9 @@ export function createStatsTracker(): StatsTracker {
         framesSinceHud = 0
         lastHudUpdate = now
 
-        if (hud) {
+        // Oculta = ni siquiera arma la línea: con la barra apagada (el caso
+        // por defecto) esto no cuesta nada, ni el textContent ni las cadenas.
+        if (hud && visible) {
           const gpu =
             stats.gpuMs < 0
               ? 'n/d'
@@ -152,13 +162,18 @@ export function createStatsTracker(): StatsTracker {
       hud.style.cssText =
         'position:absolute;top:8px;left:8px;font:12px ui-monospace,monospace;' +
         'color:#5fff9f;background:rgba(0,0,0,.6);padding:6px 10px;' +
-        'border-radius:4px;pointer-events:none;z-index:10;white-space:nowrap'
+        `border-radius:4px;pointer-events:none;z-index:10;white-space:nowrap;display:${visible ? 'block' : 'none'}`
       parent.appendChild(hud)
     },
 
     unmount(): void {
       hud?.remove()
       hud = null
+    },
+
+    setVisible(v: boolean): void {
+      visible = v
+      if (hud) hud.style.display = v ? 'block' : 'none'
     },
   }
 }
