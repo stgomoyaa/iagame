@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   AnimationClip,
   Bone,
@@ -12,6 +12,8 @@ import {
   SkinnedMesh,
 } from 'three'
 import type { WebGLRenderer } from 'three'
+import type { Skin } from '@/game/skins/generator'
+import { CATALOGO_CAMOS } from '@/game/skins/texturas'
 import { getWeaponVisual } from '@/game/weapons/registry'
 import { createViewmodelRenderer } from '@/game/weapons/viewmodel/renderer'
 
@@ -19,7 +21,20 @@ import { createViewmodelRenderer } from '@/game/weapons/viewmodel/renderer'
 // aparte: loadAsyncMock tiene que declararse con vi.hoisted para no caer en
 // una referencia a una const que todavía no existe (TDZ) cuando el mock se
 // evalúa.
-const { loadAsyncMock } = vi.hoisted(() => ({ loadAsyncMock: vi.fn() }))
+//
+// cargarPatronMock y handlesCreados sirven al cableado del camo: la carga del
+// patrón se stubea (no hay GPU ni PNG en `node`) y cada SkinHandle se sustituye
+// por un espía para poder AFIRMAR qué se le aplicó al arma (setCamoTextura /
+// setSkin), que es lo único que un test sin GPU puede verificar de esta vía.
+const { loadAsyncMock, cargarPatronMock, handlesCreados } = vi.hoisted(() => ({
+  loadAsyncMock: vi.fn(),
+  cargarPatronMock: vi.fn(),
+  handlesCreados: [] as Array<{
+    setSkin: ReturnType<typeof vi.fn>
+    setCamoTextura: ReturnType<typeof vi.fn>
+    setTime: ReturnType<typeof vi.fn>
+  }>,
+}))
 
 vi.mock('three/examples/jsm/loaders/GLTFLoader.js', () => ({
   // Tiene que ser 'function', no arrow: vi.fn() sólo puede invocarse con
@@ -29,6 +44,23 @@ vi.mock('three/examples/jsm/loaders/GLTFLoader.js', () => ({
     this.loadAsync = loadAsyncMock
   }),
 }))
+
+// Se conserva TODO el módulo real (importActual) y sólo se reemplazan las dos
+// piezas que necesitan un doble: `cargarPatron` (I/O de textura, no existe en
+// `node`) y `createSkinHandle` (para devolver un espía observable en vez del
+// handle real, que escribe uniforms sobre un material que acá no se puede leer).
+vi.mock('@/game/skins/material', async (importActual) => {
+  const actual = await importActual<typeof import('@/game/skins/material')>()
+  return {
+    ...actual,
+    cargarPatron: cargarPatronMock,
+    createSkinHandle: vi.fn(() => {
+      const handle = { setSkin: vi.fn(), setCamoTextura: vi.fn(), setTime: vi.fn() }
+      handlesCreados.push(handle)
+      return handle
+    }),
+  }
+})
 
 function fakeSharedRenderer(): WebGLRenderer {
   return { clearDepth: vi.fn(), render: vi.fn() } as unknown as WebGLRenderer
@@ -312,5 +344,142 @@ describe('viewmodel renderer: ópticas (fase cosmética)', () => {
     renderer.setWeaponSlug(SLUG_A)
     await flush()
     expect(renderer.attachedSlug).toBe(SLUG_A)
+  })
+})
+
+describe('viewmodel renderer: camo por textura (cableado + token de generación async)', () => {
+  // El patrón del camo se baja async y se aplica sobre el arma vía setCamoTextura
+  // del handle: acá se verifica ese CABLEADO (que llega el camo correcto, que no
+  // llega el equivocado). El aspecto pintado en la GPU se verifica en el
+  // navegador, mismo criterio que las skins y las miras.
+  const CAMO = CATALOGO_CAMOS[0] // elemento-115: verde neón, el mastery insignia
+  const OTRO_CAMO = CATALOGO_CAMOS[1]
+
+  /** Promesa que resuelve cuando el test quiere: modela un PNG que sigue
+   *  bajando mientras el jugador ya cambió de arma o de aspecto. */
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve!: (v: T) => void
+    const promise = new Promise<T>((res) => {
+      resolve = res
+    })
+    return { promise, resolve }
+  }
+
+  beforeEach(() => {
+    handlesCreados.length = 0
+  })
+
+  afterEach(() => {
+    loadAsyncMock.mockReset()
+    cargarPatronMock.mockReset()
+  })
+
+  it('setCamo sin arma equipada no rompe (ni null ni un camo)', () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+    expect(() => renderer.setCamo(CAMO)).not.toThrow()
+    expect(() => renderer.setCamo(null)).not.toThrow()
+    // Sin arma no hay nada que pintar: no se baja ningún patrón.
+    expect(cargarPatronMock).not.toHaveBeenCalled()
+  })
+
+  it('setCamo aplica el patrón sobre el handle del arma cuando el PNG termina de bajar', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+    loadAsyncMock.mockResolvedValueOnce(fakeGltf())
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+    const handle = handlesCreados[handlesCreados.length - 1]
+
+    const tex = {} // sentinela; el handle es un espía, no lee la textura
+    cargarPatronMock.mockReturnValueOnce(Promise.resolve(tex))
+    renderer.setCamo(CAMO)
+    await flush()
+
+    expect(cargarPatronMock).toHaveBeenCalledWith(CAMO)
+    expect(handle.setCamoTextura).toHaveBeenCalledWith(CAMO, tex)
+  })
+
+  it('branch camo-vs-skin: un camo equipado gana y NO se aplica la skin procedural', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+    loadAsyncMock.mockResolvedValueOnce(fakeGltf())
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+    const handle = handlesCreados[handlesCreados.length - 1]
+    handle.setSkin.mockClear() // el attach inicial ya llamó setSkin(null)
+
+    const tex = {}
+    cargarPatronMock.mockReturnValueOnce(Promise.resolve(tex))
+    renderer.setCamo(CAMO)
+    await flush()
+
+    // El camo se aplicó; ninguna skin procedural se coló por el mismo arma.
+    expect(handle.setCamoTextura).toHaveBeenCalledWith(CAMO, tex)
+    expect(handle.setSkin).not.toHaveBeenCalled()
+  })
+
+  it('token de generación: un patrón que baja tarde NO pisa la skin equipada después sobre la misma arma', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+    loadAsyncMock.mockResolvedValueOnce(fakeGltf())
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+    const handle = handlesCreados[handlesCreados.length - 1]
+
+    // Camo en vuelo: el PNG todavía no bajó.
+    const dfd = deferred<object>()
+    cargarPatronMock.mockReturnValueOnce(dfd.promise)
+    renderer.setCamo(CAMO)
+
+    // Sobre la MISMA arma, el jugador pasa a una skin procedural.
+    const skin = {} as unknown as Skin // setSkin es espía, no lee la skin
+    renderer.setSkin(skin)
+    expect(handle.setSkin).toHaveBeenCalledWith(skin)
+
+    // Recién ahora baja el patrón viejo. attachedSlug sigue siendo la misma
+    // arma, así que sólo el token de generación puede descartarlo — y debe.
+    dfd.resolve({})
+    await flush()
+    expect(handle.setCamoTextura).not.toHaveBeenCalled()
+  })
+
+  it('token de generación: al cambiar de arma (setSkin + setWeaponSlug, como game.ts) el camo viejo no pinta la nueva', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+    loadAsyncMock.mockResolvedValueOnce(fakeGltf())
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+
+    // Camo en A, PNG en vuelo.
+    const dfd = deferred<object>()
+    cargarPatronMock.mockReturnValueOnce(dfd.promise)
+    renderer.setCamo(CAMO)
+
+    // El jugador cambia a B, que no lleva camo: game.ts llama setSkin(null)
+    // ANTES de setWeaponSlug. Eso bumpea el token e invalida la carga en vuelo.
+    renderer.setSkin(null)
+    loadAsyncMock.mockResolvedValueOnce(fakeGltf())
+    renderer.setWeaponSlug(SLUG_B)
+    await flush()
+    const handleB = handlesCreados[handlesCreados.length - 1]
+
+    // El PNG viejo baja tarde: ni por token ni por arma debe tocar a B.
+    dfd.resolve({})
+    await flush()
+    expect(handleB.setCamoTextura).not.toHaveBeenCalled()
+    expect(handleB.setSkin).toHaveBeenCalledWith(null)
+  })
+
+  it('setCamo(null) vuelve al aspecto de fábrica sin dejar el camo colgado', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+    loadAsyncMock.mockResolvedValueOnce(fakeGltf())
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+    const handle = handlesCreados[handlesCreados.length - 1]
+
+    cargarPatronMock.mockReturnValueOnce(Promise.resolve({}))
+    renderer.setCamo(OTRO_CAMO)
+    await flush()
+    handle.setSkin.mockClear()
+
+    renderer.setCamo(null)
+    // Quitar el camo cae por la vía de skin: setSkin(null) = horneado de fábrica.
+    expect(handle.setSkin).toHaveBeenCalledWith(null)
   })
 })
