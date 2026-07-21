@@ -20,6 +20,8 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  camoForSlot,
+  equipCamo,
   equipSkin,
   equipWeapon,
   LOADOUT_SLOTS,
@@ -36,6 +38,7 @@ import {
 } from '@/game/progression/store'
 import { generateSkin, type Skin } from '@/game/skins/generator'
 import { RARITY_BY_ID, rarityRank } from '@/game/skins/rarity'
+import { CATALOGO_CAMOS, type CamoTextura } from '@/game/skins/texturas'
 import type { PreviewItem } from '@/game/skins/preview'
 import { loadLocalWeapons } from '@/game/weapons/registry'
 import { CLASS_LABEL, statBars } from '@/game/weapons/stats'
@@ -65,6 +68,18 @@ function Swatch({ skin }: { skin: Skin }) {
     <span className="flex shrink-0 gap-px" aria-hidden>
       <span className="block h-3 w-3" style={{ background: hex(skin.colorBase) }} />
       <span className="block h-3 w-3" style={{ background: hex(skin.colorAccent) }} />
+    </span>
+  )
+}
+
+// El camo ya trae sus colores en hex sRGB (base/accent/glow), así que el swatch
+// los usa directo: el acento (la cresta del patrón) al lado del glow (lo que
+// emite), que es el par que distingue un camo de otro del mismo patrón.
+function CamoSwatch({ camo }: { camo: CamoTextura }) {
+  return (
+    <span className="flex shrink-0 gap-px" aria-hidden>
+      <span className="block h-3 w-3" style={{ background: camo.accent }} />
+      <span className="block h-3 w-3" style={{ background: camo.glow }} />
     </span>
   )
 }
@@ -129,13 +144,31 @@ export function Armoury() {
     [progress.skins],
   )
 
+  // Los 17 camos por textura del catálogo, ordenados por rareza como los
+  // procedurales. El catálogo es constante (no depende de progreso), así que el
+  // memo va con dependencias vacías. Por ahora se muestran todos disponibles:
+  // gatearlos por maestría de arma es un refinamiento futuro.
+  const camos = useMemo(
+    () =>
+      [...CATALOGO_CAMOS].sort(
+        (a, b) => rarityRank(b.rarity) - rarityRank(a.rarity) || a.nombre.localeCompare(b.nombre),
+      ),
+    [],
+  )
+
   const items: PreviewItem[] = LOADOUT_SLOTS.flatMap((s) => {
     const slug = loadout[s].slug
-    return slug === null ? [] : [{ slug, skin: skinForSlot(loadout, s) }]
+    if (slug === null) return []
+    // El camo gana sobre la skin, igual que en el PreviewItem: si la ranura
+    // tiene un camo equipado se pasa como `camo` (la vitrina baja el patrón y
+    // lo pinta con su neón); si no, va la skin procedural como hasta ahora.
+    const camo = camoForSlot(loadout, s)
+    return camo ? [{ slug, skin: null, camo }] : [{ slug, skin: skinForSlot(loadout, s) }]
   })
 
   const arma = armas.find((a) => a.slug === slugActual) ?? null
   const skinActual = skinForSlot(loadout, slot)
+  const camoActual = camoForSlot(loadout, slot)
 
   return (
     <main className="arm px-4 py-6 sm:px-8">
@@ -225,9 +258,11 @@ export function Armoury() {
                 </p>
               </div>
               <p className="mt-1 text-sm text-[var(--arm-tenue)]">
-                {skinActual
-                  ? `${skinActual.name} · ${RARITY_BY_ID[skinActual.rarity].label}`
-                  : 'Sin skin, aspecto de fábrica'}
+                {camoActual
+                  ? `${camoActual.nombre} · ${RARITY_BY_ID[camoActual.rarity].label}`
+                  : skinActual
+                    ? `${skinActual.name} · ${RARITY_BY_ID[skinActual.rarity].label}`
+                    : 'Sin skin, aspecto de fábrica'}
               </p>
 
               <dl className="mt-4 grid gap-x-6 gap-y-3 sm:grid-cols-2">
@@ -257,7 +292,10 @@ export function Armoury() {
             <button
               type="button"
               className="arm-chip"
-              aria-pressed={skinActual === null}
+              // "Sin skin" = aspecto de fábrica: sólo está activo cuando la
+              // ranura no tiene NI skin NI camo. `equipSkin(..., null)` limpia
+              // los dos campos (ver loadout.ts), que es justo lo que se quiere.
+              aria-pressed={skinActual === null && camoActual === null}
               onClick={() => guardar(equipSkin(loadout, slot, null))}
             >
               <span className="py-1 text-sm whitespace-nowrap">Sin skin</span>
@@ -277,6 +315,40 @@ export function Armoury() {
                     <Swatch skin={skin} />
                     <span className="min-w-0">
                       <span className="block truncate text-sm">{skin.name}</span>
+                      <span
+                        className="arm-mono block text-[0.5625rem]"
+                        style={{ color: tier.color }}
+                      >
+                        {tier.label}
+                      </span>
+                    </span>
+                  </span>
+                </button>
+              )
+            })}
+
+            {/* Camuflajes por textura (skins/texturas.ts): la otra vía de
+                aspecto. Van bajo su propio rótulo para que se lea que son un
+                sistema aparte de las skins procedurales de arriba, no más
+                seeds del inventario. */}
+            <p className="arm-mono mt-2 px-1 pt-2 text-[0.5625rem] text-[var(--arm-apagado)]">
+              Camuflajes por textura
+            </p>
+            {camos.map((camo) => {
+              const tier = RARITY_BY_ID[camo.rarity]
+              return (
+                <button
+                  key={camo.id}
+                  type="button"
+                  className="arm-chip"
+                  style={{ ['--arm-rareza' as string]: tier.color }}
+                  aria-pressed={camoActual?.id === camo.id}
+                  onClick={() => guardar(equipCamo(loadout, slot, camo.id))}
+                >
+                  <span className="flex min-w-0 items-center gap-2 py-1">
+                    <CamoSwatch camo={camo} />
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm">{camo.nombre}</span>
                       <span
                         className="arm-mono block text-[0.5625rem]"
                         style={{ color: tier.color }}

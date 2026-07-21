@@ -19,7 +19,12 @@
  * guardadas cambiarían de aspecto al recargar.
  */
 
-import { defaultLoadout, normalizeLoadout, type Loadout } from '@/game/progression/loadout'
+import {
+  defaultLoadout,
+  normalizeLoadout,
+  type Loadout,
+  type LoadoutEntry,
+} from '@/game/progression/loadout'
 import { levelForXp, NIVEL_INICIAL, NIVEL_MAXIMO, xpParaNivel } from '@/game/progression/unlocks'
 import {
   createDefaultPrestige,
@@ -211,12 +216,18 @@ function esArrayDeStrings(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string')
 }
 
-function leerEntrada(raw: unknown): { slug: string | null; skinSeed: string | null } {
-  if (typeof raw !== 'object' || raw === null) return { slug: null, skinSeed: null }
+function leerEntrada(raw: unknown): LoadoutEntry {
+  if (typeof raw !== 'object' || raw === null) return { slug: null, skinSeed: null, camoId: null }
   const obj = raw as Record<string, unknown>
   return {
     slug: typeof obj.slug === 'string' ? obj.slug : null,
     skinSeed: typeof obj.skinSeed === 'string' ? obj.skinSeed : null,
+    // `camoId` se agregó después de v2 y es aditivo, mismo criterio que
+    // `historial`/`armas`/`medallas`: un guardado viejo no lo trae y cae a
+    // null, sin subir PROGRESS_VERSION ni descartar el guardado entero. Acá
+    // sólo se exige que sea un string; que el id EXISTA en el catálogo lo
+    // valida `normalizeLoadout`, que corre justo después sobre este loadout.
+    camoId: typeof obj.camoId === 'string' ? obj.camoId : null,
   }
 }
 

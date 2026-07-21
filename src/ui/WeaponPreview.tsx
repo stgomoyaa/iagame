@@ -54,8 +54,11 @@ export function WeaponPreview({ items, debug }: { items: PreviewItem[]; debug: b
 
   // La lista de armas se pasa como dependencia serializada: `items` es un
   // array nuevo en cada render de React y compararlo por referencia
-  // recargaría los GLB en cada tecla apretada.
-  const clave = items.map((i) => `${i.slug}:${i.skin?.seed ?? '-'}`).join('|')
+  // recargaría los GLB en cada tecla apretada. El camo entra en la clave igual
+  // que la seed de la skin: sin él, cambiar de un camo a otro (o de "sin skin"
+  // a un camo) deja `skin` en null en los dos casos, la clave no cambia y la
+  // vitrina no se refresca.
+  const clave = items.map((i) => `${i.slug}:${i.skin?.seed ?? '-'}:${i.camo?.id ?? '-'}`).join('|')
   useEffect(() => {
     previewRef.current?.setWeapons(items)
     // items entra por `clave`, que es su contenido: ver el comentario de
