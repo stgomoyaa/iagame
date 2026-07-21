@@ -155,46 +155,33 @@ describe('seed: offsets heurísticos desde el bounding box', () => {
     }
   }
 
-  it('ADS con sightRearZ ancla el alza a distancia fija del ojo: z = sightRearZ + constante', () => {
-    // El fix del ADS de COD. La caja es simétrica así que su centro no dice
-    // dónde está el alza; sightRearZ sí. El arma se posa para dejar el alza a
-    // ~11 cm del ojo. El world-z del alza es -z + sightRearZ, y tiene que caer
-    // en ese entorno pegado al ojo, NO a los ~0.55 m del heurístico viejo.
-    const cerca = seedAdsOffset(codEntry({ sightRearZ: 0.23 }))
-    const worldRearZ = -cerca.z + 0.23
-    expect(worldRearZ).toBeGreaterThan(-0.16)
-    expect(worldRearZ).toBeLessThan(-0.06)
-
-    // Falsación: un alza en otra Z tiene que dar OTRA z de arma, moviéndose
-    // exactamente lo mismo que se movió el alza (misma distancia al ojo). Si la
-    // fórmula ignorara sightRearZ (el bug), las dos z serían iguales.
-    const lejos = seedAdsOffset(codEntry({ sightRearZ: 0.43 }))
-    expect(lejos.z - cerca.z).toBeCloseTo(0.2, 10)
+  it('ADS de un arma LOCAL (injertada) es POSE_NEUTRA: el stopgap del ADS de COD', () => {
+    // El injerto de brazos donantes (viewmodel/graft.ts) mueve el rig entero,
+    // así que la mira medida pre-injerto (sightRearZ) ya no corresponde a la
+    // pose que se DIBUJA: anclar el arma a esa medición la trasladaba abajo y
+    // lejos de la cámara (se veía ACHICAR al apuntar). El stopgap la deja en su
+    // pose de cadera (neutra, como seedHipOffset) y el acercamiento lo hace el
+    // zoom de FOV del estilo COD. Igual que la exención de seedHipOffset.
+    const ads = seedAdsOffset(codEntry({ sightRearZ: 0.23 }))
+    expect(ads).toEqual({ x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 })
   })
 
-  it('ADS con alza en Z negativa (bullpup) acerca el arma al ojo: z chica, incluso <0', () => {
-    // Un bullpup tiene el alza casi en el hombro (sightRearZ negativa). El
-    // arma tiene que acercarse mucho, no quedar plantada a distancia de rifle.
-    const bullpup = seedAdsOffset(codEntry({ sightRearZ: -0.05 }))
-    const rifle = seedAdsOffset(codEntry({ sightRearZ: 0.23 }))
-    expect(bullpup.z).toBeLessThan(rifle.z)
-    // El world-z del alza queda igual de pegado al ojo que en el rifle: es lo
-    // que garantiza el mismo sight picture para armas de largo distinto.
-    expect(-bullpup.z + -0.05).toBeCloseTo(-rifle.z + 0.23, 10)
+  it('el ADS local es POSE_NEUTRA sin importar la mira medida (se ignora post-injerto)', () => {
+    // Cualquier sightRearZ/sightHeight da lo mismo: la medición se descarta
+    // porque el injerto la invalidó. sightRearZ se conserva en el índice para
+    // el fix por matriz (el injerto transformaría el punto de mira), aparte.
+    const a = seedAdsOffset(codEntry({ sightRearZ: 0.23 }))
+    const b = seedAdsOffset(codEntry({ sightRearZ: -0.05 }))
+    const c = seedAdsOffset(codEntry({ sightRearZ: undefined, sightHeight: undefined }))
+    expect(a).toEqual(b)
+    expect(a).toEqual(c)
+    expect(a.z).toBe(0)
   })
 
-  it('sin sightRearZ (índice viejo) el ADS cae a un fallback que no rompe, distinto del ancla', () => {
-    const conRear = seedAdsOffset(codEntry({ sightRearZ: 0.23 }))
-    const sinRear = seedAdsOffset(codEntry({ sightRearZ: undefined }))
-    // Sin alza medida no se puede anclar y el ADS cae a `hipZ - ADS_PULL_BACK`.
-    // Para un arma LOCAL (injertada con brazos) la cadera ahora es NEUTRA
-    // (hipZ = 0, ver seedHipOffset), así que el fallback acerca el arma al ojo
-    // por ADS_PULL_BACK en vez de dejarla a distancia de rifle. Es un caso
-    // muerto en la práctica —las 69 de COD SÍ traen sightRearZ—; el test sólo
-    // garantiza que un índice viejo no reviente y que el valor sea coherente.
-    expect(Number.isFinite(sinRear.z)).toBe(true)
-    expect(sinRear.z).not.toBeCloseTo(conRear.z, 5) // distinto del anclado
-    expect(sinRear.z).toBeLessThan(0) // pull hacia el ojo desde la cadera neutra
-    expect(sinRear.y).toBe(conRear.y) // la altura no depende de sightRearZ
+  it('un arma CC0 (origin cc0) NO recibe la exención: conserva su heurística de ADS', () => {
+    // El stopgap es sólo para las injertadas (origin local). Las CC0 no se
+    // injertan, así que su heurística de ADS (y = -sizeY/2) sigue como estaba.
+    const cc0 = seedAdsOffset(entry('assaultrifle-1'))
+    expect(cc0.y).not.toBe(0)
   })
 })

@@ -303,7 +303,19 @@ export function seedAdsOffset(entry: WeaponIndexEntry): Transform {
   // Así que el ADS de estas armas se mide MIRANDO, con el panel de tuning, y
   // queda guardado en `weapons_tuning.json`. Cero es el punto de partida
   // honesto: el arma se queda donde CS la pone.
-  if (entry.viewmodel === true) return { ...POSE_NEUTRA }
+  //
+  // MISMA exención para `origin === 'local'` que `seedHipOffset` (stopgap del
+  // ADS de COD): las armas de COD se injertan en brazos donantes de CS
+  // (viewmodel/graft.ts), así que la heurística de abajo -pensada para un
+  // world-model- las trasladaba abajo y LEJOS de la cámara al apuntar (hasta
+  // ~40cm), sin relación con dónde quedó la mira post-injerto: se veía como si
+  // el arma se ACHICARA en vez de acercarse. POSE_NEUTRA deja el arma en su
+  // pose de cadera (que ya se ve bien tras el fix de seedHipOffset) y el
+  // acercamiento lo hace el ZOOM de FOV (archetypes.ts: ads.fovScale del estilo
+  // COD, agresivo). No alinea la mira al pixel -eso es el fix por matriz del
+  // injerto, aparte- pero deja de romperse. Cubre viewmodel nativos Y COD
+  // injertados, los dos con origin 'local'.
+  if (entry.viewmodel === true || entry.origin === 'local') return { ...POSE_NEUTRA }
 
   const { bounds } = entry
   const sizeY = bounds.max[1] - bounds.min[1]

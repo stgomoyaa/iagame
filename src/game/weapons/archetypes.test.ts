@@ -4,6 +4,7 @@ import {
   AR_REFERENCE_CLIMB_DEG_MIN,
   ARCHETYPE_LIST,
   ARCHETYPES,
+  archetypeForStyle,
   damageAtRange,
   generateRecoilPattern,
   radToDeg,
@@ -442,5 +443,29 @@ describe('ar-2 (ráfaga): el patrón sube recto sin cambiar de dirección (no te
     const driftTotal = Math.abs(xs[xs.length - 1])
     const climbTotal = ar2.recoil.pattern[ar2.recoil.pattern.length - 1][1]
     expect(driftTotal).toBeLessThan(climbTotal * 0.3)
+  })
+})
+
+describe('ADS del estilo COD: zoom más fuerte en hierros, sin tocar CS ni neutral', () => {
+  it('el fovScale de ADS de COD es más agresivo que el base en las clases de cadera', () => {
+    for (const id of ['ar-1', 'ar-2', 'ar-3', 'smg-1', 'smg-2', 'pistol', 'lmg', 'shotgun'] as const) {
+      const cod = archetypeForStyle(id, 'cod').ads.fovScale
+      const neutral = archetypeForStyle(id, 'neutral').ads.fovScale
+      expect(cod, `${id}: cod ${cod} debería zoomear más (fovScale menor) que base ${neutral}`).toBeLessThan(neutral)
+    }
+  })
+
+  it('neutral y cs conservan el fovScale base (sin regresión de ADS)', () => {
+    for (const id of ['ar-1', 'smg-1', 'pistol'] as const) {
+      const base = ARCHETYPES[id].ads.fovScale
+      expect(archetypeForStyle(id, 'neutral').ads.fovScale, id).toBe(base)
+      expect(archetypeForStyle(id, 'cs').ads.fovScale, id).toBe(base)
+    }
+  })
+
+  it('los francotiradores NO reciben el override: ya tienen su zoom fuerte por arquetipo', () => {
+    for (const id of ['sniper-bolt', 'sniper-marksman'] as const) {
+      expect(archetypeForStyle(id, 'cod').ads.fovScale, id).toBe(ARCHETYPES[id].ads.fovScale)
+    }
   })
 })
