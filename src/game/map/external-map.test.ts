@@ -100,6 +100,18 @@ describe('aplicarLightmap', () => {
     expect(tex.generateMipmaps).toBe(false)
   })
 
+  it('saca los materiales del tonemapping ACES (toneMapped = false)', () => {
+    // El albedo ya trae el lightmap horneado con su exposición adentro. El
+    // tonemapping global (renderer.toneMappingExposure = 2.5, calibrado para la
+    // arena) lo re-expondría 2.5x y clipearía los claros a blanco puro: es el
+    // patio y la cerca de Nuketown quemados. Los materiales de three nacen con
+    // toneMapped = true, así que apagarlo es un cambio observable.
+    const { raiz, materiales } = mallaConMateriales(2)
+    expect(materiales[0].toneMapped).toBe(true)
+    aplicarLightmap(raiz, new Texture())
+    for (const m of materiales) expect(m.toneMapped).toBe(false)
+  })
+
   it('no cuenta dos veces un material compartido por varias mallas', () => {
     const raiz = new Object3D()
     const compartido = new MeshBasicMaterial()
@@ -258,6 +270,31 @@ describe('construirProps', () => {
     // está en su lugar, y es una silueta.
     expect(malla.material).toBeInstanceOf(MeshBasicMaterial)
     expect((malla.material as MeshBasicMaterial).color.getHex()).toBe(0x336699)
+  })
+
+  it('saca los materiales de props del tonemapping ACES (convertidos y ya-basic)', () => {
+    // Misma razón que los materiales del mapa (ver aplicarLightmap): los props
+    // se dibujan unlit con su albedo ya expuesto y el tonemapping 2.5x los
+    // quemaría. Se cubren los dos caminos de aBasico: PBR convertido y un prop
+    // que ya venía como MeshBasicMaterial.
+    const pbr = new Object3D()
+    pbr.add(new Mesh(new BufferGeometry(), new MeshStandardMaterial({ color: 0x336699 })))
+    const yaBasic = new Object3D()
+    const matBasic = new MeshBasicMaterial()
+    expect(matBasic.toneMapped).toBe(true) // default de three
+    yaBasic.add(new Mesh(new BufferGeometry(), matBasic))
+
+    const props = {
+      modelos: ['a.glb', 'b.glb'],
+      instancias: [
+        { modelo: 0, pos: [0, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+        { modelo: 1, pos: [0, 0, 0] as [number, number, number], quat: [0, 0, 0, 1] as [number, number, number, number] },
+      ],
+    }
+    const mallas = instanciados(construirProps([pbr, yaBasic], props, true))
+    for (const malla of mallas) {
+      expect((malla.material as MeshBasicMaterial).toneMapped).toBe(false)
+    }
   })
 
   it('un modelo con varias mallas produce un InstancedMesh por malla', () => {

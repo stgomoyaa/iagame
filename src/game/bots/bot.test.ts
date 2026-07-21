@@ -59,6 +59,19 @@ function makeWalledWorld(): { world: BotWorld; map: MapDef } {
   return { world, map }
 }
 
+describe('velocidad de bots (BOTS.botSpeedScale)', () => {
+  it('el input del bot arranca con adsSpeedScale = BOTS.botSpeedScale', () => {
+    // El freno de los bots se enchufa vía el input: targetSpeed() (movement/step.ts)
+    // multiplica la velocidad objetivo por adsSpeedScale. Que el bot lo lleve en
+    // su input es lo que lo frena sin tocar la física ni al jugador.
+    const bot = createBotState(vec3(0, 0, 0), 0, ARCHETYPE, 1)
+    expect(bot.input.adsSpeedScale).toBe(BOTS.botSpeedScale)
+    // El freno es real (por debajo de 1), no un no-op accidental.
+    expect(BOTS.botSpeedScale).toBeGreaterThan(0)
+    expect(BOTS.botSpeedScale).toBeLessThan(1)
+  })
+})
+
 describe('percepción integrada al bot: no reacciona a lo que no puede ver ni oír', () => {
   it('no adquiere al objetivo detrás de la pared, aunque esté dentro del cono', () => {
     const { world } = makeWalledWorld()

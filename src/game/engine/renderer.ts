@@ -20,11 +20,22 @@ import { buildArenaGeometry } from '@/game/map/mesh'
 import type { MapDef } from '@/game/map/types'
 import type { Vec3 } from '@/game/math/vec3'
 
-/** FOV de la cámara del mundo en reposo (hip). combat/ads.ts interpola
- *  hacia `archetype.ads.fovScale * WORLD_FOV` durante el ADS (sección 4 del
- *  spec de fase 1) — exportada acá en vez de repetir el número "90" en
- *  game.ts, que no puede importar three para leerlo directo de la cámara. */
-export const WORLD_FOV = 90
+/** FOV VERTICAL de la cámara del mundo en reposo (hip). combat/ads.ts
+ *  interpola hacia `archetype.ads.fovScale * WORLD_FOV` durante el ADS
+ *  (sección 4 del spec de fase 1) — exportada acá en vez de repetir el número
+ *  en game.ts, que no puede importar three para leerlo directo de la cámara.
+ *
+ *  70 (antes 90). Three interpreta este campo como FOV VERTICAL: 90 vertical a
+ *  16:9 son ~121° horizontales, más ancho que cualquier FPS mainstream (CS:GO
+ *  ~74 vert / 106 horiz, Valorant/Overwatch ~71 vert). Con 90 los enemigos se
+ *  dibujaban 1,3x-1,7x más chicos que en esos juegos a igual distancia —"se ven
+ *  chicos, cuesta achuntarles". 70 es el medio del rango sano (68 = ~100 horiz,
+ *  74 = equivalente CS:GO); es el número que el dueño afina jugando. NO se toca
+ *  el tamaño del bot (BOTS.modelScale queda anclado a las hitboxes). La cámara
+ *  del viewmodel es OTRA (weapons/viewmodel/renderer.ts VIEWMODEL_FOV): bajar
+ *  este FOV NO agranda el arma. El único acople es que el zoom de ADS/miras usa
+ *  este valor como base (0.3 * 70 = 21° apuntando, algo más cerrado que antes). */
+export const WORLD_FOV = 70
 
 /**
  * Exposición del tonemapping ACES.

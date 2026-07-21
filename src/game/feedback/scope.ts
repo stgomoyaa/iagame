@@ -13,8 +13,9 @@
  *    del proyecto): al apuntar, la pantalla se cubre con la óptica — negro
  *    opaco afuera, lente circular al centro, retícula dibujada encima. El
  *    zoom NO lo da la estampa: lo da el FOV que combat/ads.ts ya interpola
- *    (`ads.fovScale`, 0.3 para el cerrojo = 27° de FOV contra los 90 de
- *    cadera). La estampa es puramente cosmética.
+ *    (`ads.fovScale`, 0.3 para el cerrojo = ~21° de FOV contra los 70 de
+ *    cadera; ver WORLD_FOV en engine/renderer.ts). La estampa es puramente
+ *    cosmética.
  * 2. **Render a textura** (picture-in-picture): dibujar la escena una segunda
  *    vez, con una cámara de FOV angosto, dentro del círculo de la lente.
  *

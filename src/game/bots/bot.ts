@@ -382,7 +382,20 @@ export function createBotState(
   return {
     id: nextBotId++,
     player,
-    input: { forward: 0, right: 0, yaw: 0, jump: false, sprint: false, crouch: false },
+    // adsSpeedScale = BOTS.botSpeedScale: frena a los bots vía el hook que
+    // targetSpeed() (movement/step.ts) ya multiplica sobre la velocidad
+    // objetivo. Constante por bot (la rama de muerte de stepBotMotor resetea
+    // forward/right/sprint pero no esto), y el jugador nunca lo setea. Ver el
+    // comentario de BOTS.botSpeedScale.
+    input: {
+      forward: 0,
+      right: 0,
+      yaw: 0,
+      jump: false,
+      sprint: false,
+      crouch: false,
+      adsSpeedScale: BOTS.botSpeedScale,
+    },
 
     health: createBotHealthState(BOTS.maxHealth),
     hitboxes: [

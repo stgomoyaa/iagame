@@ -154,6 +154,13 @@ export function aplicarLightmap(raiz: Object3D, textura: Texture): number {
       yaHechos.add(mat)
       mat.lightMap = textura
       mat.lightMapIntensity = INTENSIDAD_LIGHTMAP
+      // Fuera del tonemapping ACES global (renderer.toneMappingExposure = 2.5,
+      // calibrado para la ARENA iluminada). El albedo de estos materiales ya
+      // trae el lightmap horneado y su exposición final adentro; re-exponerlo
+      // 2.5x satura ACES y clipea las superficies claras a blanco puro (el
+      // patio y la cerca de Nuketown perdían todo detalle). Mismo criterio con
+      // que three ya apaga el tonemapping del skybox sRGB (ver renderer.ts).
+      mat.toneMapped = false
       mat.needsUpdate = true
       materiales++
     }
@@ -220,7 +227,16 @@ export function esPropsMapaJson(v: unknown): v is PropsMapaJson {
  * opacas rectangulares.
  */
 function aBasico(mat: Material): Material {
-  if (mat instanceof MeshBasicMaterial) return mat
+  // toneMapped = false por la misma razón que los materiales del mapa (ver
+  // aplicarLightmap): los props se dibujan unlit con su albedo ya expuesto, y
+  // el tonemapping ACES global (exposición 2.5) los re-expondría hasta clipear
+  // los claros a blanco. Un prop que ya era MeshBasicMaterial se corrige en el
+  // sitio; el convertido nace con el flag apagado.
+  if (mat instanceof MeshBasicMaterial) {
+    mat.toneMapped = false
+    mat.needsUpdate = true
+    return mat
+  }
   const origen = mat as Material & {
     map?: Texture | null
     color?: { getHex(): number }
@@ -233,6 +249,7 @@ function aBasico(mat: Material): Material {
     alphaTest: origen.alphaTest ?? 0,
     transparent: origen.transparent ?? false,
     side: origen.side,
+    toneMapped: false,
   })
   if (origen.color !== undefined) basico.color.setHex(origen.color.getHex())
   basico.name = mat.name

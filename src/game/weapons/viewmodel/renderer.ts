@@ -53,10 +53,17 @@ import {
   montarOptica,
 } from '@/game/weapons/attachments/mount'
 
-/** FOV propio del viewmodel, independiente del de mundo (90° en
- *  engine/renderer.ts): así el ADS puede animar uno sin tocar el otro,
- *  como pide la sección 6.1 del spec. */
-const VIEWMODEL_FOV = 70
+/** FOV propio del viewmodel, independiente del de mundo (WORLD_FOV en
+ *  engine/renderer.ts): así el ADS puede animar uno sin tocar el otro, como
+ *  pide la sección 6.1 del spec, y bajar el FOV del mundo NO agranda el arma.
+ *
+ *  57 (antes 70). Los v_ de CS están autorados para el encuadre de Source
+ *  (~FOV 54), así que a 70 entraba en cámara geometría y los extremos abiertos
+ *  de la malla de brazos que el autor nunca pensó mostrar: el arma llenaba
+ *  hasta 2/3 del cuadro ("pegada a la cara") y los brazos se veían rotos. 57 =
+ *  medio del rango 55-60, un encuadre más cerrado tipo Source. Número que el
+ *  dueño afina jugando. */
+const VIEWMODEL_FOV = 57
 /** Near plane angosto: el arma vive a centímetros de esta cámara, mucho más
  *  cerca que cualquier geometría del mundo (near 0.1 en engine/renderer.ts). */
 const VIEWMODEL_NEAR = 0.01
