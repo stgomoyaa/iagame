@@ -250,4 +250,39 @@ describe('lo que muestra el HUD', () => {
     // Sólo el número y la muesca que se apaga: el color ya estaba en rojo.
     expect(dom.escrituras).toBe(2)
   })
+
+  it('con el cuchillo en mano oculta la placa de munición, y el toggle no cuesta por frame', () => {
+    const hud = createHud()
+    hud.mount(dom.padre)
+
+    const snap = snapshotDePrueba() // slot = 'primary', placa visible
+    const match = createMatchState('tdm', 6, MATCH)
+    hud.render(snap, match)
+
+    // Equipar el cuchillo (slot 3): la placa de munición se oculta. Que
+    // ocurra ALGO (>0) es lo semántico; que la captura lo confirme visual es
+    // el juez final (cabecera de este archivo).
+    snap.slot = 'melee'
+    dom.escrituras = 0
+    hud.render(snap, match)
+    expect(dom.escrituras).toBeGreaterThan(0)
+
+    // EL guard: un frame más con el cuchillo en mano no escribe NADA. Si el
+    // toggle de display se hiciera sin guardar contra el último valor, esto
+    // costaría una escritura por frame para siempre (la fuga que este test
+    // caza).
+    dom.escrituras = 0
+    hud.render(snap, match)
+    expect(dom.escrituras).toBe(0)
+
+    // Volver a un arma de fuego vuelve a mostrar la placa (otra escritura de
+    // display), y de nuevo se estabiliza en cero.
+    snap.slot = 'primary'
+    dom.escrituras = 0
+    hud.render(snap, match)
+    expect(dom.escrituras).toBeGreaterThan(0)
+    dom.escrituras = 0
+    hud.render(snap, match)
+    expect(dom.escrituras).toBe(0)
+  })
 })
