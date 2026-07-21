@@ -77,6 +77,12 @@ const PUEDEN_USAR_THREE = [
   // y dibuja la retícula (un quad aditivo con textura de canvas). Mismo criterio
   // que skins/material.ts. Única entrada NUEVA que suma esta tarea a la lista.
   'weapons/attachments/mount.ts',
+  // Bloom (postprocesado): el catálogo de calidades y su persistencia son
+  // puros y viven en settings/video.ts (sin three). Este archivo es el único
+  // borde -- render targets, shaders full-screen y el composite aditivo sobre
+  // el canvas ya dibujado-- mismo criterio que feedback/vfx-renderer.ts. Es la
+  // ÚNICA entrada nueva que suma esta tarea a la lista.
+  'engine/postprocess.ts',
 ]
 
 function archivosTs(dir: string, base = ''): string[] {

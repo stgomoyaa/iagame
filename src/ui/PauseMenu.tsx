@@ -28,6 +28,7 @@ import { LOADOUT_SLOTS, SLOT_LABEL, type Loadout, type LoadoutSlot } from '@/gam
 import { loadLocalWeapons } from '@/game/weapons/registry'
 import { CLASS_LABEL } from '@/game/weapons/stats'
 import { SensitivitySettings } from '@/ui/SensitivitySettings'
+import { VideoSettings } from '@/ui/VideoSettings'
 import { construirArsenal } from '@/ui/arsenal'
 
 export interface PauseMenuProps {
@@ -162,10 +163,12 @@ export function PauseMenu({
           </section>
 
           {/* ---- Ajustes ---- */}
-          <section className="flex min-h-0 flex-col gap-2" aria-label="Ajustes">
+          <section className="flex min-h-0 flex-col gap-2 overflow-y-auto" aria-label="Ajustes">
             <SensitivitySettings />
+            <VideoSettings />
             <p className="arm-mono text-[0.5625rem] leading-relaxed text-[var(--arm-apagado)]">
-              Los cambios de sensibilidad se aplican al cerrar este menú, en esta misma partida.
+              Los cambios de sensibilidad y de video se aplican al cerrar este menú, en esta misma
+              partida.
             </p>
           </section>
         </div>
