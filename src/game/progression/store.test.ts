@@ -1,15 +1,18 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   camoForSlot,
   defaultLoadout,
   equipCamo,
+  equipOptic,
   equipSkin,
   equipWeapon,
   normalizeLoadout,
+  opticForSlot,
   skinForSlot,
   type Loadout,
 } from '@/game/progression/loadout'
 import { CATALOGO_CAMOS } from '@/game/skins/texturas'
+import { OPTICAS_ORDEN } from '@/game/weapons/attachments/optics-catalog'
 import {
   accountLevel,
   createDefaultProgress,
@@ -34,9 +37,34 @@ import {
   unlockLevelFor,
   xpParaNivel,
 } from '@/game/progression/unlocks'
-import { weaponIndex } from '@/game/weapons/registry'
+import {
+  loadLocalWeapons,
+  resetLocalWeaponsForTests,
+  weaponIndex,
+} from '@/game/weapons/registry'
 
 const TODAS = weaponIndex().map((e) => e.slug)
+
+/**
+ * Un arma anclada (soporta ópticas) NO está en el registro estático: las 5 de
+ * COD son locales y sólo entran cuando `loadLocalWeapons` baja el índice, que
+ * en el navegador ocurre pero en Node no. Para probar el camino "la óptica SE
+ * CONSERVA sobre un arma que la soporta" hay que registrar una a mano con un
+ * índice falso (el mismo seam que usa el resto de los tests del registry) y
+ * limpiarla después. `cod4_ak47` es una de las 5 con ancla (optics-catalog.ts).
+ */
+const ARMA_ANCLADA = 'cod4_ak47'
+const OPTICA_VALIDA = OPTICAS_ORDEN[0] // optic_reddot_m68, desbloqueo nivel 2
+
+const indiceLocalFalso = async (): Promise<unknown> => [
+  {
+    slug: ARMA_ANCLADA,
+    name: 'AK-47',
+    bounds: { min: [-0.03, -0.13, -0.43], max: [0.03, 0.13, 0.43] },
+    triangles: 1000,
+    viewmodel: true,
+  },
+]
 
 describe('loadout por defecto', () => {
   it('una cuenta nueva arranca con primaria y secundaria equipadas', () => {
@@ -56,8 +84,8 @@ describe('loadout por defecto', () => {
 describe('normalización del loadout', () => {
   it('descarta un arma que ya no existe en el pack', () => {
     const roto: Loadout = {
-      primary: { slug: 'arma-borrada', skinSeed: null, camoId: null },
-      secondary: { slug: TODAS[0], skinSeed: null, camoId: null },
+      primary: { slug: 'arma-borrada', skinSeed: null, camoId: null, opticId: null },
+      secondary: { slug: TODAS[0], skinSeed: null, camoId: null, opticId: null },
     }
     const arreglado = normalizeLoadout(roto, NIVEL_INICIAL, [])
     expect(TODAS).toContain(arreglado.primary.slug)
@@ -68,8 +96,8 @@ describe('normalización del loadout', () => {
     // que estaba al alcance pasa a pedir más nivel.
     const bloqueada = TODAS.find((s) => !defaultLoadout(NIVEL_INICIAL).primary.slug?.includes(s))
     const conBloqueada: Loadout = {
-      primary: { slug: 'sniperrifle-1', skinSeed: null, camoId: null },
-      secondary: { slug: bloqueada ?? TODAS[0], skinSeed: null, camoId: null },
+      primary: { slug: 'sniperrifle-1', skinSeed: null, camoId: null, opticId: null },
+      secondary: { slug: bloqueada ?? TODAS[0], skinSeed: null, camoId: null, opticId: null },
     }
     const arreglado = normalizeLoadout(conBloqueada, NIVEL_INICIAL, [])
     expect(arreglado.primary.slug).toBe(defaultLoadout(NIVEL_INICIAL).primary.slug)
@@ -77,8 +105,8 @@ describe('normalización del loadout', () => {
 
   it('descarta una skin que no está en el inventario', () => {
     const conSkinAjena: Loadout = {
-      primary: { slug: TODAS[0], skinSeed: 'skin-de-otro', camoId: null },
-      secondary: { slug: TODAS[1], skinSeed: SKINS_INICIALES[0], camoId: null },
+      primary: { slug: TODAS[0], skinSeed: 'skin-de-otro', camoId: null, opticId: null },
+      secondary: { slug: TODAS[1], skinSeed: SKINS_INICIALES[0], camoId: null, opticId: null },
     }
     const arreglado = normalizeLoadout(conSkinAjena, NIVEL_INICIAL, SKINS_INICIALES)
     expect(arreglado.primary.skinSeed).toBeNull()
@@ -87,8 +115,8 @@ describe('normalización del loadout', () => {
 
   it('nunca deja una ranura sin arma', () => {
     const vacio: Loadout = {
-      primary: { slug: null, skinSeed: null, camoId: null },
-      secondary: { slug: null, skinSeed: null, camoId: null },
+      primary: { slug: null, skinSeed: null, camoId: null, opticId: null },
+      secondary: { slug: null, skinSeed: null, camoId: null, opticId: null },
     }
     const arreglado = normalizeLoadout(vacio, NIVEL_INICIAL, [])
     expect(arreglado.primary.slug).not.toBeNull()
@@ -160,16 +188,16 @@ describe('camos por textura', () => {
 
   it('camoForSlot devuelve null ante un id que no está en el catálogo', () => {
     const roto: Loadout = {
-      primary: { slug: TODAS[0], skinSeed: null, camoId: 'no-existe' },
-      secondary: { slug: TODAS[1], skinSeed: null, camoId: null },
+      primary: { slug: TODAS[0], skinSeed: null, camoId: 'no-existe', opticId: null },
+      secondary: { slug: TODAS[1], skinSeed: null, camoId: null, opticId: null },
     }
     expect(camoForSlot(roto, 'primary')).toBeNull()
   })
 
   it('normalizeLoadout descarta un camo que ya no está en el catálogo', () => {
     const roto: Loadout = {
-      primary: { slug: TODAS[0], skinSeed: null, camoId: 'camo-borrado' },
-      secondary: { slug: TODAS[1], skinSeed: null, camoId: OTRO_CAMO },
+      primary: { slug: TODAS[0], skinSeed: null, camoId: 'camo-borrado', opticId: null },
+      secondary: { slug: TODAS[1], skinSeed: null, camoId: OTRO_CAMO, opticId: null },
     }
     const arreglado = normalizeLoadout(roto, NIVEL_INICIAL, [])
     expect(arreglado.primary.camoId).toBeNull()
@@ -181,12 +209,181 @@ describe('camos por textura', () => {
     // puede traer las dos. Gana el camo (la vía nueva) y la skin se descarta,
     // aunque la skin esté en el inventario.
     const ambos: Loadout = {
-      primary: { slug: TODAS[0], skinSeed: SKINS_INICIALES[0], camoId: CAMO },
-      secondary: { slug: TODAS[1], skinSeed: null, camoId: null },
+      primary: { slug: TODAS[0], skinSeed: SKINS_INICIALES[0], camoId: CAMO, opticId: null },
+      secondary: { slug: TODAS[1], skinSeed: null, camoId: null, opticId: null },
     }
     const arreglado = normalizeLoadout(ambos, NIVEL_INICIAL, SKINS_INICIALES)
     expect(arreglado.primary.camoId).toBe(CAMO)
     expect(arreglado.primary.skinSeed).toBeNull()
+  })
+})
+
+/**
+ * Miras (ópticas): la lógica pura de equipar y leer. A DIFERENCIA del camo, la
+ * óptica es INDEPENDIENTE del aspecto (un arma puede llevar camo/skin Y mira),
+ * así que estos tests verifican sobre todo que equipar una NO borra el aspecto
+ * ni al revés — la propiedad que separa una mira de un camuflaje.
+ */
+describe('miras (ópticas) en el loadout', () => {
+  const CAMO = CATALOGO_CAMOS[0].id
+
+  it('equipOptic equipa y opticForSlot devuelve su definición', () => {
+    const base = defaultLoadout(NIVEL_INICIAL)
+    const conMira = equipOptic(base, 'primary', OPTICA_VALIDA)
+    expect(conMira.primary.opticId).toBe(OPTICA_VALIDA)
+    expect(opticForSlot(conMira, 'primary')?.id).toBe(OPTICA_VALIDA)
+  })
+
+  it('equipOptic con null saca la mira (hierros)', () => {
+    const conMira = equipOptic(defaultLoadout(NIVEL_INICIAL), 'secondary', OPTICA_VALIDA)
+    expect(opticForSlot(equipOptic(conMira, 'secondary', null), 'secondary')).toBeNull()
+  })
+
+  it('equipar una mira NO limpia el camo ni la skin, y viceversa', () => {
+    // La propiedad central que distingue la mira del camo: son independientes.
+    // Un arma puede llevar los dos a la vez.
+    const conSkin = equipSkin(defaultLoadout(NIVEL_INICIAL), 'primary', SKINS_INICIALES[4])
+    const conSkinYMira = equipOptic(conSkin, 'primary', OPTICA_VALIDA)
+    expect(conSkinYMira.primary.skinSeed).toBe(SKINS_INICIALES[4])
+    expect(conSkinYMira.primary.opticId).toBe(OPTICA_VALIDA)
+
+    const conCamo = equipCamo(defaultLoadout(NIVEL_INICIAL), 'primary', CAMO)
+    const conCamoYMira = equipOptic(conCamo, 'primary', OPTICA_VALIDA)
+    expect(conCamoYMira.primary.camoId).toBe(CAMO)
+    expect(conCamoYMira.primary.opticId).toBe(OPTICA_VALIDA)
+
+    // Y el otro sentido: cambiar el aspecto NO toca la mira ya equipada.
+    const cambiaSkin = equipSkin(conCamoYMira, 'primary', SKINS_INICIALES[4])
+    expect(cambiaSkin.primary.opticId).toBe(OPTICA_VALIDA)
+    const cambiaCamo = equipCamo(conSkinYMira, 'primary', CAMO)
+    expect(cambiaCamo.primary.opticId).toBe(OPTICA_VALIDA)
+    const sacaAspecto = equipSkin(conSkinYMira, 'primary', null)
+    expect(sacaAspecto.primary.opticId).toBe(OPTICA_VALIDA)
+    expect(sacaAspecto.primary.skinSeed).toBeNull()
+  })
+
+  it('opticForSlot devuelve null ante un id que no está en el catálogo', () => {
+    const roto: Loadout = {
+      primary: { slug: TODAS[0], skinSeed: null, camoId: null, opticId: 'no-existe' },
+      secondary: { slug: TODAS[1], skinSeed: null, camoId: null, opticId: null },
+    }
+    expect(opticForSlot(roto, 'primary')).toBeNull()
+  })
+
+  it('equipar una mira no muta el loadout anterior', () => {
+    const base = defaultLoadout(NIVEL_INICIAL)
+    equipOptic(base, 'primary', OPTICA_VALIDA)
+    expect(base.primary.opticId).toBeNull()
+  })
+})
+
+/**
+ * Normalización y persistencia de la mira. La frontera de confianza es el mismo
+ * `normalizeLoadout`/`parseProgress` que valida armas y camos: una óptica cae a
+ * null si (a) no existe en el catálogo, o (b) el arma no la soporta (sin ancla).
+ * Para el camino "se conserva" hace falta un arma anclada, que sólo existe tras
+ * registrar una local (ver `indiceLocalFalso`), así que se limpia en `afterEach`.
+ */
+describe('normalización y persistencia de la mira', () => {
+  const armaBase = defaultLoadout(NIVEL_INICIAL).primary.slug as string
+
+  afterEach(() => {
+    resetLocalWeaponsForTests()
+  })
+
+  it('descarta la mira cuando el arma no la soporta (sin ancla)', () => {
+    // `armaBase` es un arma válida y desbloqueada, pero de las que todavía no
+    // tienen ancla: no puede montar ópticas, así que la mira cae a null aunque
+    // su id sea válido. El arma NO se toca (es válida).
+    const roto: Loadout = {
+      primary: { slug: armaBase, skinSeed: null, camoId: null, opticId: OPTICA_VALIDA },
+      secondary: { slug: TODAS[1], skinSeed: null, camoId: null, opticId: null },
+    }
+    const arreglado = normalizeLoadout(roto, NIVEL_INICIAL, [])
+    expect(arreglado.primary.slug).toBe(armaBase)
+    expect(arreglado.primary.opticId).toBeNull()
+  })
+
+  it('conserva la mira sobre un arma que sí la soporta', async () => {
+    await loadLocalWeapons(indiceLocalFalso)
+    const conMira: Loadout = {
+      primary: { slug: ARMA_ANCLADA, skinSeed: null, camoId: null, opticId: OPTICA_VALIDA },
+      secondary: { slug: TODAS[1], skinSeed: null, camoId: null, opticId: null },
+    }
+    // ARMA_ANCLADA como permanente para saltar el gate de nivel (es local, se
+    // desbloquea tarde); lo que se prueba acá es la validación de la mira.
+    const arreglado = normalizeLoadout(conMira, NIVEL_INICIAL, [], [ARMA_ANCLADA])
+    expect(arreglado.primary.slug).toBe(ARMA_ANCLADA)
+    expect(arreglado.primary.opticId).toBe(OPTICA_VALIDA)
+    expect(opticForSlot(arreglado, 'primary')?.id).toBe(OPTICA_VALIDA)
+  })
+
+  it('descarta un id de mira inválido aunque el arma la soporte', async () => {
+    await loadLocalWeapons(indiceLocalFalso)
+    const roto: Loadout = {
+      primary: { slug: ARMA_ANCLADA, skinSeed: null, camoId: null, opticId: 'optic_inventada' },
+      secondary: { slug: TODAS[1], skinSeed: null, camoId: null, opticId: null },
+    }
+    const arreglado = normalizeLoadout(roto, NIVEL_INICIAL, [], [ARMA_ANCLADA])
+    expect(arreglado.primary.slug).toBe(ARMA_ANCLADA)
+    expect(arreglado.primary.opticId).toBeNull()
+  })
+
+  it('un opticId con el tipo equivocado cae a null sin tirar', () => {
+    // Frontera de confianza: localStorage lo pudo escribir otra versión, otra
+    // pestaña o la consola. Nada de lo que traiga puede tirar. Cae a null igual
+    // que `camoId` (y acá, además, porque `armaBase` tampoco monta ópticas).
+    for (const basura of [42, true, { id: OPTICA_VALIDA }, ['x'], null]) {
+      const data = parseProgress({
+        ...createDefaultProgress(),
+        loadout: {
+          primary: { slug: TODAS[0], skinSeed: null, camoId: null, opticId: basura },
+          secondary: { slug: TODAS[1], skinSeed: null, camoId: null, opticId: null },
+        },
+      })
+      expect(data.loadout.primary.opticId).toBeNull()
+      expect(data.loadout.primary.slug).not.toBeNull()
+    }
+  })
+
+  it('un guardado viejo sin opticId carga con opticId null, sin romper', () => {
+    // Aditivo, igual que `camoId`: un guardado anterior a las miras no trae el
+    // campo y NO invalida el guardado; cae a null.
+    const viejo = {
+      ...createDefaultProgress(),
+      loadout: {
+        primary: { slug: TODAS[0], skinSeed: null, camoId: null },
+        secondary: { slug: TODAS[1], skinSeed: null, camoId: null },
+      },
+    }
+    const data = parseProgress(viejo)
+    expect(data.loadout.primary.opticId).toBeNull()
+    expect(data.loadout.secondary.opticId).toBeNull()
+    expect(opticForSlot(data.loadout, 'primary')).toBeNull()
+  })
+
+  it('mira y camo sobreviven juntos el round-trip por JSON (son independientes)', async () => {
+    // El requisito del entregable, extremo a extremo: equipar mira, recargar,
+    // sigue equipada. Y como la mira es independiente del aspecto, el arma lleva
+    // camo Y mira a la vez, y los dos vuelven después de recargar.
+    await loadLocalWeapons(indiceLocalFalso)
+    const base = createDefaultProgress()
+    let loadout = equipWeapon(base.loadout, 'primary', ARMA_ANCLADA)
+    loadout = equipCamo(loadout, 'primary', CATALOGO_CAMOS[0].id)
+    loadout = equipOptic(loadout, 'primary', OPTICA_VALIDA)
+    const data: ProgressData = {
+      ...base,
+      // ARMA_ANCLADA es local (se desbloquea tarde): como permanente sobrevive
+      // a la renormalización de `parseProgress`, igual que la mira que lleva.
+      desbloqueosPermanentes: [ARMA_ANCLADA],
+      loadout,
+    }
+    const recargado = parseProgress(JSON.parse(JSON.stringify(data)))
+    expect(recargado.loadout.primary.slug).toBe(ARMA_ANCLADA)
+    expect(recargado.loadout.primary.opticId).toBe(OPTICA_VALIDA)
+    expect(recargado.loadout.primary.camoId).toBe(CATALOGO_CAMOS[0].id)
+    expect(opticForSlot(recargado.loadout, 'primary')?.id).toBe(OPTICA_VALIDA)
+    expect(camoForSlot(recargado.loadout, 'primary')?.id).toBe(CATALOGO_CAMOS[0].id)
   })
 })
 

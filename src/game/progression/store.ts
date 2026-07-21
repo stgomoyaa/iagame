@@ -217,7 +217,8 @@ function esArrayDeStrings(v: unknown): v is string[] {
 }
 
 function leerEntrada(raw: unknown): LoadoutEntry {
-  if (typeof raw !== 'object' || raw === null) return { slug: null, skinSeed: null, camoId: null }
+  if (typeof raw !== 'object' || raw === null)
+    return { slug: null, skinSeed: null, camoId: null, opticId: null }
   const obj = raw as Record<string, unknown>
   return {
     slug: typeof obj.slug === 'string' ? obj.slug : null,
@@ -228,6 +229,12 @@ function leerEntrada(raw: unknown): LoadoutEntry {
     // sólo se exige que sea un string; que el id EXISTA en el catálogo lo
     // valida `normalizeLoadout`, que corre justo después sobre este loadout.
     camoId: typeof obj.camoId === 'string' ? obj.camoId : null,
+    // `opticId` es aditivo igual que `camoId`, y por el mismo motivo NO sube
+    // PROGRESS_VERSION: un guardado anterior a las miras no lo trae y cae a null.
+    // Sólo se exige el tipo (string); que la óptica exista en el catálogo Y que
+    // el arma la soporte lo valida `normalizeLoadout`. La óptica es
+    // independiente del camo, así que no compite con `camoId` por la ranura.
+    opticId: typeof obj.opticId === 'string' ? obj.opticId : null,
   }
 }
 
