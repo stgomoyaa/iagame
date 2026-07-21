@@ -77,6 +77,31 @@ export interface BotsTuning {
   respawnDelayS: number
 
   /**
+   * Multiplicador GLOBAL de velocidad de movimiento de los bots (no del
+   * jugador). Se enchufa en el hook que ya existía sin usar:
+   * PlayerInput.adsSpeedScale, que targetSpeed() (movement/step.ts) multiplica
+   * sobre la velocidad objetivo. El input de los bots se arma con este valor y
+   * el del jugador no lo toca (undefined = 1), así que frena a los bots sin
+   * cambiar la física compartida ni la velocidad del jugador.
+   *
+   * Los bots esprintaban a MOVEMENT.sprintSpeed (8 m/s) en todo estado con
+   * movimiento salvo Enfrentar — más rápido que cualquier FPS mainstream (CS
+   * corre ~4,8, CoD esprinta ~6,7) — y combinado con el FOV ancho la velocidad
+   * angular en pantalla era altísima: "van muy rápido, difícil achuntarles". La
+   * dificultad NO toca velocidad (decisión de difficulty.ts), así que este es
+   * el único knob global. 0.82 (sprint 8->6,6, walk/strafe 5->4,1) es el punto
+   * de partida que el dueño afina jugando — misma desaceleración práctica que el
+   * 0.8 del diagnóstico. NO se baja a 0.80 exacto: ese valor puntual empotra a
+   * un bot contra una pared en torre (el test "un escuadrón bajo fuego no se
+   * queda plantado" lo caza). Es una resonancia de trayectoria de un seed, no un
+   * "bots lentos se atascan" general (0.81-0.9 pasan limpio); la raíz es que la
+   * heurística de atascado (stuckSpeedThreshold, más abajo) mide |velocity| y no
+   * el avance real, así que no ve a un bot que desliza pegado a un muro. Bajarlo
+   * por debajo de ~0.8 con seguridad pediría arreglar esa heurística aparte.
+   */
+  botSpeedScale: number
+
+  /**
    * Escala uniforme aplicada al modelo del personaje (bots/renderer.ts).
    * Los cuatro personajes comparten esqueleto: el hueso `Head` vive a 1.709 m
    * en pose de bind y el cuerpo mide 1.854 m. 0.971 = 1.8/1.854 deja la
@@ -352,6 +377,11 @@ export const BOTS: BotsTuning = {
 
   maxHealth: 100,
   respawnDelayS: 3.0,
+
+  // 0.82 = punto de partida (sprint 8->6,6, walk/strafe 5->4,1 m/s). El dueño
+  // lo afina jugando; ver el comentario del campo en la interfaz (y por qué NO
+  // 0.80 exacto: empotra un bot en torre, resonancia de un seed).
+  botSpeedScale: 0.82,
 
   modelScale: 0.971,
 

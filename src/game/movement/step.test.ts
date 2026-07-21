@@ -41,6 +41,16 @@ describe('paso del jugador', () => {
     expect(lengthHorizontal(s.velocity)).toBeCloseTo(MOVEMENT.sprintSpeed, 1)
   })
 
+  it('adsSpeedScale escala la velocidad objetivo (el hook que frena a los bots)', () => {
+    // Es el mecanismo del que cuelga BOTS.botSpeedScale: PlayerInput.adsSpeedScale
+    // multiplica la velocidad objetivo en targetSpeed(). Con 0.8 un sprint que
+    // sin el hook llega a sprintSpeed (8) llega a 0.8*8=6,4 — sin tocar la
+    // física, sólo la velocidad. Ver bots/bot.ts (input del bot) y BOTS.botSpeedScale.
+    const s = createPlayerState(vec3(0, 0, 0))
+    simular(s, input({ forward: 1, sprint: true, adsSpeedScale: 0.8 }), 128)
+    expect(lengthHorizontal(s.velocity)).toBeCloseTo(MOVEMENT.sprintSpeed * 0.8, 1)
+  })
+
   it('el yaw rota la dirección de movimiento', () => {
     const s = createPlayerState(vec3(0, 0, 0))
     simular(s, input({ forward: 1, yaw: Math.PI / 2 }), 128)
