@@ -286,6 +286,7 @@ export function GameCanvas() {
   const reanudar = useCallback(() => {
     despachar('reanudar')
     game?.recargarSensibilidad()
+    game?.recargarVideo()
     const canvas = ref.current
     if (canvas === null) return
     // El tipo de retorno cambió entre versiones de la spec (void antes,

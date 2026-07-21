@@ -5,6 +5,7 @@ import { createGpuTimer } from '@/game/engine/gpu-timer'
 import { createInputSystem } from '@/game/engine/input'
 import { createProfiler } from '@/game/engine/profiler'
 import { createRenderer, WORLD_FOV } from '@/game/engine/renderer'
+import { createPostFx } from '@/game/engine/postprocess'
 import { createStatsTracker, runBenchmark } from '@/game/engine/stats'
 import type { FrameStats } from '@/game/engine/stats'
 import { createTuningPanel } from '@/game/engine/tuning-panel'
@@ -102,6 +103,7 @@ import { applyHit, createDefaultTargetDefs, createTargets, stepTargets } from '@
 import { createTargetsRenderer } from '@/game/targets/renderer'
 import { esModoPractica } from '@/game/targets/practica'
 import { createSensitivityStore, radianesPorConteo } from '@/game/settings/store'
+import { createVideoSettingsStore, type BloomQuality } from '@/game/settings/video'
 import { createFeedbackAudio } from '@/game/feedback/audio'
 import { createWeaponAudio, gananciaPorDistancia } from '@/game/feedback/gun-audio'
 import { createVfxRenderer } from '@/game/feedback/vfx-renderer'
@@ -354,6 +356,16 @@ export interface Game {
    */
   recargarSensibilidad(): void
 
+  /**
+   * Vuelve a leer la calidad de bloom guardada (settings/video.ts) y la aplica
+   * en vivo. La llama la UI al cerrar el menú de pausa, igual que
+   * `recargarSensibilidad`: el panel de video guarda al instante, pero como el
+   * juego está congelado con el menú abierto, el cambio recién se ve al
+   * reanudar. Sin esto sería un control que guarda un valor que el motor no
+   * mira hasta la próxima partida.
+   */
+  recargarVideo(): void
+
   /** Loadout vivo de la partida. Referencia de sólo lectura para la UI: se
    *  cambia por `equipEnPartida`, nunca escribiéndolo. */
   readonly loadout: Loadout
@@ -385,6 +397,16 @@ export interface Game {
  */
 function sensibilidadBase(): number {
   return radianesPorConteo(createSensitivityStore().load())
+}
+
+/**
+ * Calidad de bloom guardada por el jugador (settings/video.ts). Se lee UNA vez
+ * al construir la partida, mismo criterio que la sensibilidad: localStorage es
+ * síncrono, así que no hay carrera entre leer el ajuste y arrancar el motor.
+ * Con nada guardado da `bajo`, el default balanceado.
+ */
+function calidadBloomInicial(): BloomQuality {
+  return createVideoSettingsStore().load().bloom
 }
 
 /** Cuántos bots poblar la arena, vía `?bots=N` (mismo patrón que
@@ -570,6 +592,13 @@ export function createGame(
 
   const gfx = createRenderer(canvas, mapaActual, mapaImportado?.objeto ?? null)
   const viewmodel = createViewmodelRenderer(gfx.renderer)
+  // Postprocesado (bloom) sobre el resultado combinado de mundo + viewmodel.
+  // Comparte el WebGLRenderer con las dos pasadas de render: actúa DESPUÉS de
+  // ellas, sobre el canvas ya dibujado (ver engine/postprocess.ts). La calidad
+  // guardada se lee y se aplica una vez acá; en `off` el pipeline no toca la
+  // GPU. Los render targets se crean en el primer resize (más abajo), no acá.
+  const postfx = createPostFx(gfx.renderer)
+  postfx.setQuality(calidadBloomInicial())
   const stats = createStatsTracker()
   const gpuTimer = createGpuTimer(gfx.gl)
   // Desglose de costo por sistema (engine/profiler.ts): "cuánto" ya lo
@@ -1313,6 +1342,9 @@ export function createGame(
     gfx.resize(canvas.clientWidth, canvas.clientHeight)
     viewmodel.resize(canvas.clientWidth, canvas.clientHeight)
     feedbackOverlay.resize(canvas.clientWidth, canvas.clientHeight)
+    // DESPUÉS de gfx.resize: el bloom lee el tamaño del drawing buffer del
+    // renderer, que recién ahí quedó actualizado. No-op con bloom en `off`.
+    postfx.resize()
   }
 
   // Política de autoplay del navegador (sección 5 del spec: "la creación
@@ -2244,17 +2276,30 @@ export function createGame(
 
       profiler.begin('render')
       viewmodel.render(gfx.camera, now / 1000)
+      // Cuentas del viewmodel ANTES del bloom: postfx.render() dibuja quads
+      // full-screen que resetean renderer.info (autoReset) y borrarían el
+      // conteo del arma. Se leen acá y se suman al del mundo en stats.endFrame.
+      const vmCalls = gfx.renderer.info.render.calls
+      const vmTriangles = gfx.renderer.info.render.triangles
+      // Bloom sobre mundo + viewmodel ya dibujados en el canvas. Va DENTRO del
+      // bracket del gpu-timer (beginFrame arriba, endFrame abajo) para que el
+      // "gpu Xms" del HUD incluya el costo del postprocesado -- honesto. En
+      // `off` es un no-op instantáneo (mismo costo que antes de esta feature).
+      postfx.render()
       profiler.end('render')
       gpuTimer.endFrame()
 
       stats.endFrame(
-        worldCalls + gfx.renderer.info.render.calls,
-        worldTriangles + gfx.renderer.info.render.triangles,
+        worldCalls + vmCalls,
+        worldTriangles + vmTriangles,
         gpuTimer.stats.gpuMs,
         gpuTimer.stats.peakMs,
         profiler.stats,
       )
     } else {
+      // Sin arma en mano el bloom igual corre (fogonazos, VFX de otros), dentro
+      // del bracket del gpu-timer por el mismo motivo. `off` lo deja en no-op.
+      postfx.render()
       gpuTimer.endFrame()
       stats.endFrame(worldCalls, worldTriangles, gpuTimer.stats.gpuMs, gpuTimer.stats.peakMs, profiler.stats)
     }
@@ -2663,6 +2708,10 @@ export function createGame(
       hideContextLostOverlay()
       viewmodel.dispose()
       vfxRenderer.dispose()
+      // Antes de gfx.dispose(): postfx comparte el WebGLRenderer y libera sus
+      // propios render targets (VRAM). Soltarlos después de tirar el renderer
+      // sería tarde.
+      postfx.dispose()
       gfx.dispose()
     },
     benchmark(passes = 500): number {
@@ -2748,6 +2797,10 @@ export function createGame(
 
     recargarSensibilidad(): void {
       sensBase = sensibilidadBase()
+    },
+
+    recargarVideo(): void {
+      postfx.setQuality(calidadBloomInicial())
     },
 
     get paused() {
