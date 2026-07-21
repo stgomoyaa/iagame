@@ -21,11 +21,22 @@
  *     `${ammo}` con el mismo ammo genera basura igual, así que el guard va
  *     sobre el número, antes de formatear.
  *
- * Estilo: verde monoespaciado sobre negro translúcido, el mismo lenguaje
- * que `engine/stats.ts` (#5fff9f) y los paneles de tuning. Rojo (#ff5f5f)
- * para los estados que hay que leer sin pensar: poca vida, cargador casi
- * vacío, poco tiempo. Es un HUD para leer de reojo mientras te disparan, no
- * una pantalla de menú.
+ * Estética: dark-técnico neón, el mismo lenguaje que la armería y las
+ * pantallas de rango (globals.css: acento cian `oklch(0.82 0.145 195)` y
+ * chaflán). La jerarquía es deliberada, no plana como un profiler:
+ *
+ *  - Los PROTAGONISTAS (vida abajo-izq, munición abajo-der) son numerales
+ *    Oswald condensados de 58px que DOMINAN sus esquinas. Es lo único que se
+ *    mira en pleno combate; tiene que leerse de reojo sin buscar.
+ *  - Lo SECUNDARIO (reloj, marcador, nombre de arma, selector de ranuras)
+ *    queda en Geist Mono chico y tenue: informa, no compite.
+ *  - La FIRMA geométrica: placas chaflanadas con una barra de acento cian en
+ *    el techo. El mismo gesto angular se repite en vida, munición, reloj y en
+ *    el cartel de muerte -- eso es lo que hace que este HUD sea de ESTE juego
+ *    y no una consola de debug genérica.
+ *  - Rojo (#ff5f5f) SÓLO para los estados que hay que leer sin pensar: poca
+ *    vida, cargador casi vacío, poco tiempo. El acento cian es identidad; el
+ *    rojo es alarma. No se mezclan.
  */
 
 import type { HudSnapshot } from '@/game/game'
@@ -33,9 +44,25 @@ import type { MatchState } from '@/game/match/match'
 import { teamScore } from '@/game/match/scoring'
 import { PLAYER_ID } from '@/game/match/types'
 
-const VERDE = '#5fff9f'
+/** Acento de identidad: el mismo cian de la armería y el rango
+ *  (globals.css `--arm-acento`). Conversa con la galaxia púrpura del cielo y
+ *  con los camos neón. Es CHROME, no alarma: nunca marca un estado de peligro. */
+const ACENTO = 'oklch(0.82 0.145 195)'
+/** Cian apagado para el nombre del arma: presente pero subordinado al número. */
+const ACENTO_TENUE = 'oklch(0.70 0.11 195)'
+/** Numerales protagonistas: casi blanco con una pizca de cian, para que se
+ *  lean "encendidos" sobre el negro (misma familia que los camos que emiten). */
+const TINTA = 'oklch(0.97 0.02 200)'
+/** Alarma. Se conserva exactamente el rojo de antes: poca vida, cargador casi
+ *  vacío, poco tiempo. */
 const ROJO = '#ff5f5f'
-const TENUE = '#8a8f98'
+/** Texto secundario (reloj-marcador, hints): gris tinteado al azul, nunca un
+ *  gris neutro (globals.css `--arm-tenue`/`--arm-apagado`). */
+const TENUE = 'oklch(0.70 0.012 255)'
+const APAGADO = 'oklch(0.50 0.012 255)'
+/** Placa translúcida: la familia #04050a del resto del juego, no negro puro. */
+const PANEL = 'rgba(4,6,12,.56)'
+const PANEL_FUERTE = 'rgba(3,5,10,.74)'
 
 /** Bajo esta fracción de vida el número se pone rojo. */
 const VIDA_CRITICA = 0.35
@@ -47,16 +74,24 @@ const TIEMPO_CRITICO_S = 30
 /** Muescas de la barra de vida. */
 const MUESCAS_VIDA = 10
 
+/** Tamaño del chaflán, igual al de la armería (globals.css `--arm-chaflan`). */
+const CHAFLAN = 14
+
 /**
  * Sombra dura de 1 px en cuatro direcciones en vez de un `text-shadow`
- * difuminado. Un HUD verde sobre el cielo claro de nuketown desaparece sin
+ * difuminado. Un HUD sobre el cielo claro de nuketown desaparece sin
  * contorno, y un blur cuesta al compositor lo que un contorno duro no
  * (mismo criterio que el halo de la retícula en feedback/overlay.ts).
  */
 const CONTORNO =
   'text-shadow:0 1px 0 #000,0 -1px 0 #000,1px 0 0 #000,-1px 0 0 #000'
 
-const MONO = 'ui-monospace,SFMono-Regular,Menlo,monospace'
+/** Display condensada de carácter (Oswald, ya cargada por next/font en
+ *  layout.tsx para las pantallas de progresión). Es la cara de los
+ *  protagonistas: peso, condensación y numerales tabulares. */
+const DISPLAY = "var(--font-oswald),'Oswald','Arial Narrow',sans-serif"
+/** Mono para TODO lo secundario. El mono ya no es el protagonista: informa. */
+const MONO = 'var(--font-geist-mono),ui-monospace,SFMono-Regular,Menlo,monospace'
 
 function div(cssText: string): HTMLDivElement {
   const el = document.createElement('div')
@@ -82,6 +117,7 @@ export function createHud(): Hud {
   let root: HTMLDivElement | null = null
 
   // --- munición (abajo a la derecha) ---
+  let ammoPlacaEl: HTMLDivElement | null = null
   let ammoEl: HTMLDivElement | null = null
   let magEl: HTMLDivElement | null = null
   let weaponEl: HTMLDivElement | null = null
@@ -109,6 +145,7 @@ export function createHud(): Hud {
   let lastReloading: boolean | null = null
   let lastWeapon: string | null = null
   let lastSlot: string | null = null
+  let lastMelee: boolean | null = null
   let lastHealth = -1
   let lastHealthRojo: boolean | null = null
   let lastMuescasLlenas = -1
@@ -128,30 +165,56 @@ export function createHud(): Hud {
 
       // ---- Partida: reloj y marcador, arriba al centro ----
       //
-      // `top:38px` y no 8px: `engine/stats.ts` monta su línea de diagnóstico
-      // en `top:8px` y ocupa el ANCHO ENTERO de la pantalla (cpu, gpu, draws,
-      // triángulos y el desglose del profiler, todo en una línea sin wrap),
-      // así que un reloj centrado a la misma altura le queda encima. Se
-      // verificó mirando la captura: a 8px el "5:53" se leía tachado por
-      // "presupuesto 2.5ms". 38px lo deja justo debajo (8 de tope + ~24 de
-      // alto de esa línea).
+      // `top:16px` porque la barra de perf de `engine/stats.ts` ya no está
+      // siempre visible: ahora arranca oculta y se enciende con F3 (ver
+      // game.ts). Con el techo despejado el reloj puede subir y el HUD respira.
+      // Chico y tenue a propósito: el reloj es contexto, no protagonista.
       const partida = div(
-        'position:absolute;top:38px;left:50%;transform:translateX(-50%);' +
+        'position:absolute;top:16px;left:50%;transform:translateX(-50%);' +
           'display:flex;flex-direction:column;align-items:center;gap:2px;' +
-          'background:rgba(0,0,0,.55);padding:6px 14px;border-radius:4px',
+          `background:${PANEL};padding:5px 18px 6px;` +
+          'clip-path:polygon(0 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,10px 100%,0 calc(100% - 10px))',
       )
-      relojEl = div(`font:600 20px ${MONO};line-height:1;color:${VERDE};${CONTORNO}`)
-      marcadorEl = div(`font:12px ${MONO};line-height:1;color:${TENUE};${CONTORNO}`)
+      // Barra de acento en el techo: la firma geométrica, repetida en cada
+      // placa del HUD.
+      partida.appendChild(
+        div(`position:absolute;top:0;left:0;right:0;height:2px;background:${ACENTO}`),
+      )
+      relojEl = div(
+        `font:600 22px ${DISPLAY};line-height:1;color:${TINTA};letter-spacing:.02em;` +
+          `font-variant-numeric:tabular-nums;${CONTORNO}`,
+      )
+      marcadorEl = div(`font:500 11px ${MONO};line-height:1;letter-spacing:.14em;color:${TENUE};${CONTORNO}`)
       partida.appendChild(relojEl)
       partida.appendChild(marcadorEl)
       root.appendChild(partida)
 
       // ---- Vida, abajo a la izquierda ----
-      const vida = div('position:absolute;left:18px;bottom:16px;')
-      healthEl = div(`font:700 34px ${MONO};line-height:1;color:${VERDE};${CONTORNO}`)
-      const barra = div('display:flex;gap:2px;margin-top:6px')
+      // Placa chaflanada en la esquina superior DERECHA (la que mira al
+      // centro), con la barra de acento corriendo por el techo hasta el
+      // chaflán. El número Oswald de 58px es el que domina la esquina.
+      const vida = div(
+        'position:absolute;left:24px;bottom:22px;display:flex;flex-direction:column;' +
+          `align-items:flex-start;background:${PANEL};padding:6px 22px 9px 16px;` +
+          `clip-path:polygon(0 0,calc(100% - ${CHAFLAN}px) 0,100% ${CHAFLAN}px,100% 100%,0 100%)`,
+      )
+      vida.appendChild(
+        div(`position:absolute;top:0;left:0;width:calc(100% - ${CHAFLAN}px);height:2px;background:${ACENTO}`),
+      )
+      const labelVida = div(
+        `font:500 10px ${MONO};line-height:1;letter-spacing:.26em;color:${TENUE};${CONTORNO}`,
+      )
+      labelVida.textContent = 'VIDA'
+      vida.appendChild(labelVida)
+      healthEl = div(
+        `font:700 58px ${DISPLAY};line-height:.82;color:${TINTA};margin-top:3px;` +
+          `font-variant-numeric:tabular-nums;${CONTORNO}`,
+      )
+      const barra = div('display:flex;gap:3px;margin-top:7px')
       for (let i = 0; i < MUESCAS_VIDA; i++) {
-        const m = div(`width:12px;height:4px;background:${VERDE};opacity:.25`)
+        // Muescas con un leve sesgo: el mismo idioma angular del chaflán, no
+        // rectángulos planos.
+        const m = div(`width:13px;height:4px;background:${ACENTO};opacity:.22;transform:skewX(-12deg)`)
         muescasVida.push(m)
         barra.appendChild(m)
       }
@@ -160,38 +223,65 @@ export function createHud(): Hud {
       root.appendChild(vida)
 
       // ---- Munición y arma, abajo a la derecha ----
+      // El selector de ranuras vive AFUERA de la placa de munición: con el
+      // cuchillo en mano la placa se oculta (no hay balas que mostrar), pero
+      // el selector [1][2][3] tiene que seguir visible para saber a qué
+      // cambiar.
       const municion = div(
-        'position:absolute;right:18px;bottom:16px;display:flex;flex-direction:column;' +
-          'align-items:flex-end;gap:2px',
+        'position:absolute;right:24px;bottom:22px;display:flex;flex-direction:column;' +
+          'align-items:flex-end;gap:6px',
+      )
+      // Placa chaflanada en la esquina superior IZQUIERDA (espejo de la vida).
+      ammoPlacaEl = div(
+        'position:relative;display:flex;flex-direction:column;align-items:flex-end;' +
+          `background:${PANEL};padding:6px 16px 9px 22px;` +
+          `clip-path:polygon(${CHAFLAN}px 0,100% 0,100% 100%,0 100%,0 ${CHAFLAN}px)`,
+      )
+      ammoPlacaEl.appendChild(
+        div(`position:absolute;top:0;right:0;width:calc(100% - ${CHAFLAN}px);height:2px;background:${ACENTO}`),
       )
       weaponEl = div(
-        `font:600 13px ${MONO};line-height:1;color:#e6e8ec;letter-spacing:.06em;${CONTORNO}`,
+        `font:500 12px ${MONO};line-height:1;color:${ACENTO_TENUE};letter-spacing:.14em;${CONTORNO}`,
       )
-      const fila = div('display:flex;align-items:baseline;gap:4px')
-      ammoEl = div(`font:700 34px ${MONO};line-height:1;color:${VERDE};${CONTORNO}`)
-      magEl = div(`font:600 15px ${MONO};line-height:1;color:${TENUE};${CONTORNO}`)
+      const fila = div('display:flex;align-items:baseline;gap:6px;margin-top:3px')
+      ammoEl = div(
+        `font:700 58px ${DISPLAY};line-height:.82;color:${TINTA};` +
+          `font-variant-numeric:tabular-nums;${CONTORNO}`,
+      )
+      magEl = div(`font:500 15px ${MONO};line-height:1;color:${TENUE};${CONTORNO}`)
       fila.appendChild(ammoEl)
       fila.appendChild(magEl)
+      ammoPlacaEl.appendChild(weaponEl)
+      ammoPlacaEl.appendChild(fila)
       // La pista de las ranuras es lo que hace descubrible el cambio de arma:
       // sin ella, "1" y "2" son atajos que nadie sabe que existen.
-      slotEl = div(`font:10px ${MONO};line-height:1.4;color:${TENUE};text-align:right;${CONTORNO}`)
-      municion.appendChild(weaponEl)
-      municion.appendChild(fila)
+      slotEl = div(
+        `font:500 10px ${MONO};line-height:1.4;color:${APAGADO};text-align:right;letter-spacing:.04em;${CONTORNO}`,
+      )
+      municion.appendChild(ammoPlacaEl)
       municion.appendChild(slotEl)
       root.appendChild(municion)
 
       // ---- Muerte y cuenta atrás de reaparición, al centro ----
       muerteEl = div(
         'position:absolute;inset:0;display:none;align-items:center;justify-content:center;' +
-          'flex-direction:column;gap:6px',
+          'flex-direction:column',
       )
+      const muerteCard = div(
+        'position:relative;display:flex;flex-direction:column;align-items:center;gap:9px;' +
+          `background:${PANEL_FUERTE};padding:20px 46px;` +
+          'clip-path:polygon(16px 0,100% 0,100% calc(100% - 16px),calc(100% - 16px) 100%,0 100%,0 16px)',
+      )
+      // Barra de acento roja: mismo gesto de firma, pero en color de alarma.
+      muerteCard.appendChild(div(`position:absolute;top:0;left:0;right:0;height:2px;background:${ROJO}`))
       const muerteTitulo = div(
-        `font:700 22px ${MONO};letter-spacing:.18em;color:${ROJO};${CONTORNO}`,
+        `font:700 30px ${DISPLAY};letter-spacing:.30em;color:${ROJO};${CONTORNO}`,
       )
       muerteTitulo.textContent = 'ELIMINADO'
-      muerteTextoEl = div(`font:14px ${MONO};color:#e6e8ec;${CONTORNO}`)
-      muerteEl.appendChild(muerteTitulo)
-      muerteEl.appendChild(muerteTextoEl)
+      muerteTextoEl = div(`font:500 13px ${MONO};letter-spacing:.06em;color:${TENUE};${CONTORNO}`)
+      muerteCard.appendChild(muerteTitulo)
+      muerteCard.appendChild(muerteTextoEl)
+      muerteEl.appendChild(muerteCard)
       root.appendChild(muerteEl)
 
       parent.appendChild(root)
@@ -201,6 +291,16 @@ export function createHud(): Hud {
       if (!root) return
 
       // ---- Munición ----
+      // Con el cuchillo en mano no hay munición que mostrar: la placa se
+      // oculta entera (el selector de ranuras, que está afuera, se queda). El
+      // guard hace que togglear el display cueste una escritura sólo al
+      // cambiar de/a melee, no por frame.
+      const esMelee = snap.slot === 'melee'
+      if (esMelee !== lastMelee) {
+        lastMelee = esMelee
+        if (ammoPlacaEl) ammoPlacaEl.style.display = esMelee ? 'none' : 'flex'
+      }
+
       if (snap.ammo !== lastAmmo) {
         lastAmmo = snap.ammo
         if (ammoEl) ammoEl.textContent = String(snap.ammo)
@@ -215,7 +315,7 @@ export function createHud(): Hud {
       const ammoRojo = snap.magazine > 0 && snap.ammo / snap.magazine <= MUNICION_CRITICA
       if (ammoRojo !== lastAmmoRojo) {
         lastAmmoRojo = ammoRojo
-        if (ammoEl) ammoEl.style.color = ammoRojo ? ROJO : VERDE
+        if (ammoEl) ammoEl.style.color = ammoRojo ? ROJO : TINTA
       }
       if (snap.reloading !== lastReloading) {
         lastReloading = snap.reloading
@@ -223,7 +323,6 @@ export function createHud(): Hud {
         // (el cargador se rellena al FINAL de la animación, ver
         // combat/fire-control.ts): se apaga en vez de mentir.
         if (ammoEl) ammoEl.style.opacity = snap.reloading ? '.35' : '1'
-        if (slotEl && snap.reloading) slotEl.textContent = 'RECARGANDO'
       }
 
       if (snap.weaponName !== lastWeapon) {
@@ -241,9 +340,8 @@ export function createHud(): Hud {
           slotEl.textContent = snap.reloading
             ? 'RECARGANDO'
             : `[1] ${snap.primaryName || '--'}   [2] ${snap.secondaryName || '--'}   [3] ${snap.meleeName || 'Cuchillo'}`
-          // La ranura en mano se marca con el color, no con un símbolo: es
-          // una lectura de reojo.
-          slotEl.style.color = TENUE
+          // Recargando se resalta en cian; en reposo el selector queda apagado.
+          slotEl.style.color = snap.reloading ? ACENTO : APAGADO
         }
       }
 
@@ -257,8 +355,8 @@ export function createHud(): Hud {
       const vidaRoja = fraccion <= VIDA_CRITICA
       if (vidaRoja !== lastHealthRojo) {
         lastHealthRojo = vidaRoja
-        if (healthEl) healthEl.style.color = vidaRoja ? ROJO : VERDE
-        for (const m of muescasVida) m.style.background = vidaRoja ? ROJO : VERDE
+        if (healthEl) healthEl.style.color = vidaRoja ? ROJO : TINTA
+        for (const m of muescasVida) m.style.background = vidaRoja ? ROJO : ACENTO
       }
       const llenas = Math.max(0, Math.min(MUESCAS_VIDA, Math.ceil(fraccion * MUESCAS_VIDA)))
       if (llenas !== lastMuescasLlenas) {
@@ -267,7 +365,7 @@ export function createHud(): Hud {
         // es el mismo bucle índice a índice de los pools de overlay.ts.
         const desde = Math.min(llenas, lastMuescasLlenas < 0 ? 0 : lastMuescasLlenas)
         const hasta = Math.max(llenas, lastMuescasLlenas < 0 ? MUESCAS_VIDA : lastMuescasLlenas)
-        for (let i = desde; i < hasta; i++) muescasVida[i].style.opacity = i < llenas ? '1' : '.25'
+        for (let i = desde; i < hasta; i++) muescasVida[i].style.opacity = i < llenas ? '1' : '.22'
         lastMuescasLlenas = llenas
       }
 
@@ -280,16 +378,17 @@ export function createHud(): Hud {
       const relojRojo = segundos <= TIEMPO_CRITICO_S
       if (relojRojo !== lastRelojRojo) {
         lastRelojRojo = relojRojo
-        if (relojEl) relojEl.style.color = relojRojo ? ROJO : VERDE
+        if (relojEl) relojEl.style.color = relojRojo ? ROJO : TINTA
       }
 
       // En TDM el marcador son los dos equipos; en FFA, los kills del
       // jugador contra el mejor rival. teamScore/leadingKills recorren la
       // lista de participantes, así que se llaman DESPUÉS del guard, no
-      // antes: con el marcador quieto esto no cuesta nada.
+      // antes: con el marcador quieto esto no cuesta nada. Separador con
+      // interpunto, nunca un guion largo (regla de copy: cero em-dashes).
       const marcador =
         match.mode === 'tdm'
-          ? `${teamScore(match.mode, match.participants, 0)} — ${teamScore(match.mode, match.participants, 1)}`
+          ? `${teamScore(match.mode, match.participants, 0)} · ${teamScore(match.mode, match.participants, 1)}`
           : `${match.participants[PLAYER_ID].kills} bajas`
       if (marcador !== lastMarcador) {
         lastMarcador = marcador
@@ -314,6 +413,7 @@ export function createHud(): Hud {
     unmount(): void {
       root?.remove()
       root = null
+      ammoPlacaEl = null
       ammoEl = null
       magEl = null
       weaponEl = null
@@ -335,6 +435,7 @@ export function createHud(): Hud {
       lastReloading = null
       lastWeapon = null
       lastSlot = null
+      lastMelee = null
       lastHealth = -1
       lastHealthRojo = null
       lastMuescasLlenas = -1

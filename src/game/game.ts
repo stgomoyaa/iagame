@@ -1363,6 +1363,20 @@ export function createGame(
     }
   }
 
+  // La barra de perf (engine/stats.ts) arranca OCULTA y se enciende con F3:
+  // es una herramienta de medición, no HUD de combate, así que no tiene que
+  // estar siempre robándole jerarquía a la vida y la munición. F3 es idioma
+  // conocido (Minecraft) y no la usa ninguna otra parte del juego (las armas
+  // van en Digit1/2/3, el scoreboard en Tab, los bots en +/-). Sin gate de
+  // debug: el dueño mide cuando quiere, sin recargar con ?debug=1.
+  let statsVisible = false
+  function onPerfKeyDown(e: KeyboardEvent): void {
+    if (e.code !== 'F3') return
+    e.preventDefault()
+    statsVisible = !statsVisible
+    stats.setVisible(statsVisible)
+  }
+
   function frame(now: number): void {
     if (!running) return
     rafId = requestAnimationFrame(frame)
@@ -2306,6 +2320,7 @@ export function createGame(
       canvas.addEventListener('click', onCanvasClickForAudio)
       window.addEventListener('keydown', onDebugKeyDown)
       window.addEventListener('keydown', onLoadoutKeyDown)
+      window.addEventListener('keydown', onPerfKeyDown)
       // 'webglcontextlost'/'webglcontextrestored' no están en el
       // HTMLElementEventMap de lib.dom.d.ts (son del spec de WebGL, no de
       // HTML): TS los acepta igual por el overload genérico de
@@ -2483,6 +2498,35 @@ export function createGame(
           input.pitch = pitch
         }
 
+        // Hook de control para EJERCITAR el feedback de combate desde el
+        // navegador sin pointer lock ni tener que acertarle a un bot: dispara
+        // el mismo camino que el combate real (onHitConfirmed/onDamageTaken de
+        // feedback/feedback.ts, applyDamageToBot para la vida real del HUD),
+        // así una captura puede mostrar el hitmarker, la confirmación de baja,
+        // el arco de daño direccional y el número de vida en rojo de forma
+        // determinista. Mismo gate ?debug=1 que el resto: no existe en
+        // producción. No duplica lógica de combate, sólo la invoca.
+        ;(
+          window as unknown as {
+            __hudDebug?: (accion: string, a?: number, b?: number) => void
+          }
+        ).__hudDebug = (accion, a = 0, b = 0) => {
+          if (accion === 'hitmarker') {
+            // a=1 headshot, b=1 baja. NDC cerca de la mira para el número de daño.
+            onHitConfirmed(feedbackState, 0.14, 0.08, 42, a === 1, b === 1)
+          } else if (accion === 'danio') {
+            // a = bearing en radianes (0 = de frente), b = daño del arco.
+            onDamageTaken(feedbackState, a, b || 40)
+          } else if (accion === 'herir') {
+            // Baja la vida REAL del jugador (la que lee el HUD), para ver el
+            // número en rojo bajo el umbral crítico.
+            applyDamageToBot(playerHealth, a || 70)
+          } else if (accion === 'sanar') {
+            playerHealth.health = playerHealth.maxHealth
+            playerHealth.alive = true
+          }
+        }
+
         // Contraparte de sólo lectura de __debugTeleport, detrás del mismo
         // gate ?debug=1. Sin esto, verificar "¿el jugador subió la escalera?"
         // o "¿se salió del mapa?" desde el navegador obliga a mirar una
@@ -2594,6 +2638,7 @@ export function createGame(
       canvas.removeEventListener('click', onCanvasClickForAudio)
       window.removeEventListener('keydown', onDebugKeyDown)
       window.removeEventListener('keydown', onLoadoutKeyDown)
+      window.removeEventListener('keydown', onPerfKeyDown)
       canvas.removeEventListener('webglcontextlost', onContextLost, false)
       canvas.removeEventListener('webglcontextrestored', onContextRestored, false)
       input.detach()
