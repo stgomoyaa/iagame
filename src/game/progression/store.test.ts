@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  camoForSlot,
   defaultLoadout,
+  equipCamo,
   equipSkin,
   equipWeapon,
   normalizeLoadout,
   skinForSlot,
   type Loadout,
 } from '@/game/progression/loadout'
+import { CATALOGO_CAMOS } from '@/game/skins/texturas'
 import {
   accountLevel,
   createDefaultProgress,
@@ -53,8 +56,8 @@ describe('loadout por defecto', () => {
 describe('normalización del loadout', () => {
   it('descarta un arma que ya no existe en el pack', () => {
     const roto: Loadout = {
-      primary: { slug: 'arma-borrada', skinSeed: null },
-      secondary: { slug: TODAS[0], skinSeed: null },
+      primary: { slug: 'arma-borrada', skinSeed: null, camoId: null },
+      secondary: { slug: TODAS[0], skinSeed: null, camoId: null },
     }
     const arreglado = normalizeLoadout(roto, NIVEL_INICIAL, [])
     expect(TODAS).toContain(arreglado.primary.slug)
@@ -65,8 +68,8 @@ describe('normalización del loadout', () => {
     // que estaba al alcance pasa a pedir más nivel.
     const bloqueada = TODAS.find((s) => !defaultLoadout(NIVEL_INICIAL).primary.slug?.includes(s))
     const conBloqueada: Loadout = {
-      primary: { slug: 'sniperrifle-1', skinSeed: null },
-      secondary: { slug: bloqueada ?? TODAS[0], skinSeed: null },
+      primary: { slug: 'sniperrifle-1', skinSeed: null, camoId: null },
+      secondary: { slug: bloqueada ?? TODAS[0], skinSeed: null, camoId: null },
     }
     const arreglado = normalizeLoadout(conBloqueada, NIVEL_INICIAL, [])
     expect(arreglado.primary.slug).toBe(defaultLoadout(NIVEL_INICIAL).primary.slug)
@@ -74,8 +77,8 @@ describe('normalización del loadout', () => {
 
   it('descarta una skin que no está en el inventario', () => {
     const conSkinAjena: Loadout = {
-      primary: { slug: TODAS[0], skinSeed: 'skin-de-otro' },
-      secondary: { slug: TODAS[1], skinSeed: SKINS_INICIALES[0] },
+      primary: { slug: TODAS[0], skinSeed: 'skin-de-otro', camoId: null },
+      secondary: { slug: TODAS[1], skinSeed: SKINS_INICIALES[0], camoId: null },
     }
     const arreglado = normalizeLoadout(conSkinAjena, NIVEL_INICIAL, SKINS_INICIALES)
     expect(arreglado.primary.skinSeed).toBeNull()
@@ -84,8 +87,8 @@ describe('normalización del loadout', () => {
 
   it('nunca deja una ranura sin arma', () => {
     const vacio: Loadout = {
-      primary: { slug: null, skinSeed: null },
-      secondary: { slug: null, skinSeed: null },
+      primary: { slug: null, skinSeed: null, camoId: null },
+      secondary: { slug: null, skinSeed: null, camoId: null },
     }
     const arreglado = normalizeLoadout(vacio, NIVEL_INICIAL, [])
     expect(arreglado.primary.slug).not.toBeNull()
@@ -113,6 +116,77 @@ describe('equipar', () => {
     const antes = base.primary.slug
     equipWeapon(base, 'primary', TODAS[7])
     expect(base.primary.slug).toBe(antes)
+  })
+})
+
+describe('camos por textura', () => {
+  const CAMO = CATALOGO_CAMOS[0].id
+  const OTRO_CAMO = CATALOGO_CAMOS[1].id
+
+  it('equipCamo equipa y camoForSlot lo devuelve', () => {
+    const base = defaultLoadout(NIVEL_INICIAL)
+    const conCamo = equipCamo(base, 'primary', CAMO)
+    expect(conCamo.primary.camoId).toBe(CAMO)
+    expect(camoForSlot(conCamo, 'primary')?.id).toBe(CAMO)
+  })
+
+  it('equipCamo con null saca el camo', () => {
+    const conCamo = equipCamo(defaultLoadout(NIVEL_INICIAL), 'secondary', CAMO)
+    expect(camoForSlot(equipCamo(conCamo, 'secondary', null), 'secondary')).toBeNull()
+  })
+
+  it('equipar un camo limpia la skin procedural, y viceversa', () => {
+    // La exclusión mutua es la propiedad central: un arma tiene UN aspecto.
+    const conSkin = equipSkin(defaultLoadout(NIVEL_INICIAL), 'primary', SKINS_INICIALES[4])
+    const conCamo = equipCamo(conSkin, 'primary', CAMO)
+    expect(conCamo.primary.skinSeed).toBeNull()
+    expect(conCamo.primary.camoId).toBe(CAMO)
+
+    const otraVezSkin = equipSkin(conCamo, 'primary', SKINS_INICIALES[4])
+    expect(otraVezSkin.primary.camoId).toBeNull()
+    expect(otraVezSkin.primary.skinSeed).toBe(SKINS_INICIALES[4])
+  })
+
+  it('"Sin skin" (equipSkin con null) limpia camo y skin a la vez', () => {
+    // Es el contrato del botón "Sin skin" de la armería: deja la ranura de
+    // fábrica sin importar si tenía skin o camo.
+    const conCamo = equipCamo(defaultLoadout(NIVEL_INICIAL), 'primary', CAMO)
+    const fabrica = equipSkin(conCamo, 'primary', null)
+    expect(fabrica.primary.camoId).toBeNull()
+    expect(fabrica.primary.skinSeed).toBeNull()
+    expect(camoForSlot(fabrica, 'primary')).toBeNull()
+    expect(skinForSlot(fabrica, 'primary')).toBeNull()
+  })
+
+  it('camoForSlot devuelve null ante un id que no está en el catálogo', () => {
+    const roto: Loadout = {
+      primary: { slug: TODAS[0], skinSeed: null, camoId: 'no-existe' },
+      secondary: { slug: TODAS[1], skinSeed: null, camoId: null },
+    }
+    expect(camoForSlot(roto, 'primary')).toBeNull()
+  })
+
+  it('normalizeLoadout descarta un camo que ya no está en el catálogo', () => {
+    const roto: Loadout = {
+      primary: { slug: TODAS[0], skinSeed: null, camoId: 'camo-borrado' },
+      secondary: { slug: TODAS[1], skinSeed: null, camoId: OTRO_CAMO },
+    }
+    const arreglado = normalizeLoadout(roto, NIVEL_INICIAL, [])
+    expect(arreglado.primary.camoId).toBeNull()
+    expect(arreglado.secondary.camoId).toBe(OTRO_CAMO)
+  })
+
+  it('si un guardado corrupto trae skin y camo a la vez, normalize deja sólo el camo', () => {
+    // La exclusión no la garantiza sólo el equipar: un guardado editado a mano
+    // puede traer las dos. Gana el camo (la vía nueva) y la skin se descarta,
+    // aunque la skin esté en el inventario.
+    const ambos: Loadout = {
+      primary: { slug: TODAS[0], skinSeed: SKINS_INICIALES[0], camoId: CAMO },
+      secondary: { slug: TODAS[1], skinSeed: null, camoId: null },
+    }
+    const arreglado = normalizeLoadout(ambos, NIVEL_INICIAL, SKINS_INICIALES)
+    expect(arreglado.primary.camoId).toBe(CAMO)
+    expect(arreglado.primary.skinSeed).toBeNull()
   })
 })
 
@@ -227,6 +301,78 @@ describe('lectura de datos guardados', () => {
     expect(data.xp).toBe(0)
     expect(data.skins).toEqual([...SKINS_INICIALES])
     expect(data.loadout.primary.slug).not.toBeNull()
+  })
+})
+
+/**
+ * `camoId` en el loadout se agregó SIN subir PROGRESS_VERSION (es aditivo, mismo
+ * criterio que `historial`/`armas`/`medallas`). Un guardado anterior no lo trae
+ * y tiene que seguir cargando entero. Y como el loadout viene de localStorage
+ * —lo puede haber escrito otra versión, otra pestaña o la consola— nada de lo
+ * que traiga en ese campo puede tirar: cae a null.
+ */
+describe('camo equipado en el guardado', () => {
+  const CAMO = CATALOGO_CAMOS[0].id
+
+  it('un loadout viejo sin camoId carga con camoId null, sin romper', () => {
+    // El guardado anterior a esta capa: la entrada trae slug y skinSeed pero
+    // NO camoId. No debe invalidar el guardado ni tirar; el campo cae a null.
+    const viejo = {
+      ...createDefaultProgress(),
+      loadout: {
+        primary: { slug: TODAS[0], skinSeed: null },
+        secondary: { slug: TODAS[1], skinSeed: null },
+      },
+    }
+    const data = parseProgress(viejo)
+    expect(data.loadout.primary.camoId).toBeNull()
+    expect(data.loadout.secondary.camoId).toBeNull()
+    expect(camoForSlot(data.loadout, 'primary')).toBeNull()
+  })
+
+  it('un camoId con el tipo equivocado cae a null sin tirar', () => {
+    for (const basura of [42, true, { id: CAMO }, ['x'], null]) {
+      const data = parseProgress({
+        ...createDefaultProgress(),
+        loadout: {
+          primary: { slug: TODAS[0], skinSeed: null, camoId: basura },
+          secondary: { slug: TODAS[1], skinSeed: null, camoId: null },
+        },
+      })
+      expect(data.loadout.primary.camoId).toBeNull()
+      expect(data.loadout.primary.slug).not.toBeNull()
+    }
+  })
+
+  it('un camoId string que no existe en el catálogo cae a null', () => {
+    // Pasa el filtro de tipo de `leerEntrada` (es un string) pero lo descarta
+    // `normalizeLoadout`, que es donde se valida contra el catálogo.
+    const data = parseProgress({
+      ...createDefaultProgress(),
+      loadout: {
+        primary: { slug: TODAS[0], skinSeed: null, camoId: 'camo-que-no-existe' },
+        secondary: { slug: TODAS[1], skinSeed: null, camoId: null },
+      },
+    })
+    expect(data.loadout.primary.camoId).toBeNull()
+  })
+
+  it('un camo válido sobrevive el round-trip y desplaza a la skin', () => {
+    // El requisito del entregable: equipar un camo, recargar, sigue equipado.
+    // Y como camo y skin son excluyentes, al recargar el camo gana y la skin
+    // queda en null (aunque la seed esté en el inventario).
+    const conCamo = equipCamo(
+      equipSkin(createDefaultProgress().loadout, 'primary', SKINS_INICIALES[0]),
+      'primary',
+      CAMO,
+    )
+    const recargado = parseProgress(
+      JSON.parse(JSON.stringify({ ...createDefaultProgress(), loadout: conCamo })),
+    )
+    expect(recargado.loadout.primary.camoId).toBe(CAMO)
+    expect(recargado.loadout.primary.skinSeed).toBeNull()
+    expect(camoForSlot(recargado.loadout, 'primary')?.id).toBe(CAMO)
+    expect(skinForSlot(recargado.loadout, 'primary')).toBeNull()
   })
 })
 
