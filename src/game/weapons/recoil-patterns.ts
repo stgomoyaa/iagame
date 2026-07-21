@@ -187,9 +187,89 @@ export const REAL_RECOIL_PATTERNS: Readonly<Record<string, RealRecoilPattern>> =
 }
 
 /**
- * Patrón que le toca a un arma: el suyo real si lo tiene, y si no el de su
- * arquetipo. El respaldo por arquetipo es la razón por la que las 40 CC0 y las
- * 9 armas sin forma real siguen funcionando sin ninguna entrada acá.
+ * Variación de retroceso POR ARMA para las que NO tienen patrón real. El
+ * problema que resuelve: sin esto, las ~69 de COD, las 40 CC0 y las CS sin
+ * patrón medido caían TODAS al mismo patrón generado de su arquetipo, así que
+ * dos AR de COD del mismo arquetipo eran mecánicamente el MISMO arma con otra
+ * skin (~12 armas por patrón). Acá cada slug saca de un hash determinista tres
+ * factores que la despegan de sus clones:
+ *
+ * - `climbFactor` (0.78-1.22): escala la subida vertical del patrón. Una sube
+ *   más, otra menos.
+ * - `driftFactor` (magnitud 0.6-1.4, SIGNO variable): escala el serpenteo
+ *   horizontal Y su dirección. Una tira a la derecha, otra a la izquierda: es
+ *   lo más notorio al sprayar.
+ * - `kickFactor` (0.82-1.18): escala el GOLPE DE VISTA por disparo
+ *   (archetype.recoil.viewKick, el canal de sensación de feedback/camera-punch.ts,
+ *   ver game.ts). Es lo que hace que dos armas se sientan distintas en CADA
+ *   tiro, no sólo en un spray largo.
+ *
+ * Determinista (mismo slug -> misma variación siempre, cacheado) y sin
+ * asignaciones tras la primera llamada por slug -- se lee por frame al resolver
+ * el arma, igual que resolveRecoilPattern. Las armas CON patrón real devuelven
+ * null: ya son distintas por su forma medida, no hay que inventarles nada.
+ */
+export interface RecoilVariation {
+  readonly climbFactor: number
+  readonly driftFactor: number
+  readonly kickFactor: number
+}
+
+/** FNV-1a 32-bit sobre el slug: determinista, barato, buena dispersión. */
+function hashSlug(slug: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < slug.length; i++) {
+    h ^= slug.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return h >>> 0
+}
+
+/** PRNG determinista sembrado por el hash, para sacar varios uniformes
+ *  independientes del mismo slug (mismo esquema mulberry32 que
+ *  generateRecoilPattern). */
+function seededUniforms(seed: number, n: number): number[] {
+  let a = seed >>> 0
+  const out: number[] = []
+  for (let i = 0; i < n; i++) {
+    a += 0x6d2b79f5
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    out.push(((t ^ (t >>> 14)) >>> 0) / 4294967296)
+  }
+  return out
+}
+
+const variationCache = new Map<string, RecoilVariation | null>()
+
+export function weaponRecoilVariation(slug: string | null): RecoilVariation | null {
+  if (slug === null) return null
+  const cached = variationCache.get(slug)
+  if (cached !== undefined) return cached
+  // Las que tienen patrón real ya son distintas: no se tocan.
+  if (REAL_RECOIL_PATTERNS[slug]) {
+    variationCache.set(slug, null)
+    return null
+  }
+  const [u0, u1, u2, u3] = seededUniforms(hashSlug(slug), 4)
+  const variation: RecoilVariation = {
+    climbFactor: 0.78 + u0 * 0.44,
+    driftFactor: (0.6 + u1 * 0.8) * (u2 < 0.5 ? -1 : 1),
+    kickFactor: 0.82 + u3 * 0.36,
+  }
+  variationCache.set(slug, variation)
+  return variation
+}
+
+const patternCache = new Map<string, RecoilPattern>()
+
+/**
+ * Patrón que le toca a un arma: el suyo real si lo tiene; si no, el de su
+ * arquetipo VARIADO por arma (weaponRecoilVariation) para que no sea un clon.
+ * El patrón variado se cachea por slug: se resuelve por frame al equipar, no
+ * puede asignar cada vez. El disparo 0 sigue en [0,0] (escalar un cero da cero,
+ * el primer tiro sigue preciso) y la subida sigue monótona (climbFactor > 0).
  */
 export function resolveRecoilPattern(
   slug: string | null,
@@ -199,7 +279,29 @@ export function resolveRecoilPattern(
     const real = REAL_RECOIL_PATTERNS[slug]
     if (real) return real.points
   }
-  return archetype.recoil.pattern
+  const variation = weaponRecoilVariation(slug)
+  if (variation === null || slug === null) return archetype.recoil.pattern
+
+  const cached = patternCache.get(slug)
+  if (cached !== undefined) return cached
+  const base = archetype.recoil.pattern
+  const varied: [number, number][] = base.map(([x, y]) => {
+    // `nx === 0 ? 0` normaliza el -0 que sale de 0 * driftFactor negativo (el
+    // disparo 0 tiene x=0): -0 es funcionalmente cero pero ensucia los datos y
+    // los tests de igualdad exacta.
+    const nx = x * variation.driftFactor
+    return [nx === 0 ? 0 : nx, y * variation.climbFactor]
+  })
+  patternCache.set(slug, varied)
+  return varied
+}
+
+/** Golpe de vista efectivo del arma: el del arquetipo escalado por la variación
+ *  por arma (o sin cambio si el arma tiene patrón real / no hay slug). Lo usa
+ *  game.ts al disparar. */
+export function weaponViewKick(slug: string | null, archetypeViewKick: number): number {
+  const variation = weaponRecoilVariation(slug)
+  return variation === null ? archetypeViewKick : archetypeViewKick * variation.kickFactor
 }
 
 /** Juego del que salió el patrón de un arma, o `null` si usa el generado. */
