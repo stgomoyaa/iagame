@@ -15,6 +15,7 @@
 
 import { unlockLevelFor } from '@/game/progression/unlocks'
 import { resolveArchetype, weaponIndex } from '@/game/weapons/registry'
+import { isMeleeSlug } from '@/game/weapons/melee-catalog'
 
 export interface ArmaDeLista {
   slug: string
@@ -32,10 +33,15 @@ export interface ArmaDeLista {
  * siempre. Ver el comentario sobre el bug de la foto vieja en Armoury.tsx.
  */
 export function construirArsenal(): ArmaDeLista[] {
-  return weaponIndex().map((entry) => ({
-    slug: entry.slug,
-    nombre: entry.name,
-    archetype: resolveArchetype(entry.slug),
-    nivel: unlockLevelFor(entry.slug),
-  }))
+  // El cuchillo NO se lista: no es un arma seleccionable ni desbloqueable, es el
+  // slot 3 fijo que game.ts equipa aparte (como en CS/COD). Vive en el índice
+  // sólo para que el renderer cargue su viewmodel, no para elegirlo acá.
+  return weaponIndex()
+    .filter((entry) => !isMeleeSlug(entry.slug))
+    .map((entry) => ({
+      slug: entry.slug,
+      nombre: entry.name,
+      archetype: resolveArchetype(entry.slug),
+      nivel: unlockLevelFor(entry.slug),
+    }))
 }

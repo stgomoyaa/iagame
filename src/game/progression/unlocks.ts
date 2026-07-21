@@ -22,6 +22,7 @@
 
 import type { WeaponClass } from '@/game/weapons/archetypes'
 import { catalogVersion, resolveArchetype, weaponIndex } from '@/game/weapons/registry'
+import { isMeleeSlug } from '@/game/weapons/melee-catalog'
 
 /** Nivel mínimo de cuenta. Una cuenta nueva arranca acá. */
 export const NIVEL_INICIAL = 1
@@ -80,6 +81,14 @@ function buildUnlockLevels(): Record<string, number> {
   // ejecuciones asignan los mismos niveles a los mismos modelos, que es lo
   // que evita que un jugador "pierda" un arma que ya tenía desbloqueada.
   for (const entry of weaponIndex()) {
+    // El cuchillo (y cualquier melee) vive en el índice de armas para que el
+    // renderer cargue su viewmodel, pero está FUERA de la escalera de
+    // desbloqueo: no es un arma que se elige ni se desbloquea, es el slot 3 fijo
+    // que todo jugador lleva siempre (como en CS/COD). Se saltea entero acá: no
+    // entra a la tabla de niveles y no consume un escalón de su clase de reserva
+    // ('ar'), así que agregarlo no corre hacia adelante ninguna arma de fuego.
+    // `unlockLevelFor` lo resuelve aparte (siempre disponible).
+    if (isMeleeSlug(entry.slug)) continue
     const clase = resolveArchetype(entry.slug).class
     const indice = seenPerClass.get(clase) ?? 0
     seenPerClass.set(clase, indice + 1)
@@ -140,6 +149,10 @@ export function unlockLevelsSnapshot(): Readonly<Record<string, number>> {
 
 /** Nivel de cuenta al que se desbloquea un arma. */
 export function unlockLevelFor(slug: string): number {
+  // El melee no está en la escalera (ver buildUnlockLevels): es el slot 3 fijo,
+  // siempre disponible. Se resuelve al nivel inicial sin mirar la tabla, para
+  // que nada que recorra el catálogo (loadout por defecto, normalización) lance.
+  if (isMeleeSlug(slug)) return NIVEL_INICIAL
   const level = unlockLevels()[slug]
   if (level === undefined) throw new Error(`arma desconocida: "${slug}" no está en el catálogo`)
   return level
@@ -161,11 +174,13 @@ export function isWeaponUnlocked(
   return accountLevel >= unlockLevelFor(slug)
 }
 
-/** Slugs disponibles a un nivel dado, en el orden del pack. */
+/** Slugs de ARMA DE FUEGO disponibles a un nivel dado, en el orden del pack. El
+ *  melee queda afuera: no es un arma seleccionable ni del loadout por defecto,
+ *  es el slot 3 fijo que game.ts equipa aparte. */
 export function unlockedWeapons(accountLevel: number, permanentes: readonly string[] = []): string[] {
   return weaponIndex()
     .map((e) => e.slug)
-    .filter((slug) => isWeaponUnlocked(slug, accountLevel, permanentes))
+    .filter((slug) => !isMeleeSlug(slug) && isWeaponUnlocked(slug, accountLevel, permanentes))
 }
 
 /** Nivel al que se desbloquea la última arma del pack. */

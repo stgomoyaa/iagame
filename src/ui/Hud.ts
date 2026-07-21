@@ -233,13 +233,14 @@ export function createHud(): Hud {
 
       // La línea de ranuras depende de tres cosas (nombres y ranura en mano)
       // y de si se está recargando; se rearma sólo cuando alguna cambió.
-      const slotClave = `${snap.slot}|${snap.primaryName}|${snap.secondaryName}|${snap.reloading}`
+      const slotClave = `${snap.slot}|${snap.primaryName}|${snap.secondaryName}|${snap.meleeName}|${snap.reloading}`
       if (slotClave !== lastSlot) {
         lastSlot = slotClave
         if (slotEl) {
+          // [3] = cuchillo, SIEMPRE presente (slot fijo, como en CS/COD).
           slotEl.textContent = snap.reloading
             ? 'RECARGANDO'
-            : `[1] ${snap.primaryName || '--'}   [2] ${snap.secondaryName || '--'}`
+            : `[1] ${snap.primaryName || '--'}   [2] ${snap.secondaryName || '--'}   [3] ${snap.meleeName || 'Cuchillo'}`
           // La ranura en mano se marca con el color, no con un símbolo: es
           // una lectura de reojo.
           slotEl.style.color = TENUE

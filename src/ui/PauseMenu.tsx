@@ -35,7 +35,10 @@ export interface PauseMenuProps {
    *  el título y el texto del botón principal, nada más: es el mismo menú. */
   variante: 'inicio' | 'pausa'
   loadout: Loadout
-  slotEquipado: LoadoutSlot
+  /** Ranura en mano. Puede ser 'melee' (el cuchillo del slot 3 fijo): ese slot
+   *  no se edita acá -- no se elige ni se desbloquea -- así que cuando está en
+   *  mano el menú no marca ninguna de las dos ranuras editables como "en mano". */
+  slotEquipado: LoadoutSlot | 'melee'
   nivelCuenta: number
   /** ¿Esta partida deja agregar y sacar bots con + y -? Falso en ranked, y
    *  entonces la ayuda de controles no menciona esas teclas: prometer una
@@ -58,7 +61,11 @@ export function PauseMenu({
   // mano: se puede cambiar la secundaria sin dejar de mirar la primaria.
   // Arranca en la que está equipada porque es lo que el jugador tiene en la
   // cabeza cuando abre el menú.
-  const [slotEditando, setSlotEditando] = useState<LoadoutSlot>(slotEquipado)
+  // Si lo que está en mano es el cuchillo ('melee', no editable), el menú
+  // arranca editando la primaria: sólo primary/secondary se eligen acá.
+  const [slotEditando, setSlotEditando] = useState<LoadoutSlot>(
+    slotEquipado === 'melee' ? 'primary' : slotEquipado,
+  )
 
   // Mismo cuidado que en la armería: el catálogo NO está completo en el
   // primer render (las armas locales entran cuando resuelve un fetch), así
