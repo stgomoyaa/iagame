@@ -124,14 +124,24 @@ export function fire(state: ViewmodelState, weapon: WeaponVisual): void {
  * reloadT a 0 en cada tick y la recarga nunca cruza su primera fracción.
  * Queda congelada en frame cero para siempre y ni magOut ni magIn se
  * emiten jamás: un deadlock silencioso, no un error.
+ *
+ * Devuelve `true` SÓLO en el flanco de subida —cuando arranca una recarga
+ * nueva de verdad— y `false` mientras ya había una en curso. Ese retorno es
+ * el productor del evento para el sonido y el clip de recarga: game.ts lo usa
+ * en vez de muestrear `state.reloading` frame a frame, porque el muestreo
+ * pierde el caso de R sostenida (reloading vuelve a false al final de un frame
+ * dentro de stepViewmodel y a true al inicio del siguiente, y el sampler nunca
+ * ve el false intermedio, así que el flanco no se re-arma y la recarga 2, 3…
+ * no anima ni suena).
  */
-export function startReload(state: ViewmodelState, weapon: WeaponVisual): void {
-  if (state.reloading) return
+export function startReload(state: ViewmodelState, weapon: WeaponVisual): boolean {
+  if (state.reloading) return false
   state.reloading = true
   state.reloadT = 0
   state.reloadTime = weapon.reloadTime
   state.emittedMagOut = false
   state.emittedMagIn = false
+  return true
 }
 
 /**

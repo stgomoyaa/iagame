@@ -598,6 +598,30 @@ describe('spam de recarga (Defecto 1: input sostenido, no de flanco)', () => {
     // para siempre porque cada frame lo resetea a 0 antes de sumar dt).
     expect(state.reloadT).toBeGreaterThan(50 * TICK_DT)
   })
+
+  it('startReload devuelve true SÓLO en el flanco de una recarga nueva; false mientras ya hay una en curso', () => {
+    // El retorno booleano es lo que game.ts usa como productor del evento de
+    // sonido/clip de recarga, en vez de muestrear state.reloading frame a frame
+    // (ese muestreo pierde el flanco con R sostenida y la recarga 2, 3… no
+    // anima ni suena). La propiedad: true UNA vez al arrancar, false en todas
+    // las llamadas repetidas mientras la misma recarga sigue en curso.
+    const state = createViewmodelState()
+    const out = transform()
+
+    expect(startReload(state, WEAPON)).toBe(true)
+    // Repetir con la recarga ya en curso (equivale a R sostenida): no re-arranca.
+    expect(startReload(state, WEAPON)).toBe(false)
+    expect(startReload(state, WEAPON)).toBe(false)
+
+    // Se completa la recarga (reloadTime=1.0s=128 ticks): reloading vuelve a
+    // false dentro de stepViewmodel.
+    for (let i = 0; i < 130; i++) stepViewmodel(state, QUIETO, WEAPON, out, TICK_DT)
+    expect(state.reloading).toBe(false)
+
+    // Recién ahora una recarga nueva vuelve a devolver true: es un detector de
+    // flanco de verdad, no un pulso de un solo uso para toda la vida del state.
+    expect(startReload(state, WEAPON)).toBe(true)
+  })
 })
 
 describe('cambio de arma cancela recarga en curso (Defecto 2)', () => {

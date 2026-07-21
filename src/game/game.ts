@@ -897,14 +897,14 @@ export function createGame(
   const weaponAudio = createWeaponAudio()
   const vfxState = createVfxState()
   const vfxRenderer = createVfxRenderer(gfx.scene)
-  // Momento en que empezó la recarga en curso, para detectar el flanco de
-  // subida: startReload() es idempotente y no avisa si arrancó una nueva,
-  // así que el sonido se dispara mirando la transición de vmState.reloading.
-  let recargando = false
-  // Flanco del draw, para lanzar el clip importado de sacar el arma una sola
-  // vez. Mismo patrón que `recargando`: `startDraw` es idempotente y no avisa
-  // si arrancó uno nuevo, así que el disparador se cuelga de la transición.
-  let dibujando = false
+  // Arma que estaba REALMENTE en pantalla el frame anterior (viewmodel.attachedSlug).
+  // El clip de draw se dispara comparando este valor con el de este frame: un
+  // cambio efectivo de arma en pantalla = sacar la nueva. Se prefiere a un
+  // flanco de vmState.drawing porque ese flag, al spamear cambio de arma antes
+  // de que termine el draw anterior, no vuelve a pasar por false y el flanco no
+  // se re-arma (ver el disparo del draw más abajo). El sonido/clip de recarga ya
+  // no usa flanco muestreado: sale del retorno booleano de startReload().
+  let lastShownSlug: string | null = null
   let tiempoVfxS = 0
 
   // Scratch preasignado para proyectar el punto de impacto a pantalla
@@ -1250,7 +1250,19 @@ export function createGame(
           debugFireHeld = held
         },
         onReload(): void {
-          startReload(vmState, rigWeapon)
+          // Mismo productor de evento que el camino de juego (ver el flanco de
+          // recarga en frame()): startReload() devuelve true sólo al arrancar
+          // una recarga nueva, y de ahí salen sonido y clip. Sin esto, al haber
+          // quitado el viejo muestreo de flanco el panel de debug recargaría en
+          // silencio y sin animación. El cuchillo no recarga.
+          if (
+            currentSlug !== null &&
+            !isMeleeSlug(currentSlug) &&
+            startReload(vmState, rigWeapon)
+          ) {
+            weaponAudio.playReload(ARCHETYPES[resolveArchetypeId(currentSlug)].class)
+            viewmodel.playClip('reload', vmState.reloadTime)
+          }
         },
         setAds(held: boolean): void {
           debugAdsHeld = held
@@ -1810,32 +1822,24 @@ export function createGame(
       }
       profiler.end('feedback')
 
-      // R sostenida: startReload() es un no-op mientras ya hay una recarga
-      // en curso (ver el comentario de esa función en rig.ts), así que
-      // llamarla en cada frame con la tecla sostenida no la deja en
-      // deadlock. Corre DESPUÉS de que combat ya leyó reloading arriba,
-      // por la razón de encima.
-      if (input.reloadHeld) startReload(vmState, rigWeapon)
-
-      // Flanco de subida de la recarga: startReload() es idempotente y no
-      // avisa si arrancó una nueva, así que el sonido se cuelga de la
-      // transición false -> true. Sin esto, con R sostenida el sample se
-      // relanzaría en cada frame.
-      if (vmState.reloading && !recargando) {
+      // R sostenida: startReload() es un no-op mientras ya hay una recarga en
+      // curso (ver el comentario de esa función en rig.ts), así que llamarla en
+      // cada frame con la tecla sostenida no la deja en deadlock. Corre DESPUÉS
+      // de que combat ya leyó reloading arriba, a propósito.
+      //
+      // startReload() devuelve true SÓLO en el flanco de una recarga nueva. Ese
+      // retorno es el productor del evento: el sonido y el clip salen de acá y
+      // NO de muestrear vmState.reloading frame a frame, porque con R sostenida
+      // el sampler pierde el flanco (reloading vuelve a false al final de un
+      // frame dentro de stepViewmodel y a true al inicio del siguiente, y el
+      // false intermedio no se observa) y la recarga 2, 3… quedaba muda y sin
+      // animar. El `&&` corto no llama a startReload() si no se apretó recargar.
+      if (input.reloadHeld && startReload(vmState, rigWeapon)) {
         weaponAudio.playReload(archetype.class)
         // La recarga de CS se estira o comprime al `reloadTime` del arma para
         // que la animación y el estado de juego terminen juntos (ver playClip).
         viewmodel.playClip('reload', vmState.reloadTime)
       }
-      recargando = vmState.reloading
-
-      // Draw A VELOCIDAD NATIVA (segundos = 0), no comprimido a `drawTime`
-      // (0,2-0,5 s por clase): los clips de sacar el arma miden 1,0-1,8 s, así
-      // que estirarlos al drawTime de clase los corría a 2,2x-9,2x y el "sacar"
-      // era un parpadeo. drawTime es puramente cosmético (no gatea el combate),
-      // igual que en el cuchillo, así que se reproduce como lo animaron.
-      if (vmState.drawing && !dibujando) viewmodel.playClip('draw', 0)
-      dibujando = vmState.drawing
 
       finalPitch = cameraPitch(combatState, input.pitch)
       finalYaw = cameraYaw(combatState, input.player.yaw)
@@ -1928,22 +1932,26 @@ export function createGame(
         }
       }
 
-      // Draw del cuchillo al equiparlo (espejo del disparo de 'draw' del bloque
-      // de fuego, que acá quedó fuera del alcance de ese `if`).
-      //
-      // A VELOCIDAD NATIVA (segundos = 0), no estirado a `drawTime`: el cuchillo
-      // no tiene arquetipo de fuego propio y hereda el `drawTime` de la clase
-      // inferida (ar, 0,3 s), pero su clip de "sacar" mide ~1 s. Comprimirlo a
-      // 0,3 s lo convertía en un parpadeo (~3,3x). El draw del cuchillo es
-      // puramente cosmético —no hay ventana de juego que dependa de su
-      // duración, a diferencia de la recarga— así que se reproduce como lo
-      // animaron: se saca como un cuchillo, no de un pestañeo.
-      if (vmState.drawing && !dibujando) viewmodel.playClip('draw', 0)
-      dibujando = vmState.drawing
-
       // Sin recoil ni ADS: la cámara final es la del mouse tal cual (finalPitch
       // y finalYaw ya arrancan en input.pitch / input.player.yaw más arriba).
     }
+
+    // Draw por cambio EFECTIVO de arma en pantalla, para AMBAS ramas (fuego y
+    // cuchillo). Se dispara cuando el slug realmente adjunto (viewmodel.attachedSlug,
+    // capturado en shownSlug) cambia respecto al frame anterior Y hay un draw en
+    // curso (vmState.drawing lo pone startDraw al apretar 1/2/3). NO se usa un
+    // flanco de vmState.drawing: al spamear 1/3 antes de que termine el draw
+    // anterior (drawTime 0,2-0,5 s) ese flag nunca vuelve a pasar por false y el
+    // flanco `drawing && !dibujando` no se re-arma, así que el arma nueva aparecía
+    // en idle sin sonar el draw. Comparar el slug en pantalla cubre tanto el
+    // attach instantáneo desde caché como el que llega tarde por carga async.
+    // Velocidad nativa (0), mismo criterio que la recarga y el cuchillo; playOn
+    // hace action.reset() por llamada, así que cada cambio reinicia el draw
+    // desde el frame 0 aunque spamees.
+    if (shownSlug !== null && shownSlug !== lastShownSlug && vmState.drawing) {
+      viewmodel.playClip('draw', 0)
+    }
+    lastShownSlug = shownSlug
 
     // Resincroniza las hitboxes de torso y cabeza del jugador (ver
     // playerHitboxes arriba: ninguna comparte Vec3 con player.position).
