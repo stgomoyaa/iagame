@@ -50,6 +50,32 @@ export interface WeaponIndexEntry {
   /** Desplazamiento lateral de esa línea. Mismo origen y misma condición. */
   sightLateral?: number
   /**
+   * Profundidad (Z, espacio del modelo) del elemento TRASERO de la mira: el
+   * alza, por donde entra el ojo. El modelo apunta a -Z, así que el alza cae
+   * hacia +Z (lado del jugador). La mide el pipeline (`SightLine.rearZ`) y
+   * SÓLO existe en los modelos de mundo con mira medida (el pack de COD). En
+   * un modelo con la caja simétrica —todos los `c_` de COD salen centrados de
+   * `buildNormalizeMatrix`— el `bounds` no dice dónde está el alza; este campo
+   * sí. Ver `seedAdsOffset`: es lo que ancla el alza cerca del ojo en ADS.
+   */
+  sightRearZ?: number
+  /** Profundidad del elemento DELANTERO de la mira (punto de mira, hacia -Z).
+   *  Mismo origen. La usa `vfx.ts` como boca de cañón cuando no hay tag_flash. */
+  sightFrontZ?: number
+  /**
+   * Boca de cañón en el espacio del modelo: de dónde nace el fogonazo. La mide
+   * el pipeline (`muzzleFromGeometry`, centroide del frente del arma) y SÓLO
+   * existe en los modelos de mundo del pack de COD. Su ausencia (CS y CC0) hace
+   * que el renderer caiga a su heurístico de caja, que en esos casos —CS son
+   * viewmodels con brazos, donde el centroide del frente no es confiable— es lo
+   * correcto. Ver `feedback/vfx-renderer.ts`. El fogonazo salía "desde abajo"
+   * porque el heurístico ponía la boca en el CENTRO vertical de la caja, y el
+   * cañón no vive ahí.
+   */
+  muzzleX?: number
+  muzzleY?: number
+  muzzleZ?: number
+  /**
    * El `.glb` es un VIEWMODEL de Source (`v_`): trae esqueleto, brazos
    * modelados y las secuencias originales del juego.
    *
@@ -134,6 +160,32 @@ const HIP_SIZE_BACK_FRAC = 0.59
 // 0.17. Si algún día se agrega una segunda arma tuneada a mano, conviene
 // repetir esta resta y promediar en vez de confiar en un solo punto.
 const ADS_PULL_BACK = 0.17
+
+// Distancia (metros) del OJO al ALZA cuando el arma está en la mira. Es la
+// pieza que le faltaba al ADS del pack de COD.
+//
+// El problema: las 69 de COD salen de `buildNormalizeMatrix` CENTRADAS en su
+// caja (min = -max en los tres ejes), así que su `bounds` es simétrico y no
+// dice DÓNDE dentro del arma está el alza. La rama vieja ponía el arma a
+// `hipZ - ADS_PULL_BACK` del ojo —0,55 m para casi todo el pack—, y a 0,55 m el
+// alza de un fusil de 0,85 m queda a más de 30 cm del ojo: el arma llena media
+// pantalla, mirás el TECHO del cajón y no ves a través del alza. Es exactamente
+// la foto que mandó el dueño.
+//
+// El arreglo no adivina: `sightRearZ` (medido por el pipeline) dice en qué Z
+// del modelo está el alza, y el arma se corre para dejar ese alza a
+// EYE_TO_REAR_SIGHT del ojo, como cuando pegás la cara al arma de verdad. El
+// punto de mira delantero, más lejos sobre el mismo eje, cae detrás; el ojo
+// mira a través del alza hacia él, que es el sight picture de Call of Duty.
+//
+// El valor sale de mirar: con el alza del ACR (sightRearZ 0,239) a esta
+// distancia el punto de mira queda centrado dentro del anillo del alza, igual
+// que en la referencia. Un solo número sirve para las 69 porque cada arma trae
+// su propio `sightRearZ`: un bullpup (alza casi en el hombro, rearZ negativo)
+// se acerca; un sniper largo (rearZ grande) se aleja. Lo que es constante entre
+// armas es la distancia ojo-alza, no la posición del arma, igual que
+// HIP_ARM_BACK y ADS_PULL_BACK son constantes por la misma razón.
+const EYE_TO_REAR_SIGHT = 0.11
 
 /**
  * Tamaño característico del modelo: el eje más largo de su bounding box.
@@ -260,10 +312,20 @@ export function seedAdsOffset(entry: WeaponIndexEntry): Transform {
   // el cañón, que es exactamente el síntoma que se veía: "el arma tapa el
   // centro".
   if (entry.sightHeight !== undefined) {
+    // Z: si el pipeline midió dónde está el alza (`sightRearZ`), se ancla el
+    // alza a EYE_TO_REAR_SIGHT del ojo (ver la constante). Esto es lo que
+    // arregla el ADS del pack de COD: `hipZ - ADS_PULL_BACK` dejaba el arma a
+    // ~0,55 m y se veía el techo del cajón, no la mira. El fallback a la
+    // fórmula vieja cubre un índice sin `sightRearZ` (p.ej. anterior a este
+    // arreglo): no rompe, sólo no corrige.
+    const z =
+      entry.sightRearZ !== undefined
+        ? entry.sightRearZ + EYE_TO_REAR_SIGHT
+        : hipZ - ADS_PULL_BACK
     return {
       x: -(entry.sightLateral ?? 0),
       y: -entry.sightHeight,
-      z: hipZ - ADS_PULL_BACK,
+      z,
       rx: 0,
       ry: 0,
       rz: 0,

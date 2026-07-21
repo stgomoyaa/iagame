@@ -108,4 +108,61 @@ describe('seed: offsets heurísticos desde el bounding box', () => {
     const e = entry('assaultrifle-1')
     expect(seedWeaponOffsets(e)).toEqual(seedWeaponOffsets(e))
   })
+
+  // Entrada sintética estilo pack de COD: caja simétrica (min = -max, como
+  // salen de buildNormalizeMatrix) con mira medida y su profundidad de alza.
+  function codEntry(over: Partial<WeaponIndexEntry>): WeaponIndexEntry {
+    return {
+      slug: 'test-cod',
+      name: 'Test (COD)',
+      triangles: 1000,
+      bounds: { min: [-0.05, -0.15, -0.425], max: [0.05, 0.15, 0.425] },
+      muzzleConfidence: 1,
+      upAxisConfidence: 1,
+      needsManualReview: false,
+      origin: 'local',
+      sightHeight: 0.15,
+      sightLateral: 0,
+      sightRearZ: 0.23,
+      ...over,
+    }
+  }
+
+  it('ADS con sightRearZ ancla el alza a distancia fija del ojo: z = sightRearZ + constante', () => {
+    // El fix del ADS de COD. La caja es simétrica así que su centro no dice
+    // dónde está el alza; sightRearZ sí. El arma se posa para dejar el alza a
+    // ~11 cm del ojo. El world-z del alza es -z + sightRearZ, y tiene que caer
+    // en ese entorno pegado al ojo, NO a los ~0.55 m del heurístico viejo.
+    const cerca = seedAdsOffset(codEntry({ sightRearZ: 0.23 }))
+    const worldRearZ = -cerca.z + 0.23
+    expect(worldRearZ).toBeGreaterThan(-0.16)
+    expect(worldRearZ).toBeLessThan(-0.06)
+
+    // Falsación: un alza en otra Z tiene que dar OTRA z de arma, moviéndose
+    // exactamente lo mismo que se movió el alza (misma distancia al ojo). Si la
+    // fórmula ignorara sightRearZ (el bug), las dos z serían iguales.
+    const lejos = seedAdsOffset(codEntry({ sightRearZ: 0.43 }))
+    expect(lejos.z - cerca.z).toBeCloseTo(0.2, 10)
+  })
+
+  it('ADS con alza en Z negativa (bullpup) acerca el arma al ojo: z chica, incluso <0', () => {
+    // Un bullpup tiene el alza casi en el hombro (sightRearZ negativa). El
+    // arma tiene que acercarse mucho, no quedar plantada a distancia de rifle.
+    const bullpup = seedAdsOffset(codEntry({ sightRearZ: -0.05 }))
+    const rifle = seedAdsOffset(codEntry({ sightRearZ: 0.23 }))
+    expect(bullpup.z).toBeLessThan(rifle.z)
+    // El world-z del alza queda igual de pegado al ojo que en el rifle: es lo
+    // que garantiza el mismo sight picture para armas de largo distinto.
+    expect(-bullpup.z + -0.05).toBeCloseTo(-rifle.z + 0.23, 10)
+  })
+
+  it('sin sightRearZ (índice viejo o CC0) el ADS cae al heurístico previo, no rompe', () => {
+    const conRear = seedAdsOffset(codEntry({ sightRearZ: 0.23 }))
+    const sinRear = seedAdsOffset(codEntry({ sightRearZ: undefined }))
+    // El fallback usa hipZ - ADS_PULL_BACK, que para esta caja simétrica de
+    // 0.85 m da ~0.55: mucho más lejos que el ancla del alza. Son distintos y
+    // el fallback es el más lejano.
+    expect(sinRear.z).toBeGreaterThan(conRear.z)
+    expect(sinRear.y).toBe(conRear.y) // la altura no depende de sightRearZ
+  })
 })
