@@ -51,6 +51,33 @@ describe('seed: offsets heurísticos desde el bounding box', () => {
     }
   })
 
+  it('un arma LOCAL (CS nativa o COD injertada con brazos) se posa en cadera NEUTRA, no con el empujón de mundo', () => {
+    // El injerto de brazos (viewmodel/graft.ts) convierte a las 69 de COD en
+    // viewmodels ya posados que cuelgan del ojo del jugador, igual que las de
+    // CS. La heurística de mundo (empujar abajo/derecha/atrás) sólo las corría
+    // de donde ya estaban bien y estiraba los brazos (foto del dueño). La
+    // semilla correcta para TODO lo local es cero.
+    const csNativa = seedHipOffset({
+      slug: 'ak47', name: 'AK-47 (CS)', triangles: 1, upAxisConfidence: 1,
+      muzzleConfidence: 1, needsManualReview: false, origin: 'local', viewmodel: true,
+      bounds: { min: [-0.05, -0.15, -0.42], max: [0.05, 0.15, 0.42] },
+    })
+    // Una de COD: local pero SIN viewmodel === true (el flag no lo trae; los
+    // brazos se los pone el renderer). Igual tiene que salir neutra.
+    const codInjertada = seedHipOffset({
+      slug: 'cod4_ak47', name: 'AK-47 (COD)', triangles: 1, upAxisConfidence: 1,
+      muzzleConfidence: 1, needsManualReview: false, origin: 'local',
+      bounds: { min: [-0.05, -0.15, -0.42], max: [0.05, 0.15, 0.42] },
+    })
+    for (const hip of [csNativa, codInjertada]) {
+      expect(hip).toEqual({ x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 })
+    }
+    // Y una CC0 (modelo de mundo sin brazos) SÍ conserva el empujón: no se toca.
+    const cc0 = seedHipOffset(entry('assaultrifle-1'))
+    expect(cc0.x).toBeGreaterThan(0)
+    expect(cc0.z).toBeGreaterThan(0)
+  })
+
   it('la pose de ADS queda centrada horizontalmente (x = 0)', () => {
     for (const slug of ['pistol-1', 'assaultrifle-1', 'bullpup-1']) {
       expect(seedAdsOffset(entry(slug)).x, slug).toBe(0)
@@ -156,13 +183,18 @@ describe('seed: offsets heurísticos desde el bounding box', () => {
     expect(-bullpup.z + -0.05).toBeCloseTo(-rifle.z + 0.23, 10)
   })
 
-  it('sin sightRearZ (índice viejo o CC0) el ADS cae al heurístico previo, no rompe', () => {
+  it('sin sightRearZ (índice viejo) el ADS cae a un fallback que no rompe, distinto del ancla', () => {
     const conRear = seedAdsOffset(codEntry({ sightRearZ: 0.23 }))
     const sinRear = seedAdsOffset(codEntry({ sightRearZ: undefined }))
-    // El fallback usa hipZ - ADS_PULL_BACK, que para esta caja simétrica de
-    // 0.85 m da ~0.55: mucho más lejos que el ancla del alza. Son distintos y
-    // el fallback es el más lejano.
-    expect(sinRear.z).toBeGreaterThan(conRear.z)
+    // Sin alza medida no se puede anclar y el ADS cae a `hipZ - ADS_PULL_BACK`.
+    // Para un arma LOCAL (injertada con brazos) la cadera ahora es NEUTRA
+    // (hipZ = 0, ver seedHipOffset), así que el fallback acerca el arma al ojo
+    // por ADS_PULL_BACK en vez de dejarla a distancia de rifle. Es un caso
+    // muerto en la práctica —las 69 de COD SÍ traen sightRearZ—; el test sólo
+    // garantiza que un índice viejo no reviente y que el valor sea coherente.
+    expect(Number.isFinite(sinRear.z)).toBe(true)
+    expect(sinRear.z).not.toBeCloseTo(conRear.z, 5) // distinto del anclado
+    expect(sinRear.z).toBeLessThan(0) // pull hacia el ojo desde la cadera neutra
     expect(sinRear.y).toBe(conRear.y) // la altura no depende de sightRearZ
   })
 })

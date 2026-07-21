@@ -220,8 +220,23 @@ function characteristicSize(bounds: WeaponBounds): number {
 const POSE_NEUTRA: Transform = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 }
 
 export function seedHipOffset(entry: WeaponIndexEntry): Transform {
-  // Un viewmodel de Source ya viene posado: la semilla correcta es no moverlo.
-  if (entry.viewmodel === true) return { ...POSE_NEUTRA }
+  // Cualquier arma de procedencia LOCAL termina siendo un viewmodel POSADO con
+  // brazos, y para todas la semilla correcta es no moverlas: cero.
+  //
+  // Las de CS ya llegan así (viewmodel === true). A las 69 de COD el renderer
+  // les injerta los brazos de un donante de CS (viewmodel/graft.ts) y pasan a
+  // colgar del ojo del jugador EXACTAMENTE como aquéllas —el arma queda asentada
+  // en las manos del donante—. La heurística de más abajo está pensada para el
+  // otro caso: un modelo de MUNDO suelto (las 40 CC0, sin brazos) al que hay que
+  // empujar abajo/derecha/atrás para fingir que un brazo lo sostiene. Aplicada a
+  // un viewmodel que YA viene posado, ese empujón sólo lo corre de donde estaba
+  // bien: era lo que estiraba los brazos de las de COD y las dejaba chicas y
+  // lejos (arrancaban a ~0.72 m del ojo, abajo y a la derecha, con los brazos
+  // largándose desde el borde inferior para alcanzarlas). Ver docs foto del
+  // dueño (brazos-largos-ak). El injerto usa `origin === 'local'` como
+  // discriminante (viewmodel/renderer.ts → graftedModel), así que la pose usa el
+  // mismo: lo que se injerta con brazos se posa como viewmodel.
+  if (entry.viewmodel === true || entry.origin === 'local') return { ...POSE_NEUTRA }
 
   const { bounds } = entry
   const centerX = (bounds.min[0] + bounds.max[0]) / 2

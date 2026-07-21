@@ -1872,7 +1872,15 @@ export function createGame(
 
       // Draw del cuchillo al equiparlo (espejo del disparo de 'draw' del bloque
       // de fuego, que acá quedó fuera del alcance de ese `if`).
-      if (vmState.drawing && !dibujando) viewmodel.playClip('draw', vmState.drawTime)
+      //
+      // A VELOCIDAD NATIVA (segundos = 0), no estirado a `drawTime`: el cuchillo
+      // no tiene arquetipo de fuego propio y hereda el `drawTime` de la clase
+      // inferida (ar, 0,3 s), pero su clip de "sacar" mide ~1 s. Comprimirlo a
+      // 0,3 s lo convertía en un parpadeo (~3,3x). El draw del cuchillo es
+      // puramente cosmético —no hay ventana de juego que dependa de su
+      // duración, a diferencia de la recarga— así que se reproduce como lo
+      // animaron: se saca como un cuchillo, no de un pestañeo.
+      if (vmState.drawing && !dibujando) viewmodel.playClip('draw', 0)
       dibujando = vmState.drawing
 
       // Sin recoil ni ADS: la cámara final es la del mouse tal cual (finalPitch

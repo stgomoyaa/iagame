@@ -30,6 +30,15 @@ export interface IndexEntry {
    */
   upAxisConfidence: number
   needsManualReview: boolean
+  /**
+   * Boca de cañón medida (`muzzleFromGeometry`), en el espacio del modelo
+   * normalizado. La usa `feedback/vfx-renderer.ts` para nacer el fogonazo sobre
+   * el eje del ánima en vez del centro de la caja. Opcional: sólo la traen los
+   * modelos de mundo (CC0 y el pack de COD), no los viewmodels de CS.
+   */
+  muzzleX?: number
+  muzzleY?: number
+  muzzleZ?: number
 }
 
 /**
