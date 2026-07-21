@@ -7,6 +7,8 @@ import {
   REAL_RECOIL_PATTERNS,
   recoilPatternGame,
   resolveRecoilPattern,
+  weaponRecoilVariation,
+  weaponViewKick,
 } from '@/game/weapons/recoil-patterns'
 import { SOURCE_WEAPONS_BY_SLUG } from '@/game/weapons/source-catalog'
 
@@ -180,17 +182,25 @@ describe('resolveRecoilPattern: respaldo por arquetipo', () => {
     expect(resolveRecoilPattern('ak47', ar1)).not.toBe(ar1.recoil.pattern)
   })
 
-  it('un arma CC0 (sin contraparte real) cae al patrón generado de su arquetipo', () => {
+  it('un arma CC0 (sin contraparte real) recibe el del arquetipo VARIADO por arma', () => {
     const ar1 = ARCHETYPES['ar-1']
-    expect(resolveRecoilPattern('assaultrifle-1', ar1)).toBe(ar1.recoil.pattern)
+    const p = resolveRecoilPattern('assaultrifle-1', ar1)
+    // Ya NO es el patrón compartido tal cual (ese era el bug de los clones):
+    // es una variación por slug derivada de él (mismo largo, disparo 0 en cero,
+    // subida monótona). Ver weaponRecoilVariation.
+    expect(p).not.toBe(ar1.recoil.pattern)
+    expect(p.length).toBe(ar1.recoil.pattern.length)
+    expect(p[0]).toEqual([0, 0])
   })
 
-  it('un arma local sin forma aprendible (AWP) también cae al generado', () => {
+  it('un arma local sin forma aprendible (AWP) también recibe el del arquetipo variado', () => {
     const bolt = ARCHETYPES['sniper-bolt']
-    expect(resolveRecoilPattern('awp', bolt)).toBe(bolt.recoil.pattern)
+    const p = resolveRecoilPattern('awp', bolt)
+    expect(p).not.toBe(bolt.recoil.pattern)
+    expect(p.length).toBe(bolt.recoil.pattern.length)
   })
 
-  it('sin slug (bots, que eligen por arquetipo) devuelve el del arquetipo', () => {
+  it('sin slug (bots, que eligen por arquetipo) devuelve el del arquetipo sin variar', () => {
     const lmg = ARCHETYPES.lmg
     expect(resolveRecoilPattern(null, lmg)).toBe(lmg.recoil.pattern)
   })
@@ -205,3 +215,101 @@ function indexOfMax(values: number[]): number {
   for (let i = 1; i < values.length; i++) if (values[i] > values[best]) best = i
   return best
 }
+
+describe('diversidad de retroceso por arma (las que NO tienen patrón real dejan de ser clones)', () => {
+  const ar1 = ARCHETYPES['ar-1']
+
+  it('weaponRecoilVariation es determinista: mismo slug, misma variación', () => {
+    const a = weaponRecoilVariation('cod-acr')
+    const b = weaponRecoilVariation('cod-acr')
+    expect(a).toEqual(b)
+    expect(a).not.toBeNull()
+  })
+
+  it('dos armas distintas del mismo arquetipo tienen variación distinta', () => {
+    const a = weaponRecoilVariation('cod-acr')!
+    const b = weaponRecoilVariation('cod-scarh')!
+    // al menos uno de los tres factores difiere (en la práctica los tres)
+    const distinto =
+      a.climbFactor !== b.climbFactor ||
+      a.driftFactor !== b.driftFactor ||
+      a.kickFactor !== b.kickFactor
+    expect(distinto).toBe(true)
+  })
+
+  it('las armas CON patrón real no se tocan: variación null y patrón intacto', () => {
+    expect(weaponRecoilVariation('ak47')).toBeNull()
+    expect(resolveRecoilPattern('ak47', ar1)).toBe(REAL_RECOIL_PATTERNS['ak47'].points)
+  })
+
+  it('un arma sin patrón real recibe el del arquetipo VARIADO (no el compartido tal cual)', () => {
+    const varied = resolveRecoilPattern('cod-acr', ar1)
+    expect(varied).not.toBe(ar1.recoil.pattern)
+    // El disparo 0 sigue en cero exacto: el primer tiro sigue preciso.
+    expect(varied[0][0]).toBe(0)
+    expect(varied[0][1]).toBe(0)
+    // La subida sigue monótona no decreciente (climbFactor > 0 la preserva).
+    for (let i = 1; i < varied.length; i++) {
+      expect(varied[i][1]).toBeGreaterThanOrEqual(varied[i - 1][1])
+    }
+    // Tiene el mismo largo que el patrón base.
+    expect(varied.length).toBe(ar1.recoil.pattern.length)
+  })
+
+  it('dos armas sin patrón real del mismo arquetipo resuelven patrones distintos', () => {
+    const a = resolveRecoilPattern('cod-acr', ar1)
+    const b = resolveRecoilPattern('cod-scarh', ar1)
+    // difieren en algún punto (climb y/o drift escalados distinto)
+    const iguales = a.length === b.length && a.every((p, i) => p[0] === b[i][0] && p[1] === b[i][1])
+    expect(iguales).toBe(false)
+  })
+
+  it('resolveRecoilPattern cachea: el mismo slug devuelve la misma referencia', () => {
+    expect(resolveRecoilPattern('cod-acr', ar1)).toBe(resolveRecoilPattern('cod-acr', ar1))
+  })
+
+  it('weaponViewKick escala el golpe por arma sin patrón real, y no toca las reales', () => {
+    const base = ar1.recoil.viewKick
+    expect(weaponViewKick('ak47', base)).toBe(base) // real: sin cambio
+    const escalado = weaponViewKick('cod-acr', base)
+    expect(escalado).not.toBe(base)
+    // dentro de la banda [0.82, 1.18] * base
+    expect(escalado).toBeGreaterThanOrEqual(base * 0.82 - 1e-9)
+    expect(escalado).toBeLessThanOrEqual(base * 1.18 + 1e-9)
+  })
+})
+
+describe('trazador: la variación se reparte de verdad sobre el arsenal real', () => {
+  it('dentro de un arquetipo, las armas sin patrón real cubren rango de climb, ambas direcciones de drift y rango de kick', () => {
+    // Armas del catálogo que NO tienen patrón real (COD + las que no traen
+    // forma medida): las que antes eran clones de su arquetipo.
+    const grupos = new Map<string, { slug: string; v: NonNullable<ReturnType<typeof weaponRecoilVariation>> }[]>()
+    for (const w of SOURCE_WEAPONS_BY_SLUG.values()) {
+      const v = weaponRecoilVariation(w.slug)
+      if (v === null) continue
+      const g = grupos.get(w.archetype) ?? []
+      g.push({ slug: w.slug, v })
+      grupos.set(w.archetype, g)
+    }
+    // El arquetipo con más armas sin patrón real: el caso que más importa
+    // (era el de más clones).
+    let mayor: [string, typeof grupos extends Map<string, infer T> ? T : never] | null = null
+    for (const [id, g] of grupos) if (mayor === null || g.length > mayor[1].length) mayor = [id, g]
+    expect(mayor).not.toBeNull()
+    const [id, g] = mayor!
+    if (g.length < 3) return // arsenal público chico: nada que afirmar
+    const climbs = g.map((x) => x.v.climbFactor)
+    const kicks = g.map((x) => x.v.kickFactor)
+    const hayIzq = g.some((x) => x.v.driftFactor < 0)
+    const hayDer = g.some((x) => x.v.driftFactor > 0)
+    const rangoClimb = Math.max(...climbs) - Math.min(...climbs)
+    const rangoKick = Math.max(...kicks) - Math.min(...kicks)
+    console.log(
+      `\narquetipo ${id}: ${g.length} armas sin patrón real | climb ${Math.min(...climbs).toFixed(2)}-${Math.max(...climbs).toFixed(2)} | drift izq/der ${g.filter((x) => x.v.driftFactor < 0).length}/${g.filter((x) => x.v.driftFactor > 0).length} | kick ${Math.min(...kicks).toFixed(2)}-${Math.max(...kicks).toFixed(2)}\n`,
+    )
+    // Con >=3 armas la variación tiene que haber separado de verdad:
+    expect(rangoClimb).toBeGreaterThan(0.05) // no todas el mismo climb
+    expect(rangoKick).toBeGreaterThan(0.03)
+    expect(hayIzq && hayDer).toBe(true) // no todas tiran para el mismo lado
+  })
+})

@@ -58,7 +58,7 @@ import {
   type WeaponXpOutcome,
 } from '@/game/progression/weapon-xp'
 import { getWeaponVisual, resolveArchetypeId, weaponIndex } from '@/game/weapons/registry'
-import { resolveRecoilPattern } from '@/game/weapons/recoil-patterns'
+import { resolveRecoilPattern, weaponViewKick } from '@/game/weapons/recoil-patterns'
 import { createRigWeapon, syncRigWeapon } from '@/game/weapons/viewmodel/adapt'
 import { createViewmodelRenderer } from '@/game/weapons/viewmodel/renderer'
 import { createMagTransform, magazinePose } from '@/game/weapons/viewmodel/reload'
@@ -1755,13 +1755,18 @@ export function createGame(
       // frame: un frame largo que se puso al día con más de un disparo
       // (fire-control.ts) tiene que sentir cada uno, no sólo el último.
       profiler.begin('feedback')
+      // Golpe de vista efectivo del arma: el del arquetipo escalado por la
+      // variación por arma (weaponViewKick, cacheado por slug) para que dos
+      // armas del mismo arquetipo no pateen idéntico. Se resuelve una vez por
+      // frame, fuera del bucle de disparos.
+      const viewKickArma = weaponViewKick(shownSlug, archetype.recoil.viewKick)
       for (let i = 0; i < shotsFired; i++) {
         fire(vmState, rigWeapon)
         // El golpe de vista (canal de sensación) es POR ARMA: la escopeta
         // patea toda la cara, la SMG apenas empuja. A diferencia del patrón
         // de apuntado (que arranca en cero para que el primer tiro sea
         // preciso), este golpe patea en CADA disparo, incluido el primero.
-        onShotFired(feedbackState, archetype.recoil.viewKick)
+        onShotFired(feedbackState, viewKickArma)
 
         // Audio y VFX del disparo, en el MISMO frame en que el disparo se
         // resolvió: nada de esto se encola ni se difiere. El sample arranca
