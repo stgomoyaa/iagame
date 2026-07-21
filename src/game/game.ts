@@ -95,7 +95,7 @@ import {
   type MeleeResult,
   type MeleeState,
 } from '@/game/combat/melee'
-import { getMeleeArchetype, isMeleeSlug, KNIFE_ARCHETYPE } from '@/game/weapons/melee-catalog'
+import { getMeleeArchetype, isMeleeSlug, KNIFE_ARCHETYPE, MELEE_WEAPONS } from '@/game/weapons/melee-catalog'
 import { vec3, type Vec3 } from '@/game/math/vec3'
 import type { ScreenPoint } from '@/game/engine/renderer'
 import { applyHit, createDefaultTargetDefs, createTargets, stepTargets } from '@/game/targets/targets'
@@ -175,6 +175,19 @@ import { createMatchTuningPanel } from '@/game/match/tuning-panel'
 import { isEnemy, PLAYER_ID, teamForParticipant, type MatchMode } from '@/game/match/types'
 
 /**
+ * Ranura en mano del jugador. Amplía las dos ranuras del loadout persistido
+ * (primary/secondary, elegibles en la armería) con `'melee'`: el CUCHILLO, que
+ * es un slot 3 FIJO -- siempre presente, no se elige ni se desbloquea (como en
+ * CS/COD). Su slug no vive en el loadout guardado porque no es una decisión del
+ * jugador; sale de la constante de abajo.
+ */
+export type RanuraEnMano = LoadoutSlot | 'melee'
+
+/** Slug del cuchillo del slot 3 fijo. Sale del catálogo melee (la primera arma
+ *  melee del catálogo), no se hardcodea acá el nombre del archivo. */
+const MELEE_SLUG: string = MELEE_WEAPONS[0]?.slug ?? 'knife_t'
+
+/**
  * Lo que el HUD de combate necesita saber, en un objeto plano que el motor
  * RELLENA (no devuelve). Es un `out` param preasignado por quien lee, igual
  * que `ShotResult` o `VmTransform`: el HUD lo lee una vez por frame y no
@@ -201,11 +214,13 @@ export interface HudSnapshot {
   /** Nombre de catálogo del arma equipada ("AK-47"), o cadena vacía si la
    *  ranura quedó vacía. */
   weaponName: string
-  /** Ranura equipada, para que el HUD marque cuál de las dos está en mano. */
-  slot: LoadoutSlot
-  /** Nombres de las dos ranuras, para el selector rápido del HUD. */
+  /** Ranura equipada, para que el HUD marque cuál está en mano (incluye 'melee'). */
+  slot: RanuraEnMano
+  /** Nombres de las tres ranuras, para el selector rápido del HUD. `meleeName`
+   *  es fijo (el cuchillo del slot 3 siempre presente). */
   primaryName: string
   secondaryName: string
+  meleeName: string
 }
 
 export function createHudSnapshot(): HudSnapshot {
@@ -221,6 +236,7 @@ export function createHudSnapshot(): HudSnapshot {
     slot: 'primary',
     primaryName: '',
     secondaryName: '',
+    meleeName: '',
   }
 }
 
@@ -331,8 +347,8 @@ export interface Game {
   /** Loadout vivo de la partida. Referencia de sólo lectura para la UI: se
    *  cambia por `equipEnPartida`, nunca escribiéndolo. */
   readonly loadout: Loadout
-  /** Ranura en mano ahora mismo. */
-  readonly slotEquipado: LoadoutSlot
+  /** Ranura en mano ahora mismo (incluye 'melee', el cuchillo del slot 3). */
+  readonly slotEquipado: RanuraEnMano
 
   /**
    * Cambia el arma de una ranura CON LA PARTIDA CORRIENDO (menú de pausa) y
@@ -341,8 +357,8 @@ export interface Game {
    * en la armería, tomada sin salir del juego.
    */
   equipEnPartida(slot: LoadoutSlot, slug: string): void
-  /** Cambia de ranura sin cambiar de arma (teclas 1 y 2, y el HUD). */
-  equiparRanura(slot: LoadoutSlot): void
+  /** Cambia de ranura sin cambiar de arma (teclas 1, 2 y 3 -- 3 = cuchillo -- y el HUD). */
+  equiparRanura(slot: RanuraEnMano): void
 }
 
 /**
@@ -1076,7 +1092,7 @@ export function createGame(
     }
   }
 
-  let currentSlot: LoadoutSlot = 'primary'
+  let currentSlot: RanuraEnMano = 'primary'
   let currentSlug = loadout.primary.slug ?? loadout.secondary.slug ?? weaponIndex()[0]?.slug ?? null
 
   /**
@@ -1088,13 +1104,15 @@ export function createGame(
    * reinicie la animación de draw en cada pulsación, así que no se saca: se
    * hace saltar explícitamente desde equipEnPartida.
    */
-  function equipSlot(slot: LoadoutSlot, forzar = false): void {
-    const slug = loadout[slot].slug
+  function equipSlot(slot: RanuraEnMano, forzar = false): void {
+    // Slot 3 = cuchillo FIJO: su slug es la constante MELEE_SLUG, no algo del
+    // loadout persistido (no se elige). Sin skin: el cuchillo base no la tiene.
+    const slug = slot === 'melee' ? MELEE_SLUG : loadout[slot].slug
     if (slug === null) return
     if (!forzar && slug === currentSlug) return
     currentSlot = slot
     currentSlug = slug
-    viewmodel.setSkin(skinForSlot(loadout, slot))
+    viewmodel.setSkin(slot === 'melee' ? null : skinForSlot(loadout, slot))
     viewmodel.setWeaponSlug(slug)
     // Bajar el sonido propio del arma al equiparla, no al dispararla: así
     // el primer tiro ya sale con su firma sonora en vez de con el sample
@@ -1147,6 +1165,9 @@ export function createGame(
   let hudMagazine = cargadorDe(currentSlug)
   let hudPrimaryName = nombreDeArma(loadout.primary.slug)
   let hudSecondaryName = nombreDeArma(loadout.secondary.slug)
+  // Nombre del cuchillo del slot 3: es FIJO (siempre el mismo), así que se
+  // resuelve una vez y no se recalcula en refrescarDatosDeHud.
+  const hudMeleeName = nombreDeArma(MELEE_SLUG)
 
   function refrescarDatosDeHud(): void {
     hudWeaponName = nombreDeArma(currentSlug)
@@ -1311,6 +1332,9 @@ export function createGame(
     if (paused) return
     if (e.code === 'Digit1') equipSlot(LOADOUT_SLOTS[0])
     else if (e.code === 'Digit2') equipSlot(LOADOUT_SLOTS[1])
+    // Tecla 3 = cuchillo. Slot FIJO, siempre presente (como en CS/COD): no
+    // depende del loadout ni del nivel, equipSlot('melee') usa MELEE_SLUG.
+    else if (e.code === 'Digit3') equipSlot('melee')
   }
 
   function onDebugKeyDown(e: KeyboardEvent): void {
@@ -2326,8 +2350,11 @@ export function createGame(
             attachedSlug: viewmodel.attachedSlug,
             primary: { ...loadout.primary },
             secondary: { ...loadout.secondary },
-            skin: skinForSlot(loadout, currentSlot)?.name ?? null,
-            skinRareza: skinForSlot(loadout, currentSlot)?.rarity ?? null,
+            // El slot melee (cuchillo) no tiene skin: skinForSlot sólo entiende
+            // las dos ranuras del loadout persistido.
+            skin: currentSlot === 'melee' ? null : skinForSlot(loadout, currentSlot)?.name ?? null,
+            skinRareza:
+              currentSlot === 'melee' ? null : skinForSlot(loadout, currentSlot)?.rarity ?? null,
           },
           // Último disparo del JUGADOR resuelto (sección "Build" de la
           // tarea): a qué le pegó de verdad, para verificar el combate
@@ -2602,6 +2629,7 @@ export function createGame(
       out.slot = currentSlot
       out.primaryName = hudPrimaryName
       out.secondaryName = hudSecondaryName
+      out.meleeName = hudMeleeName
     },
 
     agregarBot(): boolean {
@@ -2663,7 +2691,7 @@ export function createGame(
       refrescarDatosDeHud()
     },
 
-    equiparRanura(slot: LoadoutSlot): void {
+    equiparRanura(slot: RanuraEnMano): void {
       equipSlot(slot)
     },
   }
