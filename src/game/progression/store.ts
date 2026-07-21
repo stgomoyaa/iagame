@@ -37,7 +37,13 @@ import { HISTORIAL_MAX, type MatchHistoryEntry } from '@/game/progression/histor
 import { RANK_MAX, RANK_MIN, RR_MAXIMO } from '@/game/progression/ranks'
 import { RR, type RankState } from '@/game/progression/rr'
 import { XP_ARMA_MAESTRIA } from '@/game/progression/weapon-xp'
-import { emptyTally, parseTally, sumarTallies, type MedalTally } from '@/game/progression/medals'
+import {
+  emptyTally,
+  parseTally,
+  sumarTallies,
+  xpDeMedallas,
+  type MedalTally,
+} from '@/game/progression/medals'
 
 /**
  * Versión del formato guardado. Si cambia la forma de `ProgressData`, sube
@@ -428,7 +434,21 @@ export function progressWithWeaponXp(
  * justo el tipo de dato falso que no debe existir en este sistema.
  */
 export function progressWithMedals(data: ProgressData, ganadas: MedalTally): ProgressData {
-  return { ...data, medallas: sumarTallies(data.medallas, ganadas) }
+  // Las medallas suman XP DE CUENTA (cada MedalDef tiene su xp en el catálogo,
+  // ver medals.ts). Es la misma escalera de XP que la carrera -- "cuánto
+  // jugaste" -- no el RR ("qué tan bien jugás"). Se acredita ACÁ, en la capa
+  // de medallas, y NO dentro de CareerData: meterlo ahí obligaría a la
+  // simulación de rangos (simulate.ts) a inventar gestas que no tiene, que es
+  // justo el dato falso que este sistema evita. El nivel se deriva del xp
+  // (unlocks.ts: levelForXp), así que se renormaliza el loadout por si este XP
+  // cruza un nivel y abre un arma nueva -- el mismo cuidado que progressWithCareer.
+  const xp = data.xp + xpDeMedallas(ganadas)
+  return {
+    ...data,
+    medallas: sumarTallies(data.medallas, ganadas),
+    xp,
+    loadout: normalizeLoadout(data.loadout, levelForXp(xp), data.skins, data.desbloqueosPermanentes),
+  }
 }
 
 /**

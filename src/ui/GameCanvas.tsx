@@ -10,6 +10,7 @@ import { accountLevel, createProgressStore } from '@/game/progression/store'
 import type { LoadoutSlot } from '@/game/progression/loadout'
 import { loadLocalWeapons } from '@/game/weapons/registry'
 import { Killfeed } from '@/ui/Killfeed'
+import { MedalAvisos } from '@/ui/MedalAvisos'
 import { Scoreboard } from '@/ui/Scoreboard'
 import { MatchSummary } from '@/ui/MatchSummary'
 import { createHud } from '@/ui/Hud'
@@ -338,6 +339,7 @@ export function GameCanvas() {
       {matchState && (
         <>
           <Killfeed killfeed={matchState.killfeed} />
+          {game && <MedalAvisos tracker={game.medalTracker} />}
           <Scoreboard
             participants={participantesVisibles}
             mode={matchState.mode}
@@ -347,6 +349,7 @@ export function GameCanvas() {
             <MatchSummary
               summary={buildSummary({ ...matchState, participants: participantesVisibles }, MATCH)}
               progress={game?.matchProgress ?? null}
+              medallas={game?.medallasDeLaPartida ?? null}
             />
           )}
         </>
