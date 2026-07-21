@@ -2,7 +2,7 @@ import { sanitizeDt } from '@/game/engine/dt'
 import { TICK_DT } from '@/game/engine/constants'
 import { createFixedLoop } from '@/game/engine/fixed-loop'
 import { createGpuTimer } from '@/game/engine/gpu-timer'
-import { createInputSystem } from '@/game/engine/input'
+import { createInputSystem, clampPitch } from '@/game/engine/input'
 import { createProfiler } from '@/game/engine/profiler'
 import { createRenderer, WORLD_FOV } from '@/game/engine/renderer'
 import { createPostFx } from '@/game/engine/postprocess'
@@ -1756,7 +1756,11 @@ export function createGame(
       profiler.begin('feedback')
       for (let i = 0; i < shotsFired; i++) {
         fire(vmState, rigWeapon)
-        onShotFired(feedbackState)
+        // El golpe de vista (canal de sensación) es POR ARMA: la escopeta
+        // patea toda la cara, la SMG apenas empuja. A diferencia del patrón
+        // de apuntado (que arranca en cero para que el primer tiro sea
+        // preciso), este golpe patea en CADA disparo, incluido el primero.
+        onShotFired(feedbackState, archetype.recoil.viewKick)
 
         // Audio y VFX del disparo, en el MISMO frame en que el disparo se
         // resolvió: nada de esto se encola ni se difiere. El sample arranca
@@ -2099,7 +2103,17 @@ export function createGame(
     stepFeedback(feedbackState, dt)
     profiler.end('feedback')
 
-    gfx.camera.rotation.set(finalPitch, finalYaw, feedbackState.cameraPunch.roll, 'YXZ')
+    // Golpe de vista (canal de sensación, feedback/camera-punch.ts): se SUMA
+    // sólo a la cámara con la que se RENDERIZA, nunca al hitscan — que ya se
+    // resolvió arriba en stepCombat con el apuntado puro (finalPitch/finalYaw
+    // son el jugador + patrón de retroceso, sin este golpe). Por eso las
+    // balas caen exactamente donde apunta el patrón y el golpe es lo que se
+    // SIENTE. clampPitch para que un golpe hacia arriba con la vista ya muy
+    // alta no cruce el tope de pitch. finalPitch/finalYaw quedan intactos por
+    // si algún lector río abajo necesita el apuntado sin el golpe.
+    const kickedPitch = clampPitch(finalPitch + feedbackState.cameraPunch.pitch)
+    const kickedYaw = finalYaw + feedbackState.cameraPunch.yaw
+    gfx.camera.rotation.set(kickedPitch, kickedYaw, feedbackState.cameraPunch.roll, 'YXZ')
 
     // Impacto confirmado contra una diana o un bot real (owner >= 0: golpear
     // el mapa da owner -1, ver combat/shot.ts) -- hitmarker + número de daño
@@ -2500,6 +2514,11 @@ export function createGame(
             health: feedbackState.health.health,
             shakeMagnitude: feedbackState.shake.magnitude,
             cameraPunchRoll: feedbackState.cameraPunch.roll,
+            // Golpe de vista (canal de sensación): pitch/yaw view-only que se
+            // suma a la cámara de render. Expuesto para verificar y tunear el
+            // "pateo" por arma sin pointer lock.
+            cameraKickPitch: feedbackState.cameraPunch.pitch,
+            cameraKickYaw: feedbackState.cameraPunch.yaw,
             hitmarkersActivos: feedbackState.hitmarkers.pool.items.filter((e) => e.active).length,
             numerosDeDanoActivos: feedbackState.damageNumbers.pool.items.filter((e) => e.active)
               .length,

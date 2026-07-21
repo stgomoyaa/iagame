@@ -44,6 +44,16 @@ export interface FeedbackTuning {
   cameraPunchStiffness: number
   cameraPunchDamping: number
 
+  /** Golpe de vista al disparar (canal de SENSACIÓN, view-only, separado del
+   *  apuntado — ver feedback/camera-punch.ts). El impulso de pitch/yaw es POR
+   *  ARMA (archetype.recoil.viewKick); estos son los topes acumulados y la
+   *  fracción lateral, compartidos por todo el arsenal. Usan la misma rigidez
+   *  y amortiguación que el roll (cameraPunchStiffness/Damping). */
+  cameraKickPitchMax: number
+  cameraKickYawMax: number
+  /** Fracción del impulso de pitch que va al yaw (sacudida lateral). */
+  cameraKickLateralFraction: number
+
   /** NDC de shake por punto de daño recibido. */
   shakePerDamage: number
   shakeMax: number
@@ -112,6 +122,10 @@ export const FEEDBACK: FeedbackTuning = {
   cameraPunchMax: degToRad(3.5),
   cameraPunchStiffness: 140,
   cameraPunchDamping: 16,
+
+  cameraKickPitchMax: degToRad(3.5),
+  cameraKickYawMax: degToRad(2.0),
+  cameraKickLateralFraction: 0.4,
 
   shakePerDamage: 0.0022,
   shakeMax: 0.045,

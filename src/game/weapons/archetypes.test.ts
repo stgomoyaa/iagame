@@ -401,3 +401,23 @@ describe('retroceso: forma de la curva (apertura ajustada, rampa, plateau — es
     }
   })
 })
+
+describe('golpe de vista (viewKick): presente y ordenado por carácter de clase', () => {
+  it('todos los arquetipos declaran un viewKick > 0 (todo disparo patea la vista)', () => {
+    for (const a of ARCHETYPE_LIST) {
+      expect(a.recoil.viewKick, a.id).toBeGreaterThan(0)
+    }
+  })
+
+  it('la escopeta y el cerrojo dan el golpe más fuerte; las SMG el más suave', () => {
+    const kick = (id: keyof typeof ARCHETYPES): number => ARCHETYPES[id].recoil.viewKick
+    // Eventos únicos de golpe seco grande.
+    expect(kick('shotgun')).toBeGreaterThan(kick('ar-1'))
+    expect(kick('sniper-bolt')).toBeGreaterThan(kick('ar-1'))
+    expect(kick('sniper-marksman')).toBeGreaterThan(kick('ar-1'))
+    // Cadencia altísima, muchos empujones chicos.
+    expect(kick('smg-1')).toBeLessThan(kick('ar-1'))
+    expect(kick('smg-2')).toBeLessThan(kick('ar-1'))
+    expect(kick('lmg')).toBeLessThan(kick('ar-1'))
+  })
+})
