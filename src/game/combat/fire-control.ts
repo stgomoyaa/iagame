@@ -22,6 +22,12 @@ export interface FireControlState {
   triggerHeldPrev: boolean
   /** Disparos de ráfaga pendientes de la pulsada de gatillo actual. */
   burstRemaining: number
+  /** true SÓLO en el frame en que arranca una ráfaga nueva: combat.ts lo lee
+   *  para reiniciar el índice del patrón de retroceso a 0, así cada ráfaga
+   *  dibuja pattern[0..2] limpio en vez de heredar un índice fraccionario que
+   *  dejaría el primer tiro de la ráfaga en un offset interpolado en vez de
+   *  cero. */
+  burstJustStarted: boolean
   /** Flanco de semi-auto pendiente de dispensar. */
   semiPending: boolean
   wasReloading: boolean
@@ -39,6 +45,7 @@ export function createFireControlState(archetype: WeaponArchetype): FireControlS
     timeSinceLastShot: fireInterval(archetype),
     triggerHeldPrev: false,
     burstRemaining: 0,
+    burstJustStarted: false,
     semiPending: false,
     wasReloading: false,
   }
@@ -50,6 +57,7 @@ export function resetFireControl(state: FireControlState, archetype: WeaponArche
   state.timeSinceLastShot = fireInterval(archetype)
   state.triggerHeldPrev = false
   state.burstRemaining = 0
+  state.burstJustStarted = false
   state.semiPending = false
   state.wasReloading = false
 }
@@ -105,6 +113,8 @@ export function stepFireControl(
   const interval = fireInterval(archetype)
   const pressedEdge = triggerHeld && !state.triggerHeldPrev
   state.triggerHeldPrev = triggerHeld
+  // Señal de "arrancó una ráfaga este frame": se recalcula cada llamada.
+  state.burstJustStarted = false
 
   if (reloading) {
     state.timeSinceLastShot = Math.min(state.timeSinceLastShot + dt, interval)
@@ -113,6 +123,7 @@ export function stepFireControl(
 
   if (archetype.fireMode === 'burst' && pressedEdge && state.burstRemaining === 0) {
     state.burstRemaining = BURST_SHOT_COUNT
+    state.burstJustStarted = true
   }
   if (archetype.fireMode === 'semi' && pressedEdge) {
     state.semiPending = true

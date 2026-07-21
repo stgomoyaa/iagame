@@ -114,6 +114,11 @@ export function stepCombat(
   const reloadJustCompleted = syncReloadState(state.fireControl, archetype, input.reloading)
   if (reloadJustCompleted) resetRecoilPattern(state.recoil)
   const shots = stepFireControl(state.fireControl, archetype, input.triggerHeld, input.reloading, dt)
+  // Cada ráfaga arranca el patrón de retroceso desde cero (pattern[0..2]
+  // limpio): sin esto, una ráfaga que empieza con el índice a medio decaer
+  // (fracción heredada de la anterior) dibuja un offset interpolado raro en la
+  // primera bala en vez de un cero preciso. Ver BurstSpec / fire-control.ts.
+  if (state.fireControl.burstJustStarted) resetRecoilPattern(state.recoil)
 
   // Eje táctico CS/COD: dispersión extra por moverse este frame. Constante
   // dentro del frame (la velocidad no cambia entre disparos del mismo frame),
@@ -137,12 +142,16 @@ export function stepCombat(
     )
   }
 
-  // La recuperación de retroceso y dispersión sólo corre mientras el
-  // jugador NO está activamente sosteniendo el gatillo: mientras lo
-  // sostiene, el patrón/crecimiento de arriba ya son la fuente de verdad
-  // de este frame (ver el comentario de stepRecoilRecovery en recoil.ts).
-  stepRecoilRecovery(state.recoil, archetype, input.triggerHeld, dt)
-  stepSpreadRecovery(state.spread, archetype.recoil.spread, input.triggerHeld, dt)
+  // La recuperación de retroceso y dispersión sólo corre mientras el jugador
+  // NO está DISPARANDO DE VERDAD: sostener el gatillo, o estar a mitad de una
+  // ráfaga. Incluir `burstRemaining > 0` arregla el bug de que un burst TAPEADO
+  // (gatillo soltado apenas arranca) enfriaba el índice ENTRE sus propias
+  // balas, así que la 2da y 3ra salían con offset ~0: tap y hold daban recoils
+  // OPUESTOS. Ahora una ráfaga en curso cuenta como "disparando" pase lo que
+  // pase con el gatillo.
+  const disparando = input.triggerHeld || state.fireControl.burstRemaining > 0
+  stepRecoilRecovery(state.recoil, archetype, disparando, dt)
+  stepSpreadRecovery(state.spread, archetype.recoil.spread, disparando, dt)
 
   return shots
 }

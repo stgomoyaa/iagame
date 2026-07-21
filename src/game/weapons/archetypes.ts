@@ -561,7 +561,18 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
     reload: { tactical: 2.3, empty: 2.9 },
     ads: { time: 0.2, fovScale: 0.88, sensScale: 0.83, speedScale: 0.84 },
     recoil: {
-      pattern: generateRecoilPattern(404, 3, degToRad(5), degToRad(1.5), degToRad(0.3)),
+      // Patrón RECTO con drift chico y CONSISTENTE (una sola dirección), no el
+      // serpenteo senoidal de generateRecoilPattern: con sólo 3 puntos, el
+      // seno saltaba el yaw ~2.8° CAMBIANDO de dirección entre la bala 2 y la
+      // 3, que es lo que se leía como teletransporte. Sube casi recto ~5° en
+      // las 3 balas, con ~0.7° de deriva total hacia un lado. La diversidad
+      // por arma (recoil-patterns.ts) le da a cada FAMAS su propio signo de
+      // deriva y su escala, así que dos no son idénticas.
+      pattern: [
+        [0, 0],
+        [degToRad(0.35), degToRad(2.3)],
+        [degToRad(0.7), degToRad(4.8)],
+      ],
       recovery: 13,
       indexRecoveryTime: 0.38,
       // Ráfaga: cada bala pega más fuerte que un AR auto (menos balas, más daño).
