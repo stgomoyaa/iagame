@@ -265,3 +265,52 @@ describe('viewmodel renderer: viewmodels de Source (esqueleto + clips importados
     expect(() => renderer.advanceAnimation(0.016)).not.toThrow()
   })
 })
+
+describe('viewmodel renderer: ópticas (fase cosmética)', () => {
+  afterEach(() => {
+    loadAsyncMock.mockReset()
+  })
+
+  // La construcción de la mira (malla + retícula por canvas) es un borde con la
+  // GPU y se verifica en el navegador (src/app/optics-harness + capturas), no en
+  // este entorno `node` sin canvas -- mismo criterio que skins/material.ts. Lo
+  // que SÍ se testea acá es el CABLEADO del renderer: que setOptic no rompa sin
+  // arma y que sea un no-op sobre un arma sin ancla (no monta ni toca el canvas).
+
+  it('setOptic sin arma equipada no rompe', () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+    expect(() => renderer.setOptic('optic_reddot_m68')).not.toThrow()
+    expect(() => renderer.setOptic(null)).not.toThrow()
+  })
+
+  it('setOptic sobre un arma SIN ancla es un no-op: no monta nada ni pide el GLB de la óptica', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+
+    // SLUG_A ('assaultrifle-1') es CC0, no está en la tabla de anclas, así que
+    // no puede montar óptica todavía. El montaje corta ANTES de tocar el canvas.
+    loadAsyncMock.mockResolvedValueOnce(fakeGltf())
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+    expect(loadAsyncMock).toHaveBeenCalledTimes(1)
+
+    expect(() => renderer.setOptic('optic_acog')).not.toThrow()
+    // No se pidió ningún GLB de óptica: sin ancla el montaje ni llega a cargar.
+    expect(loadAsyncMock).toHaveBeenCalledTimes(1)
+
+    // El cuerpo del arma no tiene ninguna mira colgada.
+    const modelRoot = renderer.weapon.children[0] as Group
+    let miras = 0
+    modelRoot.traverse((o) => {
+      if (o.name.startsWith('optica:')) miras++
+    })
+    expect(miras).toBe(0)
+  })
+
+  it('cambiar de arma sin óptica elegida no rompe', async () => {
+    const renderer = createViewmodelRenderer(fakeSharedRenderer())
+    loadAsyncMock.mockResolvedValueOnce(fakeGltf())
+    renderer.setWeaponSlug(SLUG_A)
+    await flush()
+    expect(renderer.attachedSlug).toBe(SLUG_A)
+  })
+})
