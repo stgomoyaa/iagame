@@ -158,6 +158,7 @@ import {
   createKillContext,
   createMedalTracker,
   finalizarMedallas,
+  otorgarMedallaManual,
   registrarDanoMedallas,
   registrarKillMedallas,
   registrarReaparicionMedallas,
@@ -2630,6 +2631,11 @@ export function createGame(
           } else if (accion === 'sanar') {
             playerHealth.health = playerHealth.maxHealth
             playerHealth.alive = true
+          } else if (accion === 'medalla') {
+            // a = MedalId del catálogo (0 = primera-sangre). Otorga la medalla
+            // a mano para verificar el aviso in-game y el bloque del resumen
+            // sin grindear la gesta real, mismo espíritu que 'hitmarker'/'danio'.
+            otorgarMedallaManual(medalTracker, a, matchState.elapsedS)
           }
         }
 

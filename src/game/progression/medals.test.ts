@@ -205,12 +205,17 @@ describe('persistencia dentro de ProgressData', () => {
     expect(leido.xp).toBe(1234)
   })
 
-  it('progressWithMedals acumula sobre lo que ya había sin tocar nada más', () => {
+  it('progressWithMedals acumula el tally Y acredita el XP del catálogo (M5)', () => {
     const base = { ...createDefaultProgress(), xp: 999, medallas: { headshot: 3 } }
     const despues = progressWithMedals(base, { headshot: 2, clutch: 1 })
     expect(despues.medallas).toEqual({ headshot: 5, clutch: 1 })
-    expect(despues.xp).toBe(999)
+    // El XP de cuenta sube por el catálogo: headshot 25 x2 + clutch 250 x1 = 300.
+    // Antes este XP no se acreditaba nunca (xpDeMedallas sin caller) -- ésa era
+    // la promesa rota que este fix cierra.
+    expect(despues.xp).toBe(999 + 2 * 25 + 250)
+    // No muta la entrada.
     expect(base.medallas).toEqual({ headshot: 3 })
+    expect(base.xp).toBe(999)
   })
 
   it('el acumulado sobrevive una vuelta completa por JSON', () => {

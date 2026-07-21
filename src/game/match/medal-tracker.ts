@@ -660,6 +660,21 @@ export function listActiveAwardsNewestFirst(state: MedalTrackerState): MedalAwar
 }
 
 /**
+ * Otorga una medalla A MANO, sin pasar por el detector. Sólo para debug/QA
+ * (game.ts la cablea detrás del gate ?debug=1, en __hudDebug): deja verificar
+ * el aviso in-game y el bloque del resumen sin grindear una gesta real, igual
+ * que __hudDebug('hitmarker') simula un impacto. En el juego real las medallas
+ * salen únicamente de registrarKillMedallas/registrarDanioMedallas.
+ */
+export function otorgarMedallaManual(
+  state: MedalTrackerState,
+  medalId: MedalId,
+  tiempoS: number,
+): void {
+  otorgar(state, medalId, tiempoS)
+}
+
+/**
  * Conteo de la partida como `slug -> veces`, listo para sumarse al
  * acumulado histórico del guardado (`progression/medals.ts sumarTallies`).
  * Se llama una vez, al terminar; asigna.

@@ -26,6 +26,13 @@ import type { MatchProgress } from '@/game/progression/career'
 import { rankColor, rankLabel, RR_MAXIMO } from '@/game/progression/ranks'
 import { PLACEMENT } from '@/game/progression/placement'
 import { xpParaNivel } from '@/game/progression/unlocks'
+import {
+  medalBySlug,
+  medalIconPath,
+  xpDeMedallas,
+  type MedalDef,
+  type MedalTally,
+} from '@/game/progression/medals'
 import { RARITY_BY_ID } from '@/game/skins/rarity'
 import type { Skin } from '@/game/skins/generator'
 import { participantLabel } from '@/ui/participant-label'
@@ -307,12 +314,87 @@ function BloqueDrop({ progress }: { progress: MatchProgress }) {
   )
 }
 
+/**
+ * Medallas ganadas en la partida, en la columna del drop. Ordenadas por XP
+ * (las gestas más valiosas arriba), con el icono real por slug, el nombre del
+ * catálogo y la XP que sumaron a la cuenta (ese XP SÍ se acredita, ver
+ * progressWithMedals). Sin medallas, no se dibuja nada -- cero bloque vacío.
+ */
+function BloqueMedallas({ medallas }: { medallas: MedalTally }) {
+  const entradas: { def: MedalDef; veces: number }[] = []
+  for (const [slug, veces] of Object.entries(medallas)) {
+    const def = medalBySlug(slug)
+    if (def !== null && veces > 0) entradas.push({ def, veces })
+  }
+  if (entradas.length === 0) return null
+  entradas.sort((a, b) => b.def.xp - a.def.xp || a.def.slug.localeCompare(b.def.slug))
+  const totalXp = xpDeMedallas(medallas)
+
+  return (
+    <div className="mt-6">
+      <Rotulo>MEDALLAS</Rotulo>
+      <div className="mt-3 flex flex-col gap-2">
+        {entradas.map(({ def, veces }) => (
+          <div key={def.slug} className="flex items-center gap-2.5">
+            {/* eslint-disable-next-line @next/next/no-img-element -- icono
+                local de UI de juego (mismo criterio que emblemas.tsx). */}
+            <img
+              src={medalIconPath(def.slug)}
+              alt=""
+              aria-hidden
+              width={32}
+              height={32}
+              className="block h-8 w-8 flex-none"
+              style={{ filter: 'drop-shadow(0 0 6px rgba(70,240,138,.28))' }}
+            />
+            <span
+              className="pg-display min-w-0 flex-1 truncate text-sm font-bold tracking-[.02em]"
+              style={{ color: 'var(--pg-texto-alto)' }}
+            >
+              {def.nombre}
+              {veces > 1 && (
+                <span className="pg-mono ml-1.5 text-[11px]" style={{ color: 'var(--pg-tenue)' }}>
+                  ×{veces}
+                </span>
+              )}
+            </span>
+            <span
+              className="pg-mono flex-none text-[11px] font-semibold tabular-nums"
+              style={{ color: 'var(--pg-acento)' }}
+            >
+              +{(def.xp * veces).toLocaleString('es-CL')}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div
+        className="mt-3 flex items-center justify-between border-t pt-2"
+        style={{ borderColor: 'var(--pg-linea)' }}
+      >
+        <span className="pg-mono text-[10px] tracking-[.14em]" style={{ color: 'var(--pg-mudo)' }}>
+          XP DE MEDALLAS
+        </span>
+        <span
+          className="pg-mono text-[11px] font-semibold tabular-nums"
+          style={{ color: 'var(--pg-acento)' }}
+        >
+          +{totalXp.toLocaleString('es-CL')}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function MatchSummary({
   summary,
   progress,
+  medallas,
 }: {
   summary: MatchSummaryData
   progress: MatchProgress | null
+  /** Medallas ganadas en ESTA partida (slug -> veces), o null si la partida
+   *  no cerró todavía. El backend las otorga y guarda; esto sólo las muestra. */
+  medallas: MedalTally | null
 }) {
   const gano = summary.winnerLabel === 'jugador' || summary.winnerLabel === 'equipo del jugador'
   const empate = summary.winnerLabel === 'empate'
@@ -555,12 +637,8 @@ export function MatchSummary({
             background: 'radial-gradient(circle at 50% 20%,rgba(70,240,138,.05),transparent 60%)',
           }}
         >
-          {/* Las medallas de la partida irían debajo del drop. El sistema
-              que las otorga todavía no existe (ver ui/Medallas.tsx), y por
-              eso acá no se dibuja un bloque vacío ni medallas de ejemplo:
-              cuando exista, se monta un listado con las ganadas en ESTA
-              partida y nada más. */}
           {progress !== null && <BloqueDrop progress={progress} />}
+          {medallas !== null && <BloqueMedallas medallas={medallas} />}
         </section>
       </div>
     </div>
