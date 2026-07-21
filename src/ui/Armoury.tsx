@@ -22,14 +22,23 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   camoForSlot,
   equipCamo,
+  equipOptic,
   equipSkin,
   equipWeapon,
   LOADOUT_SLOTS,
+  opticForSlot,
   SLOT_LABEL,
   skinForSlot,
   type Loadout,
   type LoadoutSlot,
 } from '@/game/progression/loadout'
+import {
+  armaPuedeMontarOptica,
+  type CategoriaOptica,
+  OPTICAS,
+  OPTICAS_ORDEN,
+} from '@/game/weapons/attachments/optics-catalog'
+import { nivelDeArma } from '@/game/progression/weapon-xp'
 import {
   accountLevel,
   createDefaultProgress,
@@ -49,6 +58,14 @@ import { SensitivitySettings } from '@/ui/SensitivitySettings'
 import { construirArsenal } from '@/ui/arsenal'
 
 const MUESCAS = 12
+
+// Etiqueta legible de cada familia de óptica. Ocupa el lugar de la rareza que
+// muestran las skins/camos: una mira no tiene rareza, se distingue por su tipo.
+const CATEGORIA_OPTICA_LABEL: Record<CategoriaOptica, string> = {
+  red_dot: 'Red dot',
+  holografica: 'Holográfica',
+  magnificada: 'Magnificada',
+}
 
 function Barra({ value }: { value: number }) {
   const llenas = Math.max(1, Math.round(value * MUESCAS))
@@ -118,8 +135,22 @@ export function Armoury() {
     // Un 404 acá es el caso normal (build publicado sin armas locales) y
     // loadLocalWeapons ya lo trata como "entraron 0": no hay rama de error
     // que manejar, sólo hay que releer el catálogo cuando termine.
-    void loadLocalWeapons().then(() => setArmas(construirArsenal()))
-  }, [])
+    void loadLocalWeapons().then((añadidas) => {
+      setArmas(construirArsenal())
+      // Releer el store SÓLO si entraron armas locales, y por una razón
+      // concreta: `store.load()` corrió en el efecto de arriba ANTES de que
+      // loadLocalWeapons registrara las armas de COD. Un loadout guardado con
+      // una de esas armas (y su MIRA, que sólo montan las 5 de COD) se
+      // normaliza distinto según el registry disponible: sin ellas,
+      // `normalizeLoadout` reemplaza el arma por su fallback CC0 y —como ese
+      // fallback no soporta ópticas— tira la mira. El dato en localStorage
+      // sigue intacto; lo que se perdía era la VISTA al recargar la armería.
+      // Releyendo el store una vez que el registry ya tiene las locales, el
+      // arma y su mira sobreviven la recarga. En un build publicado (añadidas
+      // === 0) no se relee: cero cambios de comportamiento.
+      if (añadidas > 0) setProgress(store.load())
+    })
+  }, [store])
 
   const guardar = useCallback(
     (loadout: Loadout) => {
@@ -163,12 +194,30 @@ export function Armoury() {
     // tiene un camo equipado se pasa como `camo` (la vitrina baja el patrón y
     // lo pinta con su neón); si no, va la skin procedural como hasta ahora.
     const camo = camoForSlot(loadout, s)
-    return camo ? [{ slug, skin: null, camo }] : [{ slug, skin: skinForSlot(loadout, s) }]
+    // La óptica es INDEPENDIENTE del aspecto: va en el item tenga o no camo/skin,
+    // porque un arma puede llevar los dos a la vez. La vitrina la monta sobre el
+    // arma si el arma la soporta (tiene ancla); si no, la ignora sin romper.
+    const optic = opticForSlot(loadout, s)
+    const base = camo ? { slug, skin: null, camo } : { slug, skin: skinForSlot(loadout, s) }
+    return [{ ...base, optic }]
   })
 
   const arma = armas.find((a) => a.slug === slugActual) ?? null
   const skinActual = skinForSlot(loadout, slot)
   const camoActual = camoForSlot(loadout, slot)
+  const opticaActual = opticForSlot(loadout, slot)
+  // Desbloqueo de miras por NIVEL DE ARMA (no de cuenta): sale de la XP por arma
+  // guardada del arma seleccionada. Una mira está disponible si su nivel de
+  // desbloqueo (2..5) es <= el nivel actual del arma. Un arma sin usar (XP 0) va
+  // en nivel 1, así que todas sus miras salen bloqueadas.
+  const xpDeArma = slugActual !== null ? progress.armas[slugActual] ?? 0 : 0
+  const nivelArma = nivelDeArma(xpDeArma)
+  // Si el arma no tiene ancla (no es una de las que se anclaron), no monta
+  // ópticas todavía. Se dice explícito en el panel en vez de esconderlo.
+  const soportaOptica = slugActual !== null && armaPuedeMontarOptica(slugActual)
+  const opticasDesbloqueadasCount = OPTICAS_ORDEN.filter(
+    (id) => OPTICAS[id].nivelDesbloqueo <= nivelArma,
+  ).length
 
   return (
     <main className="arm px-4 py-6 sm:px-8">
@@ -224,6 +273,10 @@ export function Armoury() {
                   key={a.slug}
                   type="button"
                   className="arm-fila"
+                  // El slug queda en el DOM porque dos armas distintas pueden
+                  // compartir nombre (la AK-47 CC0 y la cod4_ak47 de COD): sin
+                  // esto no hay forma estable de distinguirlas desde afuera.
+                  data-slug={a.slug}
                   aria-pressed={a.slug === slugActual}
                   disabled={bloqueada}
                   onClick={() => guardar(equipWeapon(loadout, slot, a.slug))}
@@ -284,6 +337,13 @@ export function Armoury() {
           )}
         </section>
 
+        {/* Columna lateral: el aspecto (skins + camos) y las miras se apilan en
+            la MISMA celda de la grilla de tres columnas. Van juntas en un
+            wrapper en vez de como cuarta columna para no reescribir la grilla
+            (que colapsa a una sola columna en pantallas angostas) ni encoger la
+            vitrina del medio. Aspecto y mira son sistemas independientes: el
+            aspecto es excluyente (skin XOR camo), la mira se lleva aparte. */}
+        <div className="flex flex-col" style={{ gap: 'var(--arm-space-md)' }}>
         <section className="arm-panel arm-chaflan" aria-label="Skins">
           <h2 className="arm-mono border-b border-[var(--arm-linea-tenue)] px-3 py-2 text-[0.625rem] text-[var(--arm-tenue)]">
             Skins · {SLOT_LABEL[slot].toLowerCase()}
@@ -362,6 +422,71 @@ export function Armoury() {
             })}
           </div>
         </section>
+
+        {/* Miras (ópticas): un accesorio, no un aspecto, así que va en su propio
+            panel y es INDEPENDIENTE del camo/skin de arriba. Lista las 6 del
+            catálogo para el arma seleccionada; las que el nivel del arma todavía
+            no habilita salen atenuadas con el nivel que piden. El desbloqueo es
+            por NIVEL DE ARMA (XP por arma), no por nivel de cuenta. */}
+        <section className="arm-panel arm-chaflan" aria-label="Miras">
+          <h2 className="arm-mono border-b border-[var(--arm-linea-tenue)] px-3 py-2 text-[0.625rem] text-[var(--arm-tenue)]">
+            Miras{soportaOptica ? ` · ${opticasDesbloqueadasCount} de ${OPTICAS_ORDEN.length}` : ''}
+          </h2>
+          <div className="arm-lista flex flex-col gap-1 p-2">
+            {!soportaOptica ? (
+              // Honesto, no escondido: sólo 5 armas de COD tienen ancla en esta
+              // fase (docs/OPTICAS.md), el resto es llenado incremental.
+              <p className="px-1 py-2 text-xs text-[var(--arm-tenue)]">
+                Esta arma todavía no soporta miras.
+              </p>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="arm-chip"
+                  // "Sin mira" = hierros. Sólo saca la óptica; no toca el camo ni
+                  // la skin, que son independientes de la mira.
+                  aria-pressed={opticaActual === null}
+                  onClick={() => guardar(equipOptic(loadout, slot, null))}
+                >
+                  <span className="py-1 text-sm whitespace-nowrap">Sin mira</span>
+                </button>
+                {OPTICAS_ORDEN.map((id) => {
+                  const def = OPTICAS[id]
+                  const desbloqueada = def.nivelDesbloqueo <= nivelArma
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      className="arm-chip"
+                      // Bloqueada = deshabilitada y atenuada: se ve que existe y a
+                      // qué nivel llega, pero no se puede equipar todavía. Mismo
+                      // patrón que las armas bloqueadas del arsenal.
+                      disabled={!desbloqueada}
+                      aria-pressed={opticaActual?.id === id}
+                      onClick={() => guardar(equipOptic(loadout, slot, id))}
+                    >
+                      <span className="flex min-w-0 items-center justify-between gap-2 py-1">
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm">{def.nombre}</span>
+                          <span className="arm-mono block text-[0.5625rem] text-[var(--arm-apagado)]">
+                            {CATEGORIA_OPTICA_LABEL[def.categoria]}
+                          </span>
+                        </span>
+                        {!desbloqueada && (
+                          <span className="arm-mono shrink-0 whitespace-nowrap text-[0.5625rem] text-[var(--arm-apagado)]">
+                            Nivel {def.nivelDesbloqueo}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  )
+                })}
+              </>
+            )}
+          </div>
+        </section>
+        </div>
       </div>
 
       {/* Sensibilidad: fuera de la grilla de tres columnas porque no es una

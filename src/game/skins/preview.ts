@@ -22,11 +22,17 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
+  type Object3D,
   PerspectiveCamera,
   Scene,
   WebGLRenderer,
 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+// El MISMO clone que usa el renderer del viewmodel para las ópticas: una copia
+// por montaje que REUSA geometría y material de la escena fuente cacheada (no
+// duplica la malla en la GPU). Sirve tanto para grafos con esqueleto como para
+// las ópticas, que son estáticas.
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import type { Skin } from '@/game/skins/generator'
 import {
   cargarPatron,
@@ -37,6 +43,22 @@ import {
 import type { CamoTextura } from '@/game/skins/texturas'
 import { instalarRigDeLuz } from '@/game/weapons/viewmodel/lighting'
 import { weaponAssetUrl } from '@/game/weapons/registry'
+// Ópticas: el catálogo (anclaje, url del GLB) es dato puro; `mount.ts` es el
+// borde con la GPU que arma la malla montada y la retícula. La vitrina usa
+// EXACTAMENTE la misma `montarOptica` que el renderer del juego y el banco de
+// pruebas, así que la mira se ve acá igual que equipada — la promesa de la
+// cabecera de este archivo.
+import {
+  anclaDe,
+  opticAssetUrl,
+  type OpticaDef,
+  type OpticaId,
+} from '@/game/weapons/attachments/optics-catalog'
+import {
+  desmontarFuenteOptica,
+  desmontarOptica,
+  montarOptica,
+} from '@/game/weapons/attachments/mount'
 
 export interface PreviewItem {
   slug: string
@@ -48,6 +70,15 @@ export interface PreviewItem {
    * procedural.
    */
   camo?: CamoTextura | null
+  /**
+   * Óptica (mira) montada sobre el arma (attachments/optics-catalog.ts), o
+   * null/ausente para los hierros. Es INDEPENDIENTE de `skin`/`camo`: se monta
+   * sobre el arma tenga o no aspecto, porque es un accesorio físico y no una
+   * capa de pintura. El GLB se baja bajo demanda y se cuelga del cuerpo del arma
+   * cuando termina de bajar; si el arma no tiene ancla (no soporta ópticas), no
+   * se monta nada (honesto: mejor sin mira que con una flotando).
+   */
+  optic?: OpticaDef | null
 }
 
 export interface SkinPreview {
@@ -79,6 +110,9 @@ interface Slot {
   group: Group
   mesh: Mesh
   handle: SkinHandle | null
+  /** Óptica montada sobre el cuerpo del arma de este slot, o null. Se guarda
+   *  para poder desmontarla (soltar su retícula) al recambiar el atril. */
+  optic: Group | null
 }
 
 /**
@@ -175,6 +209,11 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
 
   const loader = new GLTFLoader()
   const geometries: GeometryCache = new Map()
+  // Escenas fuente de óptica por id: se bajan una vez, se clonan por montaje
+  // (la geometría y el material se comparten entre clones, igual que en el
+  // renderer) y se liberan una sola vez en `dispose`. Mismo caché que
+  // `geometries`, pero para las miras.
+  const opticSources: Map<OpticaId, Object3D> = new Map()
   const slots: Slot[] = []
 
   let running = false
@@ -187,6 +226,11 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
 
   function clearSlots(): void {
     for (const slot of slots) {
+      // La óptica cuelga del cuerpo del arma: desmontarla suelta su retícula
+      // (geometría, material y textura de canvas frescos por montaje). El cuerpo
+      // de la mira NO se toca acá: es un clon que comparte recursos con la fuente
+      // cacheada, que se libera una sola vez en `dispose`.
+      if (slot.optic) desmontarOptica(slot.optic)
       scene.remove(slot.group)
       const material = slot.mesh.material
       if (!Array.isArray(material)) material.dispose()
@@ -233,8 +277,58 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
       handle?.setSkin(item.skin)
     }
 
-    slots.splice(index, 0, { group, mesh, handle })
+    slots.splice(index, 0, { group, mesh, handle, optic: null })
     layout()
+    // La óptica se monta DESPUÉS del splice para que el slot ya esté en `slots`
+    // cuando el montaje (aun por el camino cacheado, síncrono) lo busca por su
+    // mesh. Es independiente del aspecto: se cuelga tenga o no camo/skin.
+    montarOpticaEnMesh(item, mesh, token)
+  }
+
+  /**
+   * Monta la óptica de un item sobre el CUERPO (mesh) de su arma, colgándola
+   * como hija: así hereda el perfil y el vaivén del arma, y el ancla —definida
+   * en el espacio local normalizado del arma— cae sobre el riel igual que en
+   * partida. El GLB de la mira se baja bajo demanda y se cachea por id.
+   *
+   * No hace nada si el item no trae óptica o si el arma no tiene ancla (no
+   * soporta ópticas): en ese caso el arma se muestra con los hierros, que es lo
+   * honesto. Una carga que resuelve tarde sólo monta si el atril sigue siendo el
+   * mismo (token) y el slot sigue vivo, igual que el camino del camo.
+   */
+  function montarOpticaEnMesh(item: PreviewItem, mesh: Mesh, token: number): void {
+    const optic = item.optic
+    if (!optic) return
+    const ancla = anclaDe(item.slug)
+    if (!ancla) return
+
+    const colgar = (fuente: Object3D): void => {
+      if (token !== generation) return
+      const slot = slots.find((s) => s.mesh === mesh)
+      if (!slot) return
+      // Remontaje idempotente: si por lo que sea ya había una mira en este slot,
+      // se suelta antes de colgar la nueva (no debería pasar en el flujo normal,
+      // pero deja el invariante "un slot, una óptica" garantizado).
+      if (slot.optic) desmontarOptica(slot.optic)
+      const grupo = montarOptica({ opticaScene: cloneSkinned(fuente), def: optic, ancla })
+      mesh.add(grupo)
+      slot.optic = grupo
+    }
+
+    const cached = opticSources.get(optic.id)
+    if (cached) {
+      colgar(cached)
+      return
+    }
+    loader
+      .loadAsync(opticAssetUrl(optic.id))
+      .then((gltf) => {
+        opticSources.set(optic.id, gltf.scene)
+        colgar(gltf.scene)
+      })
+      .catch(() => {
+        lastError = `no se pudo cargar la óptica "${optic.id}"`
+      })
   }
 
   function loadInto(item: PreviewItem, index: number, token: number): void {
@@ -317,6 +411,10 @@ export function createSkinPreview(canvas: HTMLCanvasElement): SkinPreview {
         fuente.material.dispose()
       }
       geometries.clear()
+      // Las escenas fuente de óptica se liberan una sola vez acá (el par de
+      // `desmontarOptica`, que a propósito deja intacto el cuerpo compartido).
+      for (const fuente of opticSources.values()) desmontarFuenteOptica(fuente)
+      opticSources.clear()
       rigDeLuz.dispose()
       renderer.dispose()
     },

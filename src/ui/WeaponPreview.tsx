@@ -57,8 +57,12 @@ export function WeaponPreview({ items, debug }: { items: PreviewItem[]; debug: b
   // recargaría los GLB en cada tecla apretada. El camo entra en la clave igual
   // que la seed de la skin: sin él, cambiar de un camo a otro (o de "sin skin"
   // a un camo) deja `skin` en null en los dos casos, la clave no cambia y la
-  // vitrina no se refresca.
-  const clave = items.map((i) => `${i.slug}:${i.skin?.seed ?? '-'}:${i.camo?.id ?? '-'}`).join('|')
+  // vitrina no se refresca. La óptica entra por el mismo motivo: es
+  // independiente del aspecto, así que montar o cambiar la mira no mueve ni
+  // `skin` ni `camo`, y sin ella en la clave la vitrina no se refrescaría.
+  const clave = items
+    .map((i) => `${i.slug}:${i.skin?.seed ?? '-'}:${i.camo?.id ?? '-'}:${i.optic?.id ?? '-'}`)
+    .join('|')
   useEffect(() => {
     previewRef.current?.setWeapons(items)
     // items entra por `clave`, que es su contenido: ver el comentario de
