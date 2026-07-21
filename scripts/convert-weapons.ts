@@ -80,6 +80,7 @@ import {
   detectMuzzle,
   detectUpAxis,
   displayName,
+  muzzleFromGeometry,
   slugify,
   targetLengthFor,
 } from './lib/geometry.ts'
@@ -268,6 +269,10 @@ async function convertOne(
 
     const finalPositions = collectPositions(doc)
     const b = boundsOf(finalPositions)
+    // Boca de cañón para el fogonazo: el centroide de la rebanada más adelantada
+    // (-Z, ya normalizado) cae sobre el eje del ánima, no en el centro de la
+    // caja. Sin esto el fogonazo salía por debajo del cañón (ver vfx-renderer).
+    const muzzle = muzzleFromGeometry(finalPositions)
 
     await io.write(outPath, doc)
 
@@ -284,6 +289,9 @@ async function convertOne(
       needsManualReview:
         confidence < MUZZLE_CONFIDENCE_THRESHOLD ||
         upAxisConfidence < UP_AXIS_CONFIDENCE_THRESHOLD,
+      muzzleX: Number(muzzle.x.toFixed(5)),
+      muzzleY: Number(muzzle.y.toFixed(5)),
+      muzzleZ: Number(muzzle.z.toFixed(5)),
     }
   } finally {
     if (existsSync(tmpGlb)) unlinkSync(tmpGlb)
