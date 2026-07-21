@@ -249,6 +249,16 @@ export interface Game {
    * frame, no una medida de capacidad o margen disponible.
    */
   benchmark(passes?: number): number
+  /**
+   * Captura de pantalla para debug. Devuelve el frame ACTUAL del canvas como
+   * data URL PNG. Se resuelve en el próximo frame de render, justo después de
+   * dibujar el mundo + viewmodel + overlay y ANTES del clear del siguiente
+   * frame: así el drawing buffer todavía tiene la imagen y no hace falta
+   * `preserveDrawingBuffer` en el renderer (que costaría GPU en TODOS los
+   * frames de TODOS los jugadores por una función que se usa a demanda).
+   * `null` si el juego no está corriendo o el toDataURL falla.
+   */
+  capturarPantalla(): Promise<string | null>
   readonly stats: FrameStats
   /** Estado de partida en vivo (sección "Build" de la tarea): killfeed,
    *  puntaje y fase, para que el HUD de React (src/ui/) lo sondee a baja
@@ -1207,6 +1217,11 @@ export function createGame(
   let running = false
   let lastTime = 0
   let rafId = 0
+  // Captura de pantalla a demanda (Game.capturarPantalla). El resolver queda
+  // pendiente hasta que `frame` termine de dibujar y lea el canvas; es un
+  // callback y no un flag booleano para poder devolverle el data URL a quien
+  // pidió la captura. `null` = no hay captura pendiente.
+  let capturaPendiente: ((url: string | null) => void) | null = null
   /**
    * Partida congelada por el menú de pausa (ui/PauseMenu.tsx). Frena la
    * simulación entera, no sólo el input: sin esto, abrir el menú te deja
@@ -2245,6 +2260,21 @@ export function createGame(
     feedbackOverlay.setScope(scopeReticleNow, easedAdsTForScope)
 
     feedbackOverlay.render(feedbackState)
+
+    // Captura de pantalla: acá es el único punto del frame donde el drawing
+    // buffer tiene la imagen COMPLETA (mundo + viewmodel + overlay ya
+    // dibujados) y todavía no se limpió para el próximo frame. Leer el canvas
+    // en cualquier otro momento daría negro sin `preserveDrawingBuffer`. Se
+    // consume una sola vez por pedido.
+    if (capturaPendiente !== null) {
+      const resolver = capturaPendiente
+      capturaPendiente = null
+      try {
+        resolver(canvas.toDataURL('image/png'))
+      } catch {
+        resolver(null)
+      }
+    }
   }
 
   return {
@@ -2584,6 +2614,17 @@ export function createGame(
     },
     benchmark(passes = 500): number {
       return runBenchmark(() => gfx.render(), passes)
+    },
+    capturarPantalla(): Promise<string | null> {
+      // Sin loop andando no hay frame que capturar: se resuelve a null en vez
+      // de dejar la promesa colgada para siempre.
+      if (!running) return Promise.resolve(null)
+      return new Promise((resolve) => {
+        // Si ya había una captura pendiente (doble tecla en el mismo frame),
+        // se la cancela con null: sólo la última gana el próximo frame.
+        capturaPendiente?.(null)
+        capturaPendiente = resolve
+      })
     },
     get stats() {
       return stats.stats

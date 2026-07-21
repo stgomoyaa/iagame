@@ -129,3 +129,6 @@ workshop-assets/
 # con los seis camuflajes procedurales de siempre: no hay bandera que se
 # pueda dejar mal puesta.
 /public/assets/camos/
+
+# Capturas de pantalla de debug (herramienta local, no se versiona)
+debug-shots/

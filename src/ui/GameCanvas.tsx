@@ -234,6 +234,21 @@ export function GameCanvas() {
       if (fase === 'jugando' && game !== null) {
         if (e.code === 'Equal' || e.code === 'NumpadAdd') game.agregarBot()
         else if (e.code === 'Minus' || e.code === 'NumpadSubtract') game.quitarBot()
+        // Captura de pantalla de debug (tecla P): pide al motor el frame
+        // actual y lo manda al server, que lo guarda en `debug-shots/` del
+        // proyecto. Es fire-and-forget: si el server no está o falla, no pasa
+        // nada en el juego. Tecla libre (no la usan movimiento ni armas).
+        else if (e.code === 'KeyP') {
+          e.preventDefault()
+          game.capturarPantalla().then((data) => {
+            if (data === null) return
+            void fetch('/api/debug-shot', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ data }),
+            }).catch(() => {})
+          })
+        }
       }
     }
     function onKeyUp(e: KeyboardEvent): void {
