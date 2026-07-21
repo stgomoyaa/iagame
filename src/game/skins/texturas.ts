@@ -57,7 +57,7 @@
  * descarga ni un patrón.
  */
 
-import type { AnimationId } from '@/game/skins/rarity'
+import type { AnimationId, RarityId } from '@/game/skins/rarity'
 
 /**
  * Un camuflaje por textura: qué patrón en gris usar y cómo lo viste el motor.
@@ -100,6 +100,32 @@ export interface CamoTextura {
   animation: AnimationId
   /** Repeticiones del patrón a lo largo del arma. */
   escala: number
+  /**
+   * Rareza del camo, del mismo enum que la vía procedural (rarity.ts). NO es
+   * decoración: el shader la usa para ESCALAR el brillo. Más legendario = más
+   * emisión, más núcleo blanco y más saturación, que es la lógica de los
+   * mastery camos de Call of Duty ("el camuflaje más brillante es el más
+   * raro"). El campo vive en el catálogo y no se sortea porque estos camos se
+   * DESBLOQUEAN por maestría de arma, no caen de una seed: cada uno tiene una
+   * rareza fija y elegida, no una tirada. `rarityRank` (rarity.ts) la convierte
+   * en el 0..1 que viaja al uniform `uSkinRarity`.
+   */
+  rarity: RarityId
+  /**
+   * NIVELES del heightmap: piso y techo del gris ÚTIL del patrón, 0..1. El
+   * shader remapea `(g - nivelBajo) / (nivelAlto - nivelBajo)` y lo clampa,
+   * igual que la herramienta de niveles de un editor de imágenes.
+   *
+   * Es la pieza que arregla "gris sobre gris". Cada patrón trae un histograma
+   * distinto —vetas ya tiene fondo negro y vetas casi blancas; lava vive en una
+   * banda gris estrecha 0.2..0.55; fractura tiene el fondo en gris medio— así
+   * que un único umbral en el shader no puede servir a todos. Estirando el
+   * rango útil de cada patrón, el VALLE cae a negro profundo y la CRESTA sube a
+   * blanco, que es el "neón sobre negro" de las referencias. Sin esto, el fondo
+   * gris de fractura/lava tiñe el arma de gris y ninguna paleta lo salva.
+   */
+  nivelBajo: number
+  nivelAlto: number
 }
 
 /** Carpeta pública donde viven los patrones en gris. Local-only: ver .gitignore. */
@@ -141,72 +167,96 @@ export function patronUrl(camo: CamoTextura): string {
  * (emisivo / reflectante / mate), a afinar cuando se los vea en pantalla.
  */
 export const CATALOGO_CAMOS: readonly CamoTextura[] = [
-  // --- vetas: orgánico, filamentos que se encienden -----------------------
+  // --- vetas: filamentos casi blancos sobre negro (el patrón estrella) -----
+  // vetas.png ya es lo que quieren las referencias: vetas finas brillantes
+  // sobre fondo negro (el swatch de lava de la referencia es exactamente
+  // esto). Nivel bajo/alto suaves: el fondo ya es negro, sólo hay que estirar
+  // un poco para que la veta llegue a blanco.
   {
     id: 'elemento-115',
     nombre: 'Elemento 115',
     patron: 'vetas',
-    base: '#0a0f0a',
-    accent: '#1c3a24',
-    // El verde radiactivo de la referencia. Va en el glow, no en el acento:
-    // el arma es casi negra y las vetas son lo único que emite.
-    glow: '#8dff3a',
-    emissive: 0.92,
+    // Fondo negro profundo: en la referencia (Weaponized 115) el arma es negra
+    // y las vetas son lo ÚNICO que emite. Nada de verde en el fondo.
+    base: '#03060a',
+    // El acento es el hombro de la veta antes del núcleo blanco: verde medio,
+    // no oscuro. El glow verde radiactivo y el núcleo casi blanco los pone el
+    // shader arriba del acento.
+    accent: '#1e7a34',
+    glow: '#a6ff4d',
+    emissive: 0.95,
     metal: 0.35,
-    rugosidad: 0.45,
+    rugosidad: 0.42,
     barniz: 0.35,
     // Pulso: las vetas respiran, no se desplazan. Es lo que hace "reactor".
     animation: 'pulso',
-    escala: 3.2,
+    // Escala baja: con vetas.png a 3+ repeticiones las vetas caen sub-píxel y
+    // aliasan a ruido; a ~1.6 se leen como filamentos gruesos y continuos con
+    // negro entre medio, que es el look de la referencia.
+    escala: 1.7,
+    // Exótico: la rareza tope, la más brillante. Es el mastery camo insignia.
+    rarity: 'exotico',
+    nivelBajo: 0.13,
+    nivelAlto: 0.46,
   },
   {
     id: 'otromundo',
     nombre: 'Otromundo',
     patron: 'vetas',
-    base: '#160a2a',
-    accent: '#3d1f7a',
-    // Cian frío sobre violeta: la misma red de vetas, otra energía.
-    glow: '#38e6ff',
-    emissive: 0.8,
+    base: '#04060f',
+    // Cian/azul de Afterlife y Singularity: la misma red de vetas, otra energía.
+    accent: '#1c5fae',
+    glow: '#48ecff',
+    emissive: 0.88,
     metal: 0.4,
-    rugosidad: 0.5,
+    rugosidad: 0.48,
     barniz: 0.45,
     // Flujo: acá las vetas SÍ se desplazan a lo largo del arma. Es el remolino
     // que fluye de Afterlife, y es lo que una imagen fija no puede dar.
     animation: 'flujo',
-    escala: 3.0,
+    escala: 1.6,
+    rarity: 'legendario',
+    nivelBajo: 0.13,
+    nivelAlto: 0.46,
   },
   // --- nebulosa: nube HDR con núcleos brillantes --------------------------
   {
     id: 'nebulosa',
     nombre: 'Nebulosa',
     patron: 'nebulosa',
-    base: '#0c0820',
-    accent: '#7a2b8f',
+    base: '#05030f',
+    accent: '#8a2fa6',
     glow: '#ff5ad0',
-    emissive: 0.7,
+    emissive: 0.82,
     metal: 0.3,
     rugosidad: 0.55,
     barniz: 0.6,
-    // Espectro: el tono cicla, como Afterlife. Sobre una nube difusa el
-    // barrido de color se lee como gas estelar.
+    // Espectro: el tono cicla, como el "glow" neón de la referencia. Sobre una
+    // nube difusa el barrido de color se lee como gas estelar.
     animation: 'espectro',
     escala: 1.8,
+    // Exótico: saturación neón extrema, la referencia "glow".
+    rarity: 'exotico',
+    nivelBajo: 0.2,
+    nivelAlto: 0.86,
   },
   {
     id: 'aurora',
     nombre: 'Aurora',
     patron: 'nebulosa',
-    base: '#031014',
-    accent: '#1f7a6a',
+    base: '#02100f',
+    accent: '#1f8a76',
     // Verde/cian sobre casi negro: la misma nube, leída como aurora boreal.
     glow: '#5affc8',
-    emissive: 0.62,
+    emissive: 0.6,
     metal: 0.28,
     rugosidad: 0.6,
     barniz: 0.5,
     animation: 'espectro',
     escala: 1.6,
+    rarity: 'epico',
+    nivelBajo: 0.22,
+    nivelAlto: 0.86,
   },
   // --- humo: ruido suave y apagado (el control) ---------------------------
   {
@@ -218,45 +268,63 @@ export const CATALOGO_CAMOS: readonly CamoTextura[] = [
     glow: '#9aa0a6',
     // El control del catálogo: gris de dotación, sin brillo ni animación. Es
     // lo que prueba que la vía no depende del glow para verse bien, y el piso
-    // contra el que se miden los caros.
+    // contra el que se miden los caros. Común = la rareza más baja, no escala.
     emissive: 0,
     metal: 0.2,
     rugosidad: 0.8,
     barniz: 0.1,
     animation: 'ninguna',
     escala: 2.0,
+    rarity: 'comun',
+    // Niveles suaves: no queremos binarizar el humo, es ruido continuo.
+    nivelBajo: 0.12,
+    nivelAlto: 0.88,
   },
-  // --- lava: grietas que emiten entre placas oscuras ----------------------
+  // --- lava/vetas: grietas incandescentes sobre negro ---------------------
   {
     id: 'magma',
     nombre: 'Magma',
-    patron: 'lava',
-    base: '#140805',
-    accent: '#5a1e0a',
-    // Naranja incandescente en las grietas; las placas quedan casi negras.
-    glow: '#ff6a1a',
-    emissive: 0.88,
+    // Sobre VETAS y no sobre lava.png: el swatch de la referencia de lava (la
+    // más útil, la del tilde) son vetas rojas FINAS sobre negro profundo, que
+    // es lo que da vetas.png. lava.png es piedra gris agrietada de bajo
+    // contraste y jamás llega a "vetas rojas incandescentes sobre negro". El
+    // patrón de piedra queda para Ceniza, que sí quiere roca apagada.
+    patron: 'vetas',
+    base: '#0a0402',
+    accent: '#8a2408',
+    // Naranja/rojo incandescente; el núcleo lo lleva el shader a blanco-amarillo
+    // como el corazón de la brasa.
+    glow: '#ff5a14',
+    emissive: 0.95,
     metal: 0.3,
-    rugosidad: 0.5,
+    rugosidad: 0.48,
     barniz: 0.3,
     // Pulso: la lava late como brasa viva.
     animation: 'pulso',
-    escala: 2.6,
+    escala: 1.6,
+    rarity: 'legendario',
+    nivelBajo: 0.13,
+    nivelAlto: 0.46,
   },
   {
     id: 'ceniza',
     nombre: 'Ceniza',
     patron: 'lava',
-    base: '#0e0e10',
-    accent: '#3a2f2a',
-    // La misma roca agrietada apagándose: rojo tenue que apenas corre.
-    glow: '#b23a1e',
-    emissive: 0.34,
+    base: '#0c0c0e',
+    accent: '#4a3a30',
+    // La roca agrietada apagándose: rojo tenue que apenas corre por las grietas
+    // entre placas casi negras. Los niveles estiran la banda gris estrecha de
+    // lava.png para que las placas caigan a negro y las grietas se lean.
+    glow: '#c04824',
+    emissive: 0.3,
     metal: 0.45,
     rugosidad: 0.62,
     barniz: 0.35,
     animation: 'flujo',
     escala: 2.6,
+    rarity: 'raro',
+    nivelBajo: 0.32,
+    nivelAlto: 0.62,
   },
   // --- damasco: grano de acero plegado ------------------------------------
   {
@@ -264,7 +332,7 @@ export const CATALOGO_CAMOS: readonly CamoTextura[] = [
     nombre: 'Damasco',
     patron: 'damasco',
     base: '#14161a',
-    accent: '#8a929c',
+    accent: '#9aa2ac',
     glow: '#c8d2dc',
     // Acero cepillado: casi no emite, el reflejo metálico es la gracia.
     emissive: 0.15,
@@ -273,21 +341,27 @@ export const CATALOGO_CAMOS: readonly CamoTextura[] = [
     barniz: 0.55,
     animation: 'flujo',
     escala: 2.8,
+    rarity: 'raro',
+    nivelBajo: 0.24,
+    nivelAlto: 0.8,
   },
   {
     id: 'filigrana-oro',
     nombre: 'Filigrana de Oro',
     patron: 'damasco',
-    base: '#1a1206',
+    base: '#120e06',
     accent: '#c69328',
     glow: '#ffd766',
-    emissive: 0.4,
+    emissive: 0.42,
     // Oro: reflejo chico, durísimo y DORADO (metal casi 1), como la filigrana.
     metal: 0.95,
     rugosidad: 0.22,
     barniz: 0.8,
     animation: 'pulso',
     escala: 2.6,
+    rarity: 'epico',
+    nivelBajo: 0.24,
+    nivelAlto: 0.8,
   },
   // --- marmol: veta fina sobre piedra pulida ------------------------------
   {
@@ -297,92 +371,120 @@ export const CATALOGO_CAMOS: readonly CamoTextura[] = [
     base: '#e6e2da',
     accent: '#9a8f80',
     glow: '#ffffff',
-    // Piedra clara y pulida: barniz alto para la resina, casi sin emisión.
+    // Piedra clara y pulida: barniz alto para la resina, casi sin emisión. Es
+    // el otro camo claro (con humo son los dos que NO son neón sobre negro).
     emissive: 0.08,
     metal: 0.25,
     rugosidad: 0.28,
     barniz: 1.2,
     animation: 'ninguna',
     escala: 2.2,
+    rarity: 'comun',
+    // Niveles casi identidad: el mármol es claro a propósito, no se binariza.
+    nivelBajo: 0.08,
+    nivelAlto: 0.92,
   },
   {
     id: 'obsidiana',
     nombre: 'Obsidiana',
     patron: 'marmol',
-    base: '#0a0a0c',
-    accent: '#2a2a30',
+    base: '#08080c',
+    accent: '#2c2c34',
     // La misma veta sobre piedra negra: vidrio volcánico, reflejo frío.
     glow: '#6a7280',
-    emissive: 0.12,
+    emissive: 0.14,
     metal: 0.6,
     rugosidad: 0.2,
     barniz: 1.0,
     animation: 'flujo',
     escala: 2.2,
+    rarity: 'raro',
+    nivelBajo: 0.15,
+    nivelAlto: 0.85,
   },
   // --- fractura: grietas radiales desde puntos de impacto -----------------
   {
     id: 'materia-oscura',
     nombre: 'Materia Oscura',
     patron: 'fractura',
-    base: '#05070f',
-    accent: '#1a2a55',
-    // Casi sin emisión: en Dark Matter la magia es el REFLEJO, no el glow. El
-    // barniz alto y la rugosidad baja son los que hacen correr el brillo por
-    // la fractura cuando el arma gira.
-    glow: '#6fb0ff',
-    emissive: 0.28,
+    base: '#05081a',
+    accent: '#33509e',
+    // En Dark Matter la magia es el REFLEJO, no el glow, pero el fondo tiene que
+    // ser NEGRO: fractura.png trae el fondo en gris medio, así que los niveles
+    // lo bajan a negro y dejan sólo las grietas, por donde corre el reflejo. Un
+    // toque de emisión azul da presencia a las grietas cuando el reflejo del
+    // entorno (tenue en la vitrina) no alcanza a encenderlas.
+    glow: '#7ec0ff',
+    emissive: 0.5,
     metal: 0.85,
     rugosidad: 0.16,
     barniz: 1.1,
     animation: 'flujo',
-    escala: 2.2,
+    escala: 1.9,
+    rarity: 'legendario',
+    nivelBajo: 0.42,
+    nivelAlto: 0.62,
   },
   {
     id: 'grieta-carmesi',
     nombre: 'Grieta Carmesí',
     patron: 'fractura',
-    base: '#100305',
-    accent: '#4a0d16',
-    // La misma red de grietas, encendida: rojo agresivo que late.
+    base: '#0a0204',
+    accent: '#7a1020',
+    // La misma red de grietas, encendida: rojo agresivo que late. Los niveles
+    // apagan a negro el fondo gris de fractura para que la grieta roja sea lo
+    // único que brilla.
     glow: '#ff2a4a',
-    emissive: 0.85,
+    emissive: 0.92,
     metal: 0.4,
-    rugosidad: 0.48,
+    rugosidad: 0.46,
     barniz: 0.4,
     animation: 'pulso',
-    escala: 2.4,
+    // Escala baja para que las grietas se lean gruesas, y ventana de niveles
+    // ESTRECHA justo encima del fondo (0.45): así casi toda la grieta enciende,
+    // no sólo su núcleo, sin levantar el fondo a gris.
+    escala: 1.7,
+    rarity: 'exotico',
+    nivelBajo: 0.42,
+    nivelAlto: 0.6,
   },
   // --- topografico: curvas de nivel concéntricas --------------------------
   {
     id: 'cota',
     nombre: 'Cota',
     patron: 'topografico',
-    base: '#04120a',
-    accent: '#186a3a',
+    base: '#02100a',
+    accent: '#1e8a48',
     glow: '#4affa0',
-    // Líneas finas que ciclan el tono: se lee como un mapa de calor vivo.
-    emissive: 0.55,
+    // Líneas finas que ciclan el tono: se lee como un mapa de calor vivo. Las
+    // líneas de topografico.png son tenues, así que los niveles las suben.
+    emissive: 0.58,
     metal: 0.35,
     rugosidad: 0.5,
     barniz: 0.45,
     animation: 'espectro',
     escala: 2.0,
+    rarity: 'epico',
+    nivelBajo: 0.12,
+    nivelAlto: 0.42,
   },
   {
     id: 'radar',
     nombre: 'Radar',
     patron: 'topografico',
-    base: '#0a0c14',
-    accent: '#243a5a',
-    // Las mismas curvas, en ámbar/cian de instrumento.
+    base: '#06080f',
+    accent: '#2a4060',
+    // Las mismas curvas, en ámbar de instrumento.
     glow: '#ffb02a',
-    emissive: 0.5,
+    emissive: 0.52,
     metal: 0.4,
     rugosidad: 0.55,
     barniz: 0.4,
     animation: 'flujo',
     escala: 2.0,
+    rarity: 'epico',
+    nivelBajo: 0.12,
+    nivelAlto: 0.42,
   },
   // --- mercurio: metal líquido en gotas que se funden ---------------------
   {
@@ -390,7 +492,7 @@ export const CATALOGO_CAMOS: readonly CamoTextura[] = [
     nombre: 'Mercurio',
     patron: 'mercurio',
     base: '#16181c',
-    accent: '#aeb6c0',
+    accent: '#b4bcc6',
     glow: '#dfe6ee',
     // Cromo espejado: metal casi total, rugosidad baja, el reflejo lo es todo.
     emissive: 0.1,
@@ -399,21 +501,27 @@ export const CATALOGO_CAMOS: readonly CamoTextura[] = [
     barniz: 1.15,
     animation: 'flujo',
     escala: 2.0,
+    rarity: 'raro',
+    nivelBajo: 0.35,
+    nivelAlto: 0.8,
   },
   {
     id: 'oro-liquido',
     nombre: 'Oro Líquido',
     patron: 'mercurio',
-    base: '#1c1305',
+    base: '#14100a',
     accent: '#b98a20',
     glow: '#ffd061',
     // El mismo metal fluido, en oro: gotas doradas que corren al girar.
-    emissive: 0.35,
+    emissive: 0.4,
     metal: 0.95,
     rugosidad: 0.2,
     barniz: 0.9,
     animation: 'flujo',
     escala: 2.0,
+    rarity: 'legendario',
+    nivelBajo: 0.35,
+    nivelAlto: 0.8,
   },
 ]
 

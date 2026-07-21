@@ -59,6 +59,7 @@ import {
   SRGBColorSpace,
   type Texture,
   TextureLoader,
+  Vector2,
   Vector3,
 } from 'three'
 
@@ -82,7 +83,7 @@ export type SkinnableMaterial = MeshBasicMaterial | MeshStandardMaterial
 import { CAMO_FAMILY_INDEX, ESCALA_FAMILIA } from '@/game/skins/camo-families'
 import type { Skin } from '@/game/skins/generator'
 import { PATTERN_INDEX } from '@/game/skins/patterns'
-import type { AnimationId } from '@/game/skins/rarity'
+import { rarityRank, type AnimationId } from '@/game/skins/rarity'
 import { type CamoTextura, patronUrl } from '@/game/skins/texturas'
 
 /** Índice de animación que consume el shader. Contrato con el `switch` del GLSL. */
@@ -119,6 +120,19 @@ interface SkinUniforms {
   /** (rugosidad, metalicidad, barniz) del camo por textura. Reemplaza a
    *  `skinSuperficie` cuando la vía por textura está activa. */
   uSkinSurface: { value: Vector3 }
+  /**
+   * Rareza normalizada 0..1 (común=0 .. exótico=1). El shader la usa SÓLO en la
+   * vía por textura para escalar el brillo: más rareza = más ganancia de
+   * emisión, núcleo más blanco y más saturación. Es el "más legendario, más
+   * brillante" de los mastery camos, hecho un número.
+   */
+  uSkinRarity: { value: number }
+  /**
+   * (nivelBajo, nivelAlto): piso y techo del gris útil del patrón. El shader
+   * remapea el heightmap a ese rango para que el valle caiga a negro y la
+   * cresta suba a blanco (neón sobre negro, no gris sobre gris).
+   */
+  uSkinLevels: { value: Vector2 }
 }
 
 const VERTEX_PARS = /* glsl */ `
@@ -158,6 +172,10 @@ uniform float uSkinTexEnabled;
 uniform sampler2D uSkinPatternMap;
 uniform vec3 uSkinGlow;
 uniform vec3 uSkinSurface;
+/** Rareza 0..1: escala el brillo de la vía por textura (más raro, más brillante). */
+uniform float uSkinRarity;
+/** (nivelBajo, nivelAlto): rango de gris útil del patrón, para el remapeo de niveles. */
+uniform vec2 uSkinLevels;
 varying vec3 vSkinObj;
 varying vec3 vSkinView;
 
@@ -954,6 +972,11 @@ if ( uSkinEnabled < 0.5 ) {
   // (ver su rama); las otras dos la derivan del color más abajo. -1 marca "sin
   // fijar todavía".
   float texAltura = -1.0;
+  // Gate de reflejos por altura, SÓLO vía textura. En un camo neón el fondo
+  // tiene que quedar negro: sin esto, el reflejo del entorno y el barniz suben
+  // el valle a gris —justo el "gris sobre gris" que se quiere matar—. 1.0 en
+  // las otras dos vías, que no lo tocan.
+  float texBrilloMask = 1.0;
 
   if ( uSkinTexEnabled > 0.5 ) {
 
@@ -965,7 +988,16 @@ if ( uSkinEnabled < 0.5 ) {
     // Con flujo, el patrón SE DESPLAZA a lo largo del arma: es el remolino que
     // fluye de Afterlife, y lo que una imagen fija no puede dar.
     float desliz = uSkinAnim == 2 ? uSkinTime * 0.12 : 0.0;
-    float g = skinPatronTriplanar( p, uSkinPatternScale, desliz );
+    float gRaw = skinPatronTriplanar( p, uSkinPatternScale, desliz );
+
+    // NIVELES: estira el rango de gris útil del patrón a [0,1]. Cada patrón trae
+    // otro histograma (vetas ya es negro con vetas casi blancas; lava vive en
+    // una banda gris estrecha; fractura tiene el fondo en gris medio), así que
+    // un único umbral no sirve a todos. Con el remapeo, el VALLE cae a negro
+    // profundo y la CRESTA sube a blanco: el neón sobre negro de las
+    // referencias, no el gris apagado de antes. Es también lo que recupera las
+    // vetas que el mipmap promedia hacia el gris medio.
+    float g = clamp( ( gRaw - uSkinLevels.x ) / max( uSkinLevels.y - uSkinLevels.x, 0.001 ), 0.0, 1.0 );
     texAltura = g;
 
     // El glow puede ciclar el tono igual que el acento (espectro): así una
@@ -974,19 +1006,45 @@ if ( uSkinEnabled < 0.5 ) {
     vec3 glowColor = uSkinGlow;
     if ( uSkinAnim == 3 ) glowColor = skinHueShift( glowColor, uSkinTime * 0.11 );
 
-    // Paleta de dos paradas más la punta tirando al color de emisión: el valle
-    // del heightmap es la base, la cresta el acento, y los picos más altos
-    // arrastran hacia el glow AUNQUE emissive sea 0. Eso da color caro en las
-    // crestas incluso a un camo mate, y hace que el mismo patrón se lea
-    // distinto sólo cambiando la paleta.
-    color = mix( uSkinBase, accentColor, smoothstep( 0.10, 0.72, g ) );
-    color = mix( color, glowColor, smoothstep( 0.78, 1.0, g ) * 0.5 );
+    // Rareza 0..1: escala el brillo. Es el "más legendario, más brillante" de
+    // los mastery camos, hecho un número.
+    float rar = uSkinRarity;
 
-    // La emisión vive en las CRESTAS del patrón —las vetas de Element 115, no
-    // el fondo—: un glow que baña el valle lava el arma, el mismo principio
-    // que en las familias. El umbral alto deja fuera el fondo y los medios.
-    mascaraGlow = smoothstep( 0.62, 0.95, g );
-    tintGlow = glowColor;
+    // Saturación de acento y glow escalada por rareza: un exótico satura más.
+    float accLum = dot( accentColor, vec3( 0.2126, 0.7152, 0.0722 ) );
+    float gloLum = dot( glowColor, vec3( 0.2126, 0.7152, 0.0722 ) );
+    vec3 accS = mix( vec3( accLum ), accentColor, 1.0 + 0.45 * rar );
+    vec3 gloS = mix( vec3( gloLum ), glowColor, 1.0 + 0.55 * rar );
+
+    // Paleta BINARIA: el fondo se queda base (casi negro) hasta bien arriba, la
+    // cresta salta al acento y el NÚCLEO tira a blanco. Nada de tonos medios
+    // lavados: o negro, o luz. Es lo que separa un mastery camo de un gris
+    // apagado, y sale directo de las fotos (vetas casi blancas en el núcleo).
+    float core = smoothstep( 0.60, 0.96, g );
+    color = uSkinBase;
+    color = mix( color, accS, smoothstep( 0.14, 0.52, g ) );
+    color = mix( color, gloS, smoothstep( 0.38, 0.82, g ) );
+    // Núcleo incandescente: los picos tiran a blanco, más cuanto más raro. Es
+    // lo que hace que la veta parezca EMITIR luz en vez de sólo estar pintada.
+    color = mix( color, mix( gloS, vec3( 1.0 ), 0.45 + 0.4 * rar ), core * ( 0.35 + 0.5 * rar ) );
+
+    // Emisión en las CRESTAS, con umbral BAJO: el 0.62 original, sumado al
+    // promediado del mipmap, dejaba fuera casi toda la veta y el arma salía
+    // gris; un umbral demasiado alto la deja como puntitos sueltos en vez de la
+    // red continua de las referencias. Éste enciende toda la trama de la veta.
+    // La ganancia escala con la rareza y puede pasar de 1: la suma de más abajo
+    // lleva el núcleo sobre el blanco y ACES lo derrama como brasa viva.
+    float emGain = mix( 0.9, 2.9, rar );
+    mascaraGlow = smoothstep( 0.16, 0.68, g ) * emGain;
+    // El tinte de la emisión vira a blanco en el núcleo: núcleos casi blancos.
+    tintGlow = mix( gloS, vec3( 1.0 ), core * ( 0.3 + 0.4 * rar ) );
+
+    // Gate de reflejos: en un camo emisivo el fondo se apaga (mix hacia g, que
+    // es 0 en el valle) para que quede NEGRO; en uno reflectante (emissive
+    // bajo: Materia Oscura, Mercurio) el reflejo corre parejo por toda la
+    // superficie, que es SU gracia. uSkinEmissive decide cuál de los dos.
+    texBrilloMask = mix( 1.0, g, clamp( uSkinEmissive, 0.0, 1.0 ) );
+
     // Rampa suave: el patrón trae su propia estructura de valor, el horneado
     // sólo diferencia las piezas del arma sin imponerle su luminancia.
     rampa = 0.85 + 0.30 * skinLum;
@@ -1163,7 +1221,7 @@ if ( uSkinEnabled < 0.5 ) {
   // levanta lo justo para que un dibujo oscuro refleje, sin blanquearlo.
   vec3 f0 = mix( vec3( 0.04 ), mix( max( color, vec3( 0.04 ) ), vec3( 1.0 ), 0.18 ), metalico );
   vec3 F = skinFresnel( f0, max( dot( H, V ), 0.0 ) );
-  color += F * lobulo * NdotL * 1.15 * noOscuro;
+  color += F * lobulo * NdotL * 1.15 * noOscuro * texBrilloMask;
 
   // Reflejo del entorno, y ACÁ ESTÁ EL GRUESO DEL EFECTO.
   //
@@ -1193,7 +1251,7 @@ if ( uSkinEnabled < 0.5 ) {
   vec3 tono = color / pico;
   vec3 envTenido = env * mix( vec3( 1.0 ), tono, 0.35 + 0.35 * metalico );
 
-  color += envTenido * Fenv * mix( 0.95, 0.22, rugosidad ) * ( 0.55 + 0.45 * metalico ) * noOscuro;
+  color += envTenido * Fenv * mix( 0.95, 0.22, rugosidad ) * ( 0.55 + 0.45 * metalico ) * noOscuro * texBrilloMask;
 
   // Barniz: segunda capa pulida y SIEMPRE BLANCA encima del dibujo. El
   // patrón queda por debajo y el reflejo corre por arriba sin teñirse, que
@@ -1210,7 +1268,7 @@ if ( uSkinEnabled < 0.5 ) {
   // campo entero como lo hacía cuando se sumaba parejo.
   float fresnelBarniz = pow( 1.0 - NdotV, 3.0 );
   float loboBarniz = pow( NdotH, 60.0 );
-  color += barniz * noOscuro * ( loboBarniz * 1.25 * NdotL + fresnelBarniz * 0.30
+  color += barniz * noOscuro * texBrilloMask * ( loboBarniz * 1.25 * NdotL + fresnelBarniz * 0.30
     + env.b * fresnelBarniz * 0.45 );
 
   // Desgaste: rayones finos más erosión de canto, que descubren metal
@@ -1266,6 +1324,9 @@ function createUniforms(): SkinUniforms {
     uSkinPatternMap: { value: null },
     uSkinGlow: { value: new Color(1, 1, 1) },
     uSkinSurface: { value: new Vector3(0.5, 0.3, 0.3) },
+    uSkinRarity: { value: 0 },
+    // (nivelBajo, nivelAlto) por defecto: identidad, sin remapeo.
+    uSkinLevels: { value: new Vector2(0, 1) },
   }
 }
 
@@ -1319,13 +1380,15 @@ function patch(material: SkinnableMaterial): SkinUniforms {
   // v4: entró la vía por textura (sampler2D uSkinPatternMap y su rama), que
   // cambia el código inyectado. Sin bumpear la clave, un material parchado con
   // v3 reusaría su programa viejo y la rama de textura no existiría en él.
+  // v5: la rama de textura pasó a neón sobre negro con niveles y escalado por
+  // rareza (uniforms uSkinRarity, uSkinLevels y un remapeo nuevo del heightmap).
   //
   // No hace falta meter el TIPO de material en la clave aunque el mismo código
   // se compile contra dos shaders base distintos: three ya antepone el
   // `shaderID` —'meshbasic' vs 'meshphysical'— al armar la clave de programa
   // (WebGLPrograms.getProgramCacheKey), así que un basic y un standard nunca
   // comparten programa por más que compartan esta cadena.
-  material.customProgramCacheKey = () => 'skin-v4'
+  material.customProgramCacheKey = () => 'skin-v5'
   material.needsUpdate = true
 
   return uniforms
@@ -1472,6 +1535,12 @@ export function createSkinHandle(mesh: Mesh): SkinHandle | null {
         uniforms.uSkinEmissive.value = camo.emissive
         uniforms.uSkinMetal.value = camo.metal
         uniforms.uSkinAnim.value = ANIMATION_INDEX[camo.animation]
+        // Rareza normalizada 0..1: es la que escala el brillo en el shader (más
+        // legendario, más brillante). rarityRank da 0..4; /4 lo lleva a 0..1.
+        uniforms.uSkinRarity.value = rarityRank(camo.rarity) / 4
+        // Niveles del heightmap: valle a negro, cresta a blanco (ver el remapeo
+        // en el shader). Es lo que mata el "gris sobre gris".
+        uniforms.uSkinLevels.value.set(camo.nivelBajo, camo.nivelAlto)
         // El desgaste no aplica a la vía por textura: un mastery camo no se
         // pela. Se pone en cero para que un arma que venía con una skin
         // procedural gastada no arrastre su wear al camo nuevo.
@@ -1505,8 +1574,14 @@ export function createSkinHandle(mesh: Mesh): SkinHandle | null {
  *   ficación sRGB por defecto, el 0.5 del archivo llegaría al shader como
  *   ~0.21 y el patrón saldría aplastado hacia lo oscuro. Sin conversión, el
  *   byte/255 es exactamente la altura que se quiso.
- * - Mipmaps con filtrado trilineal: sin ellos, el patrón repetido muchas veces
- *   a lo largo del cañón chisporrotea (aliasing) al girar el arma.
+ * - Mipmaps con filtrado trilineal MÁS anisotropía alta: sin mipmaps el patrón
+ *   repetido a lo largo del cañón chisporrotea al girar; pero el trilineal solo
+ *   PROMEDIA las vetas finas con el fondo negro y las deja en gris medio (era la
+ *   causa #1 de que los camos salieran grises). La anisotropía muestrea a lo
+ *   largo del eje de vista y CONSERVA la veta en los ángulos oblicuos —justo
+ *   donde el trilineal más emborrona—, así que recupera el contraste sin traer
+ *   de vuelta el shimmer. El shader remata con el remapeo de niveles. 16 es el
+ *   tope habitual; three lo clampa al máximo real de la GPU al subir la textura.
  */
 const CACHE_PATRONES = new Map<string, Promise<Texture>>()
 
@@ -1525,6 +1600,10 @@ export function cargarPatron(camo: CamoTextura): Promise<Texture> {
         tex.magFilter = LinearFilter
         tex.minFilter = LinearMipmapLinearFilter
         tex.generateMipmaps = true
+        // Anisotropía alta: preserva las vetas finas que el trilineal, solo,
+        // promediaría hacia el gris medio (ver la cabecera). three lo clampa al
+        // máximo de la GPU al subir la textura.
+        tex.anisotropy = 16
         tex.needsUpdate = true
         resolve(tex)
       },

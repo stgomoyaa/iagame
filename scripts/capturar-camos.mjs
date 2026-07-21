@@ -32,29 +32,53 @@ const HORIZONTAL = { w: 1400, h: 640 }
 /** El atril de comparación apila cuatro armas: necesita vertical. */
 const VERTICAL = { w: 900, h: 1300 }
 
+/** Los 17 camos del catálogo, en orden. Una captura por camo para verlos y
+ *  tunearlos contra las referencias. Si el catálogo cambia, se actualiza esta
+ *  lista. */
+const CAMOS = [
+  'elemento-115', 'otromundo',
+  'nebulosa', 'aurora',
+  'humo-tactico',
+  'magma', 'ceniza',
+  'damasco-acero', 'filigrana-oro',
+  'marmol', 'obsidiana',
+  'materia-oscura', 'grieta-carmesi',
+  'cota', 'radar',
+  'mercurio', 'oro-liquido',
+]
+
 /** Cada escena es una captura: qué mostrar, con qué encuadre. */
 const ESCENAS = [
+  // Escalera de rareza: de un común mate a un exótico encendido, apilados, para
+  // ver de un vistazo cómo el brillo escala con la rareza. Es la prueba visual
+  // del punto nuevo de la tarea (más legendario = más brillante).
+  {
+    archivo: 'escalera-rareza.png',
+    vista: VERTICAL,
+    descriptores: [
+      { kind: 'camo', ref: 'humo-tactico' }, // común: mate, el piso
+      { kind: 'camo', ref: 'mercurio' }, // raro: reflejo, sin glow
+      { kind: 'camo', ref: 'magma' }, // legendario: lava encendida
+      { kind: 'camo', ref: 'elemento-115' }, // exótico: neón radiactivo
+    ],
+  },
+  // Comparación contra un camo procedural legendario, como el entregable.
   {
     archivo: 'comparacion.png',
     vista: VERTICAL,
-    // Cuatro en el atril: un camo procedural legendario arriba y los tres
-    // patrones por textura debajo. Es la comparación directa del entregable.
     descriptores: [
       { kind: 'family', ref: 'demo:1', family: 'damasco' },
       { kind: 'camo', ref: 'elemento-115' },
-      { kind: 'camo', ref: 'materia-oscura' },
+      { kind: 'camo', ref: 'grieta-carmesi' },
       { kind: 'camo', ref: 'nebulosa' },
     ],
   },
-  { archivo: 'vetas-elemento-115.png', vista: HORIZONTAL, descriptores: [{ kind: 'camo', ref: 'elemento-115' }] },
-  { archivo: 'vetas-otromundo.png', vista: HORIZONTAL, descriptores: [{ kind: 'camo', ref: 'otromundo' }] },
-  { archivo: 'celdas-materia-oscura.png', vista: HORIZONTAL, descriptores: [{ kind: 'camo', ref: 'materia-oscura' }] },
-  { archivo: 'celdas-panal-de-oro.png', vista: HORIZONTAL, descriptores: [{ kind: 'camo', ref: 'panal-de-oro' }] },
-  { archivo: 'nube-nebulosa.png', vista: HORIZONTAL, descriptores: [{ kind: 'camo', ref: 'nebulosa' }] },
-  { archivo: 'nube-humo-tactico.png', vista: HORIZONTAL, descriptores: [{ kind: 'camo', ref: 'humo-tactico' }] },
-  // Camos procedurales de familia, solos, para el patrón de comparación.
-  { archivo: 'procedural-damasco.png', vista: HORIZONTAL, descriptores: [{ kind: 'family', ref: 'demo:1', family: 'damasco' }] },
-  { archivo: 'procedural-gema.png', vista: HORIZONTAL, descriptores: [{ kind: 'family', ref: 'demo:2', family: 'gema' }] },
+  // Un arma sola por camo, para comparar cada uno contra su referencia.
+  ...CAMOS.map((ref) => ({
+    archivo: `camo-${ref}.png`,
+    vista: HORIZONTAL,
+    descriptores: [{ kind: 'camo', ref }],
+  })),
 ]
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
