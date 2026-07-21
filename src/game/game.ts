@@ -1003,12 +1003,6 @@ export function createGame(
     yaw: 0,
   }
 
-  /** Duración a la que se estira el clip 'fire' del cuchillo en cada golpe. El
-   *  clip original dura ~1.3 s; comprimirlo así hace que el tajo/estocada se
-   *  vea y termine antes del próximo golpe, y que una ráfaga de tajos (cadencia
-   *  0.4 s) reinicie la animación en cada swing en vez de arrastrar el anterior. */
-  const SWING_CLIP_S = 0.35
-
   /** Vuelca un MeleeResult en un ShotResult para reusar el pipeline de daño,
    *  hitmarker y número de daño de un disparo. MeleeResult es un superconjunto
    *  de ShotResult, así que es copia de campos, sin asignar. */
@@ -1835,7 +1829,12 @@ export function createGame(
       }
       recargando = vmState.reloading
 
-      if (vmState.drawing && !dibujando) viewmodel.playClip('draw', vmState.drawTime)
+      // Draw A VELOCIDAD NATIVA (segundos = 0), no comprimido a `drawTime`
+      // (0,2-0,5 s por clase): los clips de sacar el arma miden 1,0-1,8 s, así
+      // que estirarlos al drawTime de clase los corría a 2,2x-9,2x y el "sacar"
+      // era un parpadeo. drawTime es puramente cosmético (no gatea el combate),
+      // igual que en el cuchillo, así que se reproduce como lo animaron.
+      if (vmState.drawing && !dibujando) viewmodel.playClip('draw', 0)
       dibujando = vmState.drawing
 
       finalPitch = cameraPitch(combatState, input.pitch)
@@ -1909,9 +1908,15 @@ export function createGame(
           // procedural del viewmodel + clip 'fire' con la animación de tajo /
           // estocada. El clip es LoopOnce y vuelve solo a idle al terminar
           // (renderer.advanceAnimation), así que spamear no lo deja pegado.
+          //
+          // A VELOCIDAD NATIVA (segundos = 0): el clip 'fire' del cuchillo mide
+          // ~1,3 s y comprimirlo al viejo SWING_CLIP_S (0,35 s, ~3,7x) volvía el
+          // tajo un parpadeo ilegible. playOn hace action.reset() en cada golpe,
+          // así que spamear tajos reinicia el swing desde cero sin arrastrar el
+          // anterior — el mismo criterio ya probado para el draw del cuchillo.
           profiler.begin('feedback')
           fire(vmState, rigWeapon)
-          viewmodel.playClip('fire', SWING_CLIP_S)
+          viewmodel.playClip('fire', 0)
           profiler.end('feedback')
 
           // Vuelca el golpe en shotResult y enciende shotsFired: el bloque de
