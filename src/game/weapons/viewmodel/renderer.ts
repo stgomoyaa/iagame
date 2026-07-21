@@ -37,8 +37,9 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { graftArms, selectDonor } from '@/game/weapons/viewmodel/graft'
 import { instalarRigDeLuz } from '@/game/weapons/viewmodel/lighting'
-import { createSkinHandle, type SkinHandle } from '@/game/skins/material'
+import { cargarPatron, createSkinHandle, type SkinHandle } from '@/game/skins/material'
 import type { Skin } from '@/game/skins/generator'
+import type { CamoTextura } from '@/game/skins/texturas'
 import { getWeaponVisual, weaponAssetUrl, weaponOrigin } from '@/game/weapons/registry'
 import {
   anclaDe,
@@ -168,6 +169,22 @@ export interface ViewmodelRenderer {
    * `attach` se la aplica.
    */
   setSkin(skin: Skin | null): void
+
+  /**
+   * Equipa un camuflaje por textura (skins/texturas.ts), o lo saca con `null`
+   * (vuelve al aspecto de fábrica). Es el ESPEJO de `setSkin` para la otra vía,
+   * y EXCLUYENTE con ella: equipar un camo apaga cualquier skin procedural y
+   * viceversa, igual que en el loadout.
+   *
+   * A diferencia de `setSkin`, que es síncrono, el patrón del camo es un PNG
+   * que se baja bajo demanda (`cargarPatron`), así que el arma puede tardar un
+   * instante en mostrarlo. Esa asincronía es la razón del token de generación
+   * interno: si el jugador cambia de arma —o de aspecto— mientras el patrón
+   * baja, la carga vieja se descarta en vez de pintar el arma equivocada (mismo
+   * guard que la vitrina, skins/preview.ts). Como `setSkin`, se llama al
+   * equipar/cambiar de arma, nunca por frame.
+   */
+  setCamo(camo: CamoTextura | null): void
 
   /**
    * Segunda pasada de render: copia la orientación de la cámara del mundo,
@@ -507,6 +524,18 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
   // podrían pasar (el cargador está justo en el medio del encuadre).
   const magSkinHandles = new Map<string, SkinHandle>()
   let currentSkin: Skin | null = null
+  // Camo por textura equipado, o null si el aspecto viene de una skin procedural
+  // (o del horneado de fábrica). EXCLUYENTE con currentSkin: equipar uno apaga
+  // el otro, igual que en el loadout. Se guarda acá —y no en el handle— por lo
+  // mismo que currentSkin: la malla puede no estar cargada cuando el jugador lo
+  // elige, y `attach` lo re-aplica al adjuntarse.
+  let currentCamo: CamoTextura | null = null
+  // Token de generación del ASPECTO. El patrón de un camo se baja async
+  // (cargarPatron); si el jugador cambia de arma o de aspecto mientras baja, esa
+  // carga vieja no debe pintar el arma nueva. Cada setSkin/setCamo lo
+  // incrementa; la carga captura su valor y sólo aplica si sigue vigente. Es el
+  // mismo guard de generación que usa la vitrina (skins/preview.ts).
+  let aspectoGen = 0
   // requestedSlug: la última arma pedida por setWeaponSlug, gane o pierda su
   // carga. attachedSlug: la última arma efectivamente puesta en modelRoot —
   // render() lee ÉSTA para elegir rotationOffset/scaleAdjust, nunca
@@ -590,6 +619,51 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
   }
 
   /**
+   * Aplica el aspecto vigente (camo por textura o skin procedural) sobre las
+   * mallas de `slug`. Punto ÚNICO que decide entre las dos vías: lo llaman
+   * tanto los setters (setSkin/setCamo) como el adjuntado de un arma
+   * (attach/attachAnimated), porque una malla puede no estar cargada cuando el
+   * jugador elige el aspecto y hay que re-aplicarlo al adjuntarse.
+   */
+  function aplicarAspecto(slug: string): void {
+    if (currentCamo) {
+      aplicarCamo(slug, currentCamo)
+      return
+    }
+    // Sin camo: la vía procedural de siempre (o null = horneado de fábrica).
+    // Se aplica al cuerpo Y al cargador: el cargador tiene su propio handle, y
+    // sin esto quedaría con el aspecto de fábrica en medio del encuadre.
+    skinHandles.get(slug)?.setSkin(currentSkin)
+    magSkinHandles.get(slug)?.setSkin(currentSkin)
+  }
+
+  /**
+   * Baja el patrón del camo (async, cacheado por `cargarPatron`) y lo aplica
+   * sobre el cuerpo y el cargador de `slug`. Es lo ÚNICO async del sistema de
+   * aspecto —de ahí el token de generación.
+   *
+   * La carga se descarta si, para cuando el PNG llega, cambió el aspecto
+   * (`aspectoGen`) o el arma adjunta (`attachedSlug`): sin esos dos guardas, un
+   * patrón que baja tarde pintaría el arma equivocada con el camo equivocado
+   * (mismo patrón de token que skins/preview.ts). El `.then` corre UNA vez, al
+   * resolver la promesa —no por frame—, así que no deja closure vivo en el hot
+   * path: el trabajo por frame sigue siendo sólo escribir el uniform de tiempo.
+   */
+  function aplicarCamo(slug: string, camo: CamoTextura): void {
+    const gen = aspectoGen
+    cargarPatron(camo)
+      .then((tex) => {
+        if (gen !== aspectoGen) return
+        if (attachedSlug !== slug) return
+        skinHandles.get(slug)?.setCamoTextura(camo, tex)
+        magSkinHandles.get(slug)?.setCamoTextura(camo, tex)
+      })
+      .catch(() => {
+        lastLoadError = `viewmodel: no se pudo cargar el patrón "${camo.patron}" del camo "${camo.id}"`
+      })
+  }
+
+  /**
    * Adjunta un viewmodel de Source. Camino separado del estático a propósito:
    * acá NO se aísla ninguna malla ni se resetea ningún transform, porque el
    * esqueleto vive en esa misma jerarquía y desarmarla rompe el skinning.
@@ -606,7 +680,10 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
 
     attachedSlug = slug
     lastLoadError = null
-    skinHandles.get(slug)?.setSkin(currentSkin)
+    // El aspecto (camo o skin) se re-aplica acá: pudo elegirse antes de que este
+    // arma cargara. attachedSlug ya está seteado, así que el guard async del
+    // camo sabe a qué arma pertenece esta carga.
+    aplicarAspecto(slug)
 
     // Óptica: cuelga del cuerpo del arma injertada (`model.body`), no de la
     // jerarquía de brazos. Si el arma no tiene ancla o no hay óptica elegida,
@@ -665,12 +742,13 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
     const mag = magCache.get(slug)
     if (mag) {
       magOrient.add(mag)
-      magSkinHandles.get(slug)?.setSkin(currentSkin)
     }
 
     attachedSlug = slug
     lastLoadError = null
-    skinHandles.get(slug)?.setSkin(currentSkin)
+    // Aspecto sobre cuerpo Y cargador (aplicarAspecto cubre los dos handles):
+    // camo por textura si hay uno elegido, si no la skin procedural.
+    aplicarAspecto(slug)
 
     // Óptica: cuelga del cuerpo estático (la malla fusionada del arma).
     montarOpticaEnCuerpo(slug, mesh)
@@ -867,8 +945,24 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
     },
 
     setSkin(skin: Skin | null): void {
+      // Excluyente con el camo por textura: elegir una skin procedural apaga el
+      // camo, y bumpear aspectoGen invalida cualquier patrón de camo que
+      // estuviera bajando —o pintaría encima de la skin cuando llegue tarde.
       currentSkin = skin
-      if (attachedSlug) skinHandles.get(attachedSlug)?.setSkin(skin)
+      currentCamo = null
+      aspectoGen++
+      if (attachedSlug) aplicarAspecto(attachedSlug)
+    },
+
+    setCamo(camo: CamoTextura | null): void {
+      // Espejo de setSkin para la vía por textura. Excluyente con la skin
+      // procedural (currentSkin = null) y bumpea aspectoGen para descartar
+      // cualquier carga vieja en vuelo. El patrón baja async dentro de
+      // aplicarAspecto -> aplicarCamo; con `null` vuelve al horneado de fábrica.
+      currentCamo = camo
+      currentSkin = null
+      aspectoGen++
+      if (attachedSlug) aplicarAspecto(attachedSlug)
     },
 
     render(worldCamera: PerspectiveCamera, timeSeconds = 0): void {
