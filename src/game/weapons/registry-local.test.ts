@@ -155,18 +155,22 @@ describe('con índice local presente (la máquina de desarrollo)', () => {
     }
   })
 
-  it('el ADS de un arma local usa su MIRA medida, no el borde de su caja', async () => {
+  it('el ADS de un arma local (injertada) es POSE_NEUTRA: stopgap del ADS de COD', async () => {
     await loadLocalWeapons(async () => indiceLocalFalso())
 
-    // El fixture declara sightHeight 0.08 con una caja de 0.2 de alto: si el
-    // seed usara el borde superior daría -0.10. Que dé -0.08 es la prueba de
-    // que la rama de "modelo con mira" es la que corrió.
+    // Antes se anclaba a la mira medida (sightHeight/sightRearZ). Pero el
+    // injerto de brazos donantes mueve el rig, así que esa medición pre-injerto
+    // ya no corresponde a la pose dibujada: al apuntar trasladaba el arma abajo
+    // y lejos de la cámara (se veía ACHICAR). El stopgap la deja en su pose de
+    // cadera (neutra) y el acercamiento lo hace el zoom de FOV del estilo COD.
+    // Ver seedAdsOffset (misma exención que seedHipOffset).
     const local = WEAPON_REGISTRY[SOURCE_WEAPONS[0].slug]
-    expect(local.adsOffset.y).toBeCloseTo(-0.08, 5)
+    expect(local.adsOffset.y).toBe(0)
+    expect(local.adsOffset.z).toBe(0)
 
-    // Y la garantía de no-regresión que pide el encargo: las 40 CC0 no
-    // cambian de comportamiento. pistol-1 no tiene sightHeight, así que
-    // sigue alineando el borde superior de su caja.
+    // Y la garantía de no-regresión que pide el encargo: las 40 CC0 no se
+    // injertan y no cambian de comportamiento. pistol-1 no tiene sightHeight,
+    // así que sigue alineando el borde superior de su caja.
     const cc0 = weaponIndex().find((e) => e.slug === 'pistol-1')
     expect(cc0?.sightHeight).toBeUndefined()
     const alturaCaja = (cc0!.bounds.max[1] - cc0!.bounds.min[1]) / 2

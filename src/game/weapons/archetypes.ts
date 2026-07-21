@@ -751,11 +751,12 @@ export const ARCHETYPE_LIST: WeaponArchetype[] = Object.values(ARCHETYPES)
 // EJE TÁCTICO CS / COD (el pedido del dueño)
 // ===========================================================================
 //
-// El estilo (TacticalStyle) modifica un arquetipo en DOS ejes medibles, y se
+// El estilo (TacticalStyle) modifica un arquetipo en ejes medibles, y se
 // resuelve por arma desde su procedencia (source-catalog.ts), no por
-// arquetipo. Un tercer eje —el ADS— NO vive acá: es puramente de input
-// (game.ts apaga el botón derecho de las CS de hierros vía weaponAllowsAds),
-// no cambia ningún número de este archivo.
+// arquetipo. Además de si un arma apunta o no (game.ts apaga el botón derecho
+// de las CS de hierros vía weaponAllowsAds), el estilo COD ahora también da un
+// ZOOM de ADS más fuerte en los hierros (COD_ADS_FOVSCALE): el fovScale base
+// daba un zoom imperceptible y apuntar "no hacía nada".
 //
 //   1. DAÑO POR BALA. CS pega más fuerte por tiro (compensa la cadencia
 //      efectiva menor del tap); COD pega un poco menos (lo compensa con
@@ -791,6 +792,28 @@ const COD_DAMAGE_MULT = 0.92
 const CS_MOVEMENT_MULT = 2.3
 /** Cuánto la REDUCE el estilo COD: casi no penaliza moverse (0.32x). */
 const COD_MOVEMENT_MULT = 0.32
+
+/**
+ * ZOOM de ADS del estilo COD, por arquetipo (fovScale: más chico = más zoom).
+ * El fovScale base de los hierros (0.85-0.97) da un zoom imperceptible (~1.05
+ * a 1.18x): apuntar "no hace nada". En COD el ADS de hierros es ~1.3-1.5x. Sólo
+ * las clases de cadera (ar/smg/pistol/lmg/shotgun); los francotiradores ya
+ * tienen su zoom fuerte por arquetipo (sniper-bolt 0.3, marksman 0.55) y no se
+ * tocan. NO afecta a CS: las de hierros CS no apuntan (weaponAllowsAds) y las
+ * de óptica son los arquetipos de sniper. neutral (CC0) conserva la tabla base.
+ * Los valores son un punto de partida verificado con captura; el zoom fino es
+ * un knob de sensación que Santiago afina.
+ */
+const COD_ADS_FOVSCALE: Partial<Record<ArchetypeId, number>> = {
+  'ar-1': 0.72,
+  'ar-2': 0.74,
+  'ar-3': 0.72,
+  'smg-1': 0.8,
+  'smg-2': 0.8,
+  pistol: 0.85,
+  lmg: 0.76,
+  shotgun: 0.85,
+}
 
 /** Vida de referencia para calcular TTK del gate de banda: la misma que usan
  *  los tests de balance (archetypes.test.ts) y la sección 5 del spec. */
@@ -829,8 +852,14 @@ function buildStyleVariant(base: WeaponArchetype, style: TacticalStyle): WeaponA
   if (style === 'neutral') return base
   const damageMult = style === 'cs' ? CS_DAMAGE_MULT : COD_DAMAGE_MULT
   const movementMult = style === 'cs' ? CS_MOVEMENT_MULT : COD_MOVEMENT_MULT
+  // Zoom de ADS más fuerte SÓLO en COD (ver COD_ADS_FOVSCALE): en CS los
+  // hierros no apuntan y las ópticas son otros arquetipos, así que esto no las
+  // toca. Se clona `ads` únicamente si el arquetipo tiene override; si no,
+  // comparte la tabla base por referencia (cero costo).
+  const codFov = style === 'cod' ? COD_ADS_FOVSCALE[base.id] : undefined
   return {
     ...base,
+    ads: codFov === undefined ? base.ads : { ...base.ads, fovScale: codFov },
     damage: {
       ...base.damage,
       base: damageBaseWithinBand(base, base.damage.base * damageMult),
