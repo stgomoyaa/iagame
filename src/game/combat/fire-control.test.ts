@@ -141,6 +141,27 @@ describe('modo burst (ar-2)', () => {
     expect(shotTimes[1] - shotTimes[0]).toBeCloseTo(interval, 2)
     expect(shotTimes[2] - shotTimes[1]).toBeCloseTo(interval, 2)
   })
+
+  it('tap y hold dan la MISMA ráfaga: soltar apenas arranca no la corta', () => {
+    const hold = createFireControlState(ar2)
+    const holdShots = holdTrigger(hold, ar2, 0.6)
+    // tap: apretar un frame, soltar, y dejar correr el tiempo.
+    const tap = createFireControlState(ar2)
+    let tapShots = stepFireControl(tap, ar2, true, false, DT)
+    for (let i = 0; i < Math.round(0.6 / DT); i++) {
+      tapShots += stepFireControl(tap, ar2, false, false, DT)
+    }
+    expect(holdShots).toBe(3)
+    expect(tapShots).toBe(3)
+  })
+
+  it('burstJustStarted marca sólo el frame en que arranca la ráfaga (combat.ts reinicia el patrón ahí)', () => {
+    const state = createFireControlState(ar2)
+    stepFireControl(state, ar2, true, false, DT)
+    expect(state.burstJustStarted).toBe(true)
+    stepFireControl(state, ar2, true, false, DT)
+    expect(state.burstJustStarted).toBe(false)
+  })
 })
 
 describe('recarga', () => {

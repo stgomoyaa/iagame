@@ -421,3 +421,26 @@ describe('golpe de vista (viewKick): presente y ordenado por carácter de clase'
     expect(kick('lmg')).toBeLessThan(kick('ar-1'))
   })
 })
+
+describe('ar-2 (ráfaga): el patrón sube recto sin cambiar de dirección (no teletransporta)', () => {
+  const ar2 = ARCHETYPES['ar-2']
+
+  it('la subida vertical es monótona no decreciente', () => {
+    const ys = ar2.recoil.pattern.map(([, y]) => y)
+    for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeGreaterThanOrEqual(ys[i - 1])
+  })
+
+  it('la deriva horizontal NO cambia de dirección entre balas (la causa del teletransporte)', () => {
+    // El bug viejo: el serpenteo senoidal saltaba el yaw ~2.8° cambiando de
+    // signo entre la bala 2 y la 3. Ahora la deriva es chica y de un solo lado:
+    // los deltas de x no invierten el signo.
+    const xs = ar2.recoil.pattern.map(([x]) => x)
+    const deltas = xs.slice(1).map((x, i) => x - xs[i])
+    const signos = new Set(deltas.filter((d) => Math.abs(d) > 1e-9).map((d) => Math.sign(d)))
+    expect(signos.size).toBeLessThanOrEqual(1) // todos los deltas del mismo signo
+    // Y la deriva total es chica frente a la subida (sube recto).
+    const driftTotal = Math.abs(xs[xs.length - 1])
+    const climbTotal = ar2.recoil.pattern[ar2.recoil.pattern.length - 1][1]
+    expect(driftTotal).toBeLessThan(climbTotal * 0.3)
+  })
+})

@@ -146,3 +146,44 @@ describe('resetCombatState', () => {
     expect(state.spread.radius).toBe(ar1.recoil.spread.base)
   })
 })
+
+describe('ráfaga (ar-2): tap y hold dan el mismo retroceso, y cada ráfaga arranca limpia', () => {
+  const ar2 = ARCHETYPES['ar-2']
+
+  it('un burst TAPEADO no enfría el índice entre sus balas: sube igual que uno sostenido', () => {
+    const out = createShotResult()
+    // HELD: gatillo sostenido todo el burst.
+    const held = createCombatState(ar2)
+    let heldPeak = 0
+    for (let i = 0; i < Math.round(0.6 / DT); i++) {
+      stepCombat(held, ar2, baseInput(true), [], DT, out)
+      heldPeak = Math.max(heldPeak, held.recoil.pitchOffset)
+    }
+    // TAPPED: apretar un frame (arranca la ráfaga), soltar, dejar correr.
+    const tapped = createCombatState(ar2)
+    stepCombat(tapped, ar2, baseInput(true), [], DT, out)
+    let tapPeak = tapped.recoil.pitchOffset
+    for (let i = 0; i < Math.round(0.6 / DT); i++) {
+      stepCombat(tapped, ar2, baseInput(false), [], DT, out)
+      tapPeak = Math.max(tapPeak, tapped.recoil.pitchOffset)
+    }
+    // Antes, el tapeado enfriaba el índice entre balas (167ms) y la 2da/3ra
+    // salían con offset ~0. Ahora `burstRemaining > 0` cuenta como disparando,
+    // así que sube casi igual que el sostenido (la diferencia es sólo el frame
+    // de recuperación que arranca apenas termina la ráfaga tapeada).
+    expect(tapPeak).toBeGreaterThan(heldPeak * 0.9)
+  })
+
+  it('cada ráfaga arranca el patrón desde 0 (la primera bala de la ráfaga es precisa)', () => {
+    const out = createShotResult()
+    const state = createCombatState(ar2)
+    // Primera ráfaga completa.
+    for (let i = 0; i < Math.round(0.6 / DT); i++) stepCombat(state, ar2, baseInput(true), [], DT, out)
+    // Soltar un instante (menos de lo que tardaría en enfriar del todo) y
+    // arrancar otra: el reset por ráfaga (burstJustStarted) deja el índice en 0.
+    stepCombat(state, ar2, baseInput(false), [], DT, out)
+    // Nueva pulsada -> nueva ráfaga -> reset a 0.
+    stepCombat(state, ar2, baseInput(true), [], DT, out)
+    expect(state.recoil.shotIndex).toBe(1) // disparó la 1ra bala (índice 0) y avanzó a 1
+  })
+})
