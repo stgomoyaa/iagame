@@ -71,6 +71,12 @@ const PUEDEN_USAR_THREE = [
   // criterio que separó lighting.ts: es una pieza distinta y se lee mejor sola.
   // Única entrada NUEVA que suma esta tarea a la lista.
   'weapons/viewmodel/graft.ts',
+  // Ópticas (fase cosmética de accesorios): el catálogo, el anclaje y el
+  // desbloqueo por nivel de arma son datos puros (attachments/optics-catalog.ts,
+  // sin three). Este archivo es el único borde: arma la malla de la mira montada
+  // y dibuja la retícula (un quad aditivo con textura de canvas). Mismo criterio
+  // que skins/material.ts. Única entrada NUEVA que suma esta tarea a la lista.
+  'weapons/attachments/mount.ts',
 ]
 
 function archivosTs(dir: string, base = ''): string[] {

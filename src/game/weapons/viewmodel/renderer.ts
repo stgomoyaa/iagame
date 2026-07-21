@@ -40,6 +40,17 @@ import { instalarRigDeLuz } from '@/game/weapons/viewmodel/lighting'
 import { createSkinHandle, type SkinHandle } from '@/game/skins/material'
 import type { Skin } from '@/game/skins/generator'
 import { getWeaponVisual, weaponAssetUrl, weaponOrigin } from '@/game/weapons/registry'
+import {
+  anclaDe,
+  opticAssetUrl,
+  opticaDef,
+  type OpticaId,
+} from '@/game/weapons/attachments/optics-catalog'
+import {
+  desmontarFuenteOptica,
+  desmontarOptica,
+  montarOptica,
+} from '@/game/weapons/attachments/mount'
 
 /** FOV propio del viewmodel, independiente del de mundo (90° en
  *  engine/renderer.ts): así el ADS puede animar uno sin tocar el otro,
@@ -125,6 +136,16 @@ export interface ViewmodelRenderer {
   /** Cambia el modelo mostrado. Sin efecto si `slug` ya es el actual.
    *  Cachea por slug: volver a una arma ya cargada no vuelve a pedir el GLB. */
   setWeaponSlug(slug: string): void
+  /**
+   * Monta (o quita, con null) una óptica sobre el arma equipada. Cosmético:
+   * sólo cambia lo que se ve, ninguna estadística. La mira se cuelga del CUERPO
+   * del arma, así que sigue el modelo vaya estático o injertado en brazos.
+   *
+   * Es SETUP, no camino de frame: se llama al cambiar de arma/óptica, no cada
+   * cuadro. Sin efecto si el arma actual no tiene ancla definida (ver
+   * `attachments/optics-catalog.ts`): un arma sin ancla no puede montar todavía.
+   */
+  setOptic(id: OpticaId | null): void
   /**
    * Slug efectivamente adjunto a modelRoot ahora mismo, o null si todavía
    * no se adjuntó ninguno (carga en curso o fallida). Distinto del slug
@@ -506,6 +527,68 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
   let loadToken = 0
   let lastLoadError: string | null = null
 
+  // --- Ópticas (fase cosmética de accesorios) ---
+  // La óptica montada es hija del CUERPO del arma (su malla), no de modelRoot:
+  // así hereda el transform del cuerpo y lo sigue tanto por el camino estático
+  // como injertada en brazos. El ancla vive en el espacio local del cuerpo (el
+  // normalizado sobre el que se midió), que es identidad en los `c_` de COD.
+  // Escenas fuente por óptica: se clonan por montaje (la geometría se comparte)
+  // y se liberan una sola vez en dispose().
+  const opticaFuentes = new Map<OpticaId, Object3D>()
+  let currentOptic: OpticaId | null = null
+  let opticaMontada: Group | null = null
+
+  function limpiarOptica(): void {
+    if (opticaMontada) {
+      desmontarOptica(opticaMontada)
+      opticaMontada = null
+    }
+  }
+
+  /** Cuerpo (malla) del arma adjunta, o null. Es donde cuelga la óptica. */
+  function cuerpoActual(): Object3D | null {
+    if (attachedSlug === null) return null
+    const anim = animCache.get(attachedSlug)
+    if (anim) return anim.body
+    return cache.get(attachedSlug) ?? null
+  }
+
+  /**
+   * Monta la óptica vigente sobre el cuerpo de un arma. Idempotente: limpia lo
+   * anterior primero. No hace nada si no hay óptica elegida o si el arma no
+   * tiene ancla. Si el GLB de la óptica todavía no bajó, lo pide y remonta
+   * cuando llega, sólo si para entonces sigue siendo la misma óptica y arma.
+   */
+  function montarOpticaEnCuerpo(slug: string, cuerpo: Object3D): void {
+    limpiarOptica()
+    if (currentOptic === null) return
+    const ancla = anclaDe(slug)
+    if (!ancla) return
+
+    const def = opticaDef(currentOptic)
+    const fuente = opticaFuentes.get(currentOptic)
+    if (fuente) {
+      opticaMontada = montarOptica({ opticaScene: cloneSkinned(fuente), def, ancla })
+      cuerpo.add(opticaMontada)
+      return
+    }
+
+    const idPedido = currentOptic
+    loader
+      .loadAsync(opticAssetUrl(idPedido))
+      .then((gltf) => {
+        opticaFuentes.set(idPedido, gltf.scene)
+        // Si mientras bajaba cambió la óptica o el arma, no montar la vieja.
+        if (currentOptic === idPedido && attachedSlug === slug) {
+          const cuerpoAhora = cuerpoActual()
+          if (cuerpoAhora) montarOpticaEnCuerpo(slug, cuerpoAhora)
+        }
+      })
+      .catch((err: unknown) => {
+        console.error(`óptica: no se pudo cargar "${idPedido}"`, err)
+      })
+  }
+
   /**
    * Adjunta un viewmodel de Source. Camino separado del estático a propósito:
    * acá NO se aísla ninguna malla ni se resetea ningún transform, porque el
@@ -524,6 +607,12 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
     attachedSlug = slug
     lastLoadError = null
     skinHandles.get(slug)?.setSkin(currentSkin)
+
+    // Óptica: cuelga del cuerpo del arma injertada (`model.body`), no de la
+    // jerarquía de brazos. Si el arma no tiene ancla o no hay óptica elegida,
+    // no hace nada.
+    if (model.body) montarOpticaEnCuerpo(slug, model.body)
+    else limpiarOptica()
 
     // Reposo: el `idle` de CS es una pose de dos frames, no un ciclo, y es la
     // que deja el arma sostenida como corresponde. Sin esto el arma se dibuja
@@ -582,6 +671,9 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
     attachedSlug = slug
     lastLoadError = null
     skinHandles.get(slug)?.setSkin(currentSkin)
+
+    // Óptica: cuelga del cuerpo estático (la malla fusionada del arma).
+    montarOpticaEnCuerpo(slug, mesh)
   }
 
   function failLoad(slug: string, message: string, err?: unknown): void {
@@ -741,6 +833,14 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
       else load(slug)
     },
 
+    setOptic(id: OpticaId | null): void {
+      if (id === currentOptic) return
+      currentOptic = id
+      const cuerpo = cuerpoActual()
+      if (cuerpo && attachedSlug !== null) montarOpticaEnCuerpo(attachedSlug, cuerpo)
+      else limpiarOptica()
+    },
+
     playClip(name: string, seconds: number): boolean {
       if (attachedSlug === null) return false
       const model = animCache.get(attachedSlug)
@@ -817,6 +917,11 @@ export function createViewmodelRenderer(sharedRenderer: WebGLRenderer): Viewmode
           if (child instanceof Mesh) disposeModel(child)
         })
       }
+      // Ópticas: la montada libera su retícula; las fuentes cacheadas liberan
+      // su geometría/material una sola vez (las comparten los clones).
+      limpiarOptica()
+      for (const fuente of opticaFuentes.values()) desmontarFuenteOptica(fuente)
+      opticaFuentes.clear()
       cache.clear()
       magCache.clear()
       animCache.clear()
