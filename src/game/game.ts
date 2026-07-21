@@ -32,8 +32,10 @@ import type { Hitbox } from '@/game/combat/hitboxes'
 import { archetypeForStyle, ARCHETYPES, type ArchetypeId } from '@/game/weapons/archetypes'
 import { tacticalStyleForSlug, weaponAllowsAds } from '@/game/weapons/source-catalog'
 import {
+  camoForSlot,
   equipWeapon,
   LOADOUT_SLOTS,
+  opticForSlot,
   skinForSlot,
   type Loadout,
   type LoadoutSlot,
@@ -1151,7 +1153,21 @@ export function createGame(
     if (!forzar && slug === currentSlug) return
     currentSlot = slot
     currentSlug = slug
-    viewmodel.setSkin(slot === 'melee' ? null : skinForSlot(loadout, slot))
+    if (slot === 'melee') {
+      // El cuchillo no lleva aspecto ni accesorios: sin skin, sin camo, sin mira.
+      viewmodel.setSkin(null)
+      viewmodel.setOptic(null)
+    } else {
+      // Camo por textura y skin procedural son EXCLUYENTES en el loadout: si hay
+      // camo equipado gana; si no, va la skin (o null = aspecto de fábrica).
+      const camo = camoForSlot(loadout, slot)
+      if (camo) viewmodel.setCamo(camo)
+      else viewmodel.setSkin(skinForSlot(loadout, slot))
+      // La mira es un accesorio FÍSICO, independiente del aspecto: se monta
+      // tenga el arma camo, skin o los hierros, así que este llamado va SIEMPRE
+      // aparte del branch de arriba.
+      viewmodel.setOptic(opticForSlot(loadout, slot)?.id ?? null)
+    }
     viewmodel.setWeaponSlug(slug)
     // Bajar el sonido propio del arma al equiparla, no al dispararla: así
     // el primer tiro ya sale con su firma sonora en vez de con el sample
@@ -1166,7 +1182,12 @@ export function createGame(
   }
 
   if (currentSlug) {
-    viewmodel.setSkin(skinForSlot(loadout, currentSlot))
+    // Aspecto y mira iniciales, mismo branch que equipSlot. currentSlot arranca
+    // en 'primary' (nunca el cuchillo), así que va directo sin guard de melee.
+    const camo = camoForSlot(loadout, currentSlot)
+    if (camo) viewmodel.setCamo(camo)
+    else viewmodel.setSkin(skinForSlot(loadout, currentSlot))
+    viewmodel.setOptic(opticForSlot(loadout, currentSlot)?.id ?? null)
     viewmodel.setWeaponSlug(currentSlug)
     weaponAudio.prewarm(currentSlug)
   }
