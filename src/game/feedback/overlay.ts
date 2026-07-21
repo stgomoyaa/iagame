@@ -58,7 +58,7 @@ function createCrosshair(): HTMLDivElement {
   return el
 }
 
-function createHitmarkerElement(): { root: HTMLDivElement } {
+function createHitmarkerElement(): { root: HTMLDivElement; killMark: HTMLDivElement } {
   const root = document.createElement('div')
   styleBase(
     root,
@@ -77,9 +77,22 @@ function createHitmarkerElement(): { root: HTMLDivElement } {
     'position:absolute;left:1px;top:10px;width:22px;height:3px;' +
       'background:currentColor;border-radius:2px;transform:rotate(-45deg)',
   )
+  // Marca de baja: un rombo que ENMARCA la X, el "ding" visual de COD. Sólo
+  // aparece en los niveles kill/headshotKill (render lo togglea por display),
+  // así que una baja se lee distinta de un impacto normal sin depender sólo
+  // del color. Hereda `currentColor`, o sea el color del nivel (rojo para la
+  // baja, magenta para la baja a la cabeza). Es un nodo estático más del pool,
+  // no se crea por frame.
+  const killMark = document.createElement('div')
+  styleBase(
+    killMark,
+    'position:absolute;left:1px;top:1px;width:22px;height:22px;box-sizing:border-box;' +
+      'border:2px solid currentColor;transform:rotate(45deg);opacity:.9;display:none',
+  )
+  root.appendChild(killMark)
   root.appendChild(bar1)
   root.appendChild(bar2)
-  return { root }
+  return { root, killMark }
 }
 
 function createDamageNumberElement(): HTMLDivElement {
@@ -115,12 +128,32 @@ function createScopeLayer(): HTMLDivElement {
   return el
 }
 
+/**
+ * Indicador de daño direccional: un ARCO rojo (sprite art-dirigido) pegado al
+ * borde de la pantalla que apunta de DÓNDE vino el disparo (spec sección 5:
+ * "indica de dónde vino"). El sprite apunta hacia ARRIBA (12 en punto = daño
+ * de frente) y se desvanece a transparente en las puntas; render() lo ROTA
+ * alrededor del centro de la pantalla según el bearing del atacante y le
+ * modula la opacidad para que aparezca y se apague solo.
+ *
+ * Se sube como imagen (no un arco dibujado por CSS) porque el arte lo define
+ * el dueño: alpha real en gradiente, mejor grano que un `conic-gradient`. El
+ * `cover` lo escala a lo ancho para que el arco quede cerca del borde
+ * superior, y `transform-origin:50% 50%` sobre un elemento a pantalla
+ * completa hace que la rotación gire alrededor del centro exacto. Compositor
+ * puro: sólo se anima `transform` (la rotación) y `opacity` (el fundido),
+ * nunca layout. El navegador baja el PNG al montar (el elemento existe con la
+ * imagen aunque esté a opacidad 0), así que el primer golpe ya lo tiene.
+ */
+const INDICADOR_DANO_URL = '/assets/ui/indicador-dano.png'
+
 function createVignetteElement(): HTMLDivElement {
   const el = document.createElement('div')
   styleBase(
     el,
-    'position:absolute;inset:0;pointer-events:none;opacity:0;' +
-      'background:radial-gradient(ellipse 90% 65% at 50% -8%, rgba(220,20,20,.9), transparent 62%)',
+    'position:absolute;inset:0;pointer-events:none;opacity:0;transform-origin:50% 50%;' +
+      'will-change:transform,opacity;background-repeat:no-repeat;background-position:center;' +
+      `background-size:cover;background-image:url(${INDICADOR_DANO_URL})`,
   )
   return el
 }
@@ -154,6 +187,9 @@ export function createFeedbackOverlay(): FeedbackOverlay {
   let heartbeatEl: HTMLDivElement | null = null
 
   const hitmarkerEls: HTMLDivElement[] = []
+  /** El rombo de "baja" de cada hitmarker del pool, 1:1 con `hitmarkerEls`.
+   *  render() lo enciende/apaga por nivel sin crear ni buscar nada. */
+  const hitmarkerKillMarks: HTMLDivElement[] = []
   const damageNumberEls: HTMLDivElement[] = []
   const vignetteEls: HTMLDivElement[] = []
 
@@ -365,8 +401,9 @@ export function createFeedbackOverlay(): FeedbackOverlay {
       layoutScope()
 
       for (let i = 0; i < FEEDBACK.hitmarkerPoolSize; i++) {
-        const { root: el } = createHitmarkerElement()
+        const { root: el, killMark } = createHitmarkerElement()
         hitmarkerEls.push(el)
+        hitmarkerKillMarks.push(killMark)
         root.appendChild(el)
       }
 
@@ -446,6 +483,11 @@ export function createFeedbackOverlay(): FeedbackOverlay {
         el.style.opacity = String(opacity)
         el.style.color = HITMARKER_COLOR[entry.tier]
         el.style.transform = `translate(-50%,-50%) scale(${entry.scale})`
+        // El rombo de baja sólo enmarca la X en los niveles kill: es lo que
+        // convierte un impacto en una CONFIRMACIÓN de baja. Los otros dos
+        // niveles (normal/headshot) se distinguen por color, sin rombo.
+        hitmarkerKillMarks[i].style.display =
+          entry.tier === 'kill' || entry.tier === 'headshotKill' ? 'block' : 'none'
       }
 
       // Números de daño: NDC -> píxeles, más el offset de subida.
@@ -469,7 +511,8 @@ export function createFeedbackOverlay(): FeedbackOverlay {
         el.textContent = Math.round(entry.value).toString()
       }
 
-      // Viñeta direccional: rotar el gradiente (anclado arriba) al bearing.
+      // Indicador de daño direccional: rotar el sprite (que apunta arriba) al
+      // bearing del atacante.
       const vgItems = state.vignette.pool.items
       for (let i = 0; i < vgItems.length; i++) {
         const entry = vgItems[i]
@@ -480,16 +523,16 @@ export function createFeedbackOverlay(): FeedbackOverlay {
         }
         const opacity = vignetteOpacity(entry.age, entry.peakOpacity, FEEDBACK.vignetteDurationS)
         el.style.opacity = String(opacity)
-        // El gradiente está anclado arriba (50% -8%, ver createVignetteElement)
-        // y CSS rotate() gira en sentido horario con ángulo positivo. La
-        // convención de bearing es la opuesta (positivo = izquierda del
-        // jugador, ver vignette.ts) porque sigue el mismo signo de yaw que
-        // el resto del motor (engine/input.ts: girar a la derecha DISMINUYE
-        // el yaw) -- así que hay que invertir el signo acá para que
-        // "bearing negativo (derecha)" efectivamente pinte el borde
-        // DERECHO de la pantalla, no el izquierdo. Verificado a mano en el
-        // navegador: sin este signo invertido, un golpe desde la derecha
-        // del jugador iluminaba el borde izquierdo.
+        // El sprite apunta arriba (ver createVignetteElement) y CSS rotate()
+        // gira en sentido horario con ángulo positivo. La convención de
+        // bearing es la opuesta (positivo = izquierda del jugador, ver
+        // vignette.ts) porque sigue el mismo signo de yaw que el resto del
+        // motor (engine/input.ts: girar a la derecha DISMINUYE el yaw) -- así
+        // que hay que invertir el signo acá para que "bearing negativo
+        // (derecha)" efectivamente apunte el arco al borde DERECHO de la
+        // pantalla, no al izquierdo. Verificado a mano en el navegador: sin
+        // este signo invertido, un golpe desde la derecha del jugador iluminaba
+        // el borde izquierdo.
         el.style.transform = `rotate(${-entry.bearing}rad)`
       }
 
@@ -526,6 +569,7 @@ export function createFeedbackOverlay(): FeedbackOverlay {
       crosshair = null
       heartbeatEl = null
       hitmarkerEls.length = 0
+      hitmarkerKillMarks.length = 0
       damageNumberEls.length = 0
       vignetteEls.length = 0
       scopeRoot = null
