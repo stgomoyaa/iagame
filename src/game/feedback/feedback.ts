@@ -82,9 +82,11 @@ export function stepFeedback(state: FeedbackState, dt: number): void {
   stepVignette(state.vignette, dt)
 }
 
-/** Un disparo salió (haya pegado o no): punch de cámara. */
-export function onShotFired(state: FeedbackState): void {
-  fireCameraPunch(state.cameraPunch)
+/** Un disparo salió (haya pegado o no): punch de cámara. `viewKick` es la
+ *  magnitud del golpe de vista POR ARMA (archetype.recoil.viewKick); por
+ *  defecto 0 para llamadores sin arquetipo (sólo el roll universal). */
+export function onShotFired(state: FeedbackState, viewKick = 0): void {
+  fireCameraPunch(state.cameraPunch, viewKick)
 }
 
 /** Un disparo confirmó impacto contra un objetivo real: hitmarker + número

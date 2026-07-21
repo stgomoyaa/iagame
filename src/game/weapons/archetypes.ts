@@ -144,6 +144,25 @@ export interface RecoilSpec {
    * de forma continua en vez de resetear por umbral.
    */
   indexRecoveryTime: number
+  /**
+   * Magnitud del GOLPE DE VISTA por disparo (canal de sensación de
+   * feedback/camera-punch.ts), radianes/seg de impulso de velocidad de pitch.
+   * NO afecta el hitscan ni el patrón de apuntado — es puramente lo que se
+   * SIENTE al disparar, un golpe amortiguado que patea la cámara hacia arriba
+   * y vuelve. A diferencia de `pattern` (que arranca en cero en el primer
+   * tiro para que la bala sea precisa), este golpe patea en CADA disparo,
+   * incluido el primero y cada tap: es la razón por la que un arma "se
+   * siente" distinta sin romper la mecánica de spray.
+   *
+   * Escala por CARÁCTER de clase: una escopeta o un cerrojo dan un golpe seco
+   * grande (evento único), una SMG apenas un empujón por bala (cadencia
+   * altísima, muchos golpes chicos que se acumulan bajo el tope de
+   * FEEDBACK.cameraKickPitchMax). El pico real en grados de cada valor está
+   * verificado con el trazador headless (docs/recoil-kick.md); acá viven los
+   * impulsos, no los picos. La variación POR ARMA dentro de una clase (dos
+   * pistolas distintas) es una capa aparte (diversidad de recoil), no esto.
+   */
+  viewKick: number
   spread: SpreadCurve
 }
 
@@ -463,6 +482,8 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // Recuperación de índice más rápida que la línea base (ar-1): SMG de
       // control, coherente con recovery=14 (la más alta del roster).
       indexRecoveryTime: 0.34,
+      // Golpe de vista chico: cadencia altísima, muchos empujones diminutos.
+      viewKick: degToRad(11),
       spread: { base: 0.006, max: 0.03, growthPerShot: 0.004, recoverySpeed: 0.25, movementPenalty: 0.033 },
     },
   },
@@ -485,6 +506,8 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       pattern: generateRecoilPattern(202, 25, degToRad(9), degToRad(3), degToRad(0.1)),
       recovery: 11,
       indexRecoveryTime: 0.36,
+      // Un pelo más de golpe que la smg-1: menos cadencia, más peso por bala.
+      viewKick: degToRad(12),
       spread: { base: 0.005, max: 0.026, growthPerShot: 0.0035, recoverySpeed: 0.22, movementPenalty: 0.029 },
     },
   },
@@ -512,6 +535,8 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // 600 RPM = 10 disparos/seg — la misma proporción (~7.5x) que CS de
       // verdad, porque ar-1 es literalmente la referencia de ese cálculo.
       indexRecoveryTime: 0.4,
+      // Línea base del golpe de vista, como del climb: el resto se mide contra esto.
+      viewKick: degToRad(20),
       spread: { base: 0.004, max: 0.02, growthPerShot: 0.0025, recoverySpeed: 0.18, movementPenalty: 0.022 },
     },
   },
@@ -539,6 +564,8 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       pattern: generateRecoilPattern(404, 3, degToRad(5), degToRad(1.5), degToRad(0.3)),
       recovery: 13,
       indexRecoveryTime: 0.38,
+      // Ráfaga: cada bala pega más fuerte que un AR auto (menos balas, más daño).
+      viewKick: degToRad(24),
       spread: { base: 0.003, max: 0.012, growthPerShot: 0.004, recoverySpeed: 0.3, movementPenalty: 0.013 },
     },
   },
@@ -562,6 +589,8 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       recovery: 8,
       // Fusil de batalla, más pesado que ar-1: recupera un poco más lento.
       indexRecoveryTime: 0.44,
+      // Pega más fuerte por bala que ar-1: golpe de vista mayor.
+      viewKick: degToRad(26),
       spread: { base: 0.0035, max: 0.017, growthPerShot: 0.002, recoverySpeed: 0.16, movementPenalty: 0.019 },
     },
   },
@@ -592,6 +621,9 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // poco en la práctica — se mantiene snappy (extremo bajo del rango)
       // porque cada tiro ya es un evento discreto, no un spray.
       indexRecoveryTime: 0.32,
+      // Golpe seco grande: un cerrojo es un evento único, no un spray. El
+      // mayor del arsenal junto con la escopeta.
+      viewKick: degToRad(58),
       spread: { base: 0.0005, max: 0.002, growthPerShot: 0.001, recoverySpeed: 0.5, movementPenalty: 0.0022 },
     },
   },
@@ -613,6 +645,8 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       pattern: generateRecoilPattern(606, 10, degToRad(11), degToRad(1), degToRad(0.2)),
       recovery: 6,
       indexRecoveryTime: 0.35,
+      // DMR: golpe fuerte por tiro, menor que el cerrojo (cadencia más alta).
+      viewKick: degToRad(38),
       spread: { base: 0.001, max: 0.006, growthPerShot: 0.002, recoverySpeed: 0.4, movementPenalty: 0.0066 },
     },
   },
@@ -636,6 +670,8 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       pattern: generateRecoilPattern(808, 6, degToRad(9), degToRad(2.5), degToRad(0.3)),
       recovery: 10,
       indexRecoveryTime: 0.33,
+      // El golpe más brutal del arsenal: una escopeta patea toda la cara.
+      viewKick: degToRad(62),
       spread: { base: 0.02, max: 0.05, growthPerShot: 0.01, recoverySpeed: 0.3, movementPenalty: 0.055 },
     },
   },
@@ -665,6 +701,9 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // por encima de su cadencia real (700 RPM ≈ 11.7/seg) — más lenta en
       // carácter no significa que sprayar salga gratis.
       indexRecoveryTime: 0.45,
+      // Golpe por bala suave (como el ritmo de climb): está hecha para
+      // sostener fuego, no para pegar seco. Se acumula bajo el tope en spray.
+      viewKick: degToRad(14),
       spread: { base: 0.005, max: 0.035, growthPerShot: 0.0015, recoverySpeed: 0.1, movementPenalty: 0.0385 },
     },
   },
@@ -688,6 +727,8 @@ export const ARCHETYPES: Record<ArchetypeId, WeaponArchetype> = {
       // La más rápida del roster: sidearm de toques precisos, un doble tap
       // no puede sentirse penalizado por el disparo anterior.
       indexRecoveryTime: 0.3,
+      // Golpe seco medio: cada tap de pistola tiene que sentirse, sin ser un rifle.
+      viewKick: degToRad(21),
       spread: { base: 0.006, max: 0.022, growthPerShot: 0.005, recoverySpeed: 0.28, movementPenalty: 0.024 },
     },
   },
