@@ -17,7 +17,7 @@ por acordarse de no hacer algo.
 
 1. Andá a <https://steamcommunity.com/dev/apikey> y generá una key gratis
    (pide un dominio; alcanza con poner cualquiera que controles, ej.
-   `purafama.cl`).
+   `example.com`).
 2. Copiala a `.env.local` en la raíz del repo:
    ```
    STEAM_API_KEY=tu_key_acá
