@@ -1,66 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# iagame
 
-## Getting Started
+FPS arcade en el navegador, construido sobre Three.js + Next.js. Sin servidor de partida: todo corre client-side, con un conversor de sensibilidad que mantiene los cm/360 al moverte entre este juego y CS, Valorant, Apex, Overwatch, CoD o Quake.
 
-First, run the development server:
+![HUD en partida](docs/media/gameplay-hud.png)
+
+## Qué hay adentro
+
+- **40 armas** con recoil y balística por arma — dos SMGs no se sienten iguales. Pipeline propio `FBX → GLB` con guardia que impide commitear assets no CC0 (ver `scripts/workshop-guard.test.ts`).
+- **Bots con FSM**: percepción (raycasts + memoria de posición), pathfinding sobre navmesh, búsqueda de cobertura, selección de arma por distancia. Dificultad continua de 0 a 1.
+- **Conversor de sensibilidad** (`/armory`): traducís tu sensibilidad de CS/Valorant/Apex/OW/CoD/Quake + DPI y te da la de este juego manteniendo los cm/360. Se guarda en `localStorage`.
+- **Sistema de camos** por vía de textura con patrones procedurales y desbloqueo por progresión.
+- **Medallas** con galería `/medals` que lee el guardado real y acredita XP.
+- **Modos**: TDM / FFA, con límites de tiempo y score, y un modo `?practica=1` con dianas de plinkeo sin bots.
+
+## Stack
+
+- **Three.js** (renderer, BVH con `three-mesh-bvh` para raycast)
+- **Next.js 16** (App Router, React 19)
+- **TypeScript strict**, **Tailwind 4**
+- **Vitest** cubriendo bot AI, coherencia de física, hitboxes y nav grids
+
+## Correr
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
+pnpm dev          # http://localhost:3000
+pnpm test         # vitest run
+pnpm lint         # eslint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+El skybox se regenera en `predev` desde `scripts/generate-skybox.ts` — no se commitea.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Modos y parámetros de URL (`/play`)
-
-La partida se configura por query string. Todo esto es opcional: sin nada,
-`/play` arranca una partida normal con los valores de `match/tuning.ts`.
+## Parámetros de URL (`/play`)
 
 | Parámetro | Qué hace |
 |---|---|
-| `?practica=1` | **Modo práctica.** Puebla el corredor de la arena con las cuatro dianas de plinkeo y, salvo que pidas bots explícitamente, arranca sin ninguno. Fuera de este modo NO hay dianas en ningún mapa. Acepta `1`, `true`, `si`, `sí`; cualquier otra cosa (incluido `practica=0`) es partida normal. |
-| `?bots=N` | Cantidad de bots, 0 a 20. Default: `MATCH.botCount`, o 0 en modo práctica. |
-| `?mode=tdm\|ffa` | Modo de partida. |
-| `?map=NOMBRE` | Mapa. Gana sobre lo elegido en el panel de tuning (tecla M). |
-| `?difficulty=0..1` | Dificultad pareja para todos los bots. |
-| `?timeLimit=S` / `?scoreLimit=N` | Overrides de duración y límite de puntaje. |
-| `?debug=1` | Panel de tuning de armas y hook `window.__combatDebug()`. |
+| `?practica=1` | Modo práctica: dianas de plinkeo en el corredor, 0 bots por defecto |
+| `?bots=N` | 0 a 20 bots |
+| `?mode=tdm\|ffa` | Modo de partida |
+| `?map=NOMBRE` | Mapa (gana sobre el panel de tuning) |
+| `?difficulty=0..1` | Dificultad de todos los bots |
+| `?timeLimit=S` / `?scoreLimit=N` | Overrides de duración |
+| `?debug=1` | Panel de tuning de armas + `window.__combatDebug()` |
 
-**Por qué las dianas quedaron detrás de un modo:** se construyeron en la fase 1,
-cuando todavía no había bots, y hasta ahora aparecían durante las partidas —
-esferas azules sin silueta humanoide mezcladas con los bots, que ensucian la
-lectura de a qué se le puede disparar. Ver `src/game/targets/practica.ts`.
+## Política de assets
 
-## Sensibilidad
+El repo sólo commitea assets CC0 (`public/assets/weapons/`, `public/assets/audio/`).
+Los derivados del Steam Workshop viven en carpetas gitignored (`workshop-assets/`,
+`public/assets/weapons-local/`, `public/assets/maps/`, `public/assets/audio/weapons-local/`)
+y el catálogo del juego los intenta en runtime: si no están, cae a los CC0 sin
+romper. La guardia real es un test (`scripts/workshop-guard.test.ts`) que inspecciona
+el índice de git, no el `.gitignore` — un `git add -f` mal intencionado falla el CI.
 
-El conversor vive en la armería (`/armory`). Poné la sensibilidad que usás en
-CS, Valorant, Apex, Overwatch, Call of Duty o Quake más tu DPI, y la traduce a
-la escala de este juego manteniendo los cm/360, así que la puntería se
-transfiere tal cual. Se guarda en `localStorage` y la próxima partida arranca
-con ella. Sin nada guardado, el juego usa exactamente la sensibilidad que tuvo
-siempre (0.0022 rad por conteo de mouse; ver `SENS_POR_DEFECTO` en
-`src/game/settings/store.ts`).
+## Licencia
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+MIT. Ver [LICENSE](LICENSE).
